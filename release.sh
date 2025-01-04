@@ -3,28 +3,36 @@
 # Ensure the script stops on errors
 set -e
 
-# Define directories and release details
+# Define directories
 BUILD_DIR="build"
 RELEASE_DIR="release"
-VERSION="v0.0.1"
-PACKAGE_NAME="OSBase_$VERSION.zip"
+
+# Extract version from the C# file
+VERSION=$(grep -Po '(?<=public override string ModuleVersion => ")[^"]*' src/OSBase.cs)
+if [ -z "$VERSION" ]; then
+    echo "Error: Could not find version in src/OSBase.cs"
+    exit 1
+fi
+
+# Define package name
+PACKAGE_NAME="OSBase_v${VERSION}.zip"
 
 # Ensure the build directory exists
 if [ ! -d "$BUILD_DIR" ]; then
-  echo "Build directory not found. Run build.sh first."
-  exit 1
+    echo "Build directory not found. Run build.sh first."
+    exit 1
 fi
 
-# Create a clean release directory
+# Prepare the release directory
 echo "Preparing release directory..."
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
-# Copy necessary files to the release directory
+# Copy build files to the release directory
 echo "Copying files to release directory..."
 cp -r "$BUILD_DIR/"* "$RELEASE_DIR/"
 
-# Add additional files like README or config if needed
+# Optionally copy additional files like README.md or LICENSE
 cp README.md "$RELEASE_DIR/" 2>/dev/null || true
 cp LICENSE "$RELEASE_DIR/" 2>/dev/null || true
 
