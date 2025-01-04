@@ -1,6 +1,6 @@
 ﻿using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
-using CounterStrikeSharp.API.Modules.Events;
+using CounterStrikeSharp.API.Modules;
 
 namespace OSBase;
 public class OSBase : BasePlugin
@@ -11,19 +11,36 @@ public class OSBase : BasePlugin
     public override string ModuleDescription => "Base plugin for handling server events";
     public override void Load(bool hotReload)
     {
+        RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
+        RegisterListener<Listeners.OnMapStart>(OnMapStart);
+
         Console.WriteLine("OSBase loaded!");
     }
  
-    [GameEventHandler]
-    private void OnMatchStart()
+    private void OnMapStart ( string mapName ) 
     {
-        Console.WriteLine("Match started!");
+        Console.WriteLine("Map started!");
     }
 
-    [GameEventHandler]
-    private void OnMatchEnd()
+    private void OnMapEnd ( )
     {
-        Console.WriteLine("Match ended!");
+        Console.WriteLine("Map ended!");
     }
+
+
+
+
+//    [GameEventHandler]
+ //   private HookResult OnMatchStart(  ) 
+  //  {
+   //     Console.WriteLine("Match started!");
+    //    return HookResult.Continue;
+    //}
+
+ //   [GameEventHandler]
+ //   private void OnMatchEnd()
+ //   {
+ //       Console.WriteLine("Match ended!");
+ //   }
 
 }
