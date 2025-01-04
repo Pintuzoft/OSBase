@@ -19,15 +19,15 @@ public class OSBase : BasePlugin {
         Console.WriteLine($"[DEBUG] Current working directory: {currentDirectory}");
 
         // Navigate up to the csgo directory
-        string gameBaseDirectory = Path.Combine(currentDirectory, "../../csgo");
+        string gameBaseDirectory = Path.GetFullPath(Path.Combine(currentDirectory, "../../csgo"));
 
         // Verify the directory exists
         if (!Directory.Exists(gameBaseDirectory)) {
-            throw new DirectoryNotFoundException($"[ERROR] Could not locate the 'csgo' directory at: {Path.GetFullPath(gameBaseDirectory)}");
+            throw new DirectoryNotFoundException($"[ERROR] Could not locate the 'csgo' directory at: {gameBaseDirectory}");
         }
 
-        Console.WriteLine($"[DEBUG] Resolved game base directory: {Path.GetFullPath(gameBaseDirectory)}");
-        return Path.GetFullPath(gameBaseDirectory); // Normalize the path
+        Console.WriteLine($"[DEBUG] Resolved game base directory: {gameBaseDirectory}");
+        return gameBaseDirectory; // Already normalized by Path.GetFullPath
     }
 
     private static string ResolveConfigPath(string relativePath) {
