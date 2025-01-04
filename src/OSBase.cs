@@ -6,7 +6,7 @@ namespace OSBase;
 public class OSBase : BasePlugin
 {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.3";
+    public override string ModuleVersion => "0.0.4";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Base plugin for handling server events";
     public override void Load(bool hotReload)
