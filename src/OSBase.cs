@@ -51,19 +51,27 @@ public class OSBase : BasePlugin {
         string? directory = Path.GetDirectoryName(configPath);
 
         if (!string.IsNullOrEmpty(directory)) {
-            Console.WriteLine($"Ensuring directory exists: {directory}");
-            Directory.CreateDirectory(directory);
+            Console.WriteLine($"[DEBUG] Ensuring directory exists: {Path.GetFullPath(directory)}");
+            try {
+                Directory.CreateDirectory(directory);
+            } catch (Exception ex) {
+                Console.WriteLine($"[ERROR] Failed to create directory: {directory}, Exception: {ex.Message}");
+            }
         } else {
-            Console.WriteLine($"Invalid directory path for config: {configPath}");
+            Console.WriteLine($"[ERROR] Invalid directory path for config: {configPath}");
             return;
         }
 
         if (!File.Exists(configPath)) {
-            Console.WriteLine($"Creating config file: {configPath}");
-            File.WriteAllText(configPath, defaultContent);
-            Console.WriteLine($"Default config created: {configPath}");
+            Console.WriteLine($"[DEBUG] Creating config file: {Path.GetFullPath(configPath)}");
+            try {
+                File.WriteAllText(configPath, defaultContent);
+                Console.WriteLine($"[INFO] Default config created: {Path.GetFullPath(configPath)}");
+            } catch (Exception ex) {
+                Console.WriteLine($"[ERROR] Failed to create file: {configPath}, Exception: {ex.Message}");
+            }
         } else {
-            Console.WriteLine($"Config file already exists: {configPath}");
+            Console.WriteLine($"[INFO] Config file already exists: {Path.GetFullPath(configPath)}");
         }
     }
 }
