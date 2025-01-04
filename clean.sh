@@ -16,4 +16,7 @@ for DIR in "${CLEAN_DIRS[@]}"; do
     fi
 done
 
+echo "Restoring dependencies..."
+dotnet restore src/OSBase.csproj
+
 echo "Cleanup complete!"
