@@ -19,7 +19,7 @@ public class OSBase : BasePlugin {
         Console.WriteLine($"[DEBUG] Current working directory: {currentDirectory}");
 
         // Navigate up to the csgo directory
-        string gameBaseDirectory = Path.Combine(currentDirectory, "..", "..", "csgo");
+        string gameBaseDirectory = Path.Combine(currentDirectory, "..", "..", "..", "csgo");
 
         // Verify the directory exists
         if (!Directory.Exists(gameBaseDirectory)) {
