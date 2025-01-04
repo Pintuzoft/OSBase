@@ -17,7 +17,8 @@ public class OSBase : BasePlugin {
         string currentDirectory = Directory.GetCurrentDirectory();
         Console.WriteLine($"[DEBUG] Current working directory: {currentDirectory}");
 
-        string? gameBaseDirectory = Directory.GetParent(currentDirectory)?.Parent?.FullName;
+        // Navigate up from 'bin' to the base game directory
+        string? gameBaseDirectory = Directory.GetParent(currentDirectory)?.FullName;
 
         if (gameBaseDirectory == null || !Directory.Exists(gameBaseDirectory)) {
             throw new DirectoryNotFoundException("[ERROR] Could not resolve the game base directory.");
