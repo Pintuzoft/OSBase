@@ -14,18 +14,20 @@ public class OSBase : BasePlugin {
     private readonly string MapEndConfig = ResolveConfigPath("cfg/OSBase/mapend.cfg");
 
     private static string GetGameBaseDirectory() {
+        // Start from the current working directory
         string currentDirectory = Directory.GetCurrentDirectory();
         Console.WriteLine($"[DEBUG] Current working directory: {currentDirectory}");
 
-        // Navigate up from 'bin' to the base game directory
-        string? gameBaseDirectory = Directory.GetParent(currentDirectory)?.FullName;
+        // Navigate up to the csgo directory
+        string gameBaseDirectory = Path.Combine(currentDirectory, "..", "csgo");
 
-        if (gameBaseDirectory == null || !Directory.Exists(gameBaseDirectory)) {
-            throw new DirectoryNotFoundException("[ERROR] Could not resolve the game base directory.");
+        // Verify the directory exists
+        if (!Directory.Exists(gameBaseDirectory)) {
+            throw new DirectoryNotFoundException($"[ERROR] Could not locate the 'csgo' directory at: {Path.GetFullPath(gameBaseDirectory)}");
         }
 
-        Console.WriteLine($"[DEBUG] Resolved game base directory: {gameBaseDirectory}");
-        return gameBaseDirectory;
+        Console.WriteLine($"[DEBUG] Resolved game base directory: {Path.GetFullPath(gameBaseDirectory)}");
+        return Path.GetFullPath(gameBaseDirectory); // Normalize the path
     }
 
     private static string ResolveConfigPath(string relativePath) {
