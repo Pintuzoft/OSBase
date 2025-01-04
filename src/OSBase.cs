@@ -1,50 +1,35 @@
 ﻿using System.IO;
+using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 
 namespace OSBase;
+
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.4";
+    public override string ModuleVersion => "0.0.5";
     public override string ModuleAuthor => "Pintuz";
-    public override string ModuleDescription => "Base plugin for handling server events";
+    public override string ModuleDescription => "Plugin for handling map events with config execution";
 
-    private const string ConfigDirectory = "cfg/OSBase";
-    private const string MapStartConfig = "cfg/OSBase/mapstart.cfg";
-    private const string MapEndConfig = "cfg/OSBase/mapend.cfg";
+    private readonly string MapStartConfig = ResolveConfigPath("cfg/OSBase/mapstart.cfg");
+    private readonly string MapEndConfig = ResolveConfigPath("cfg/OSBase/mapend.cfg");
 
+    private static string GetGameBaseDirectory() {
+        string currentDirectory = Directory.GetCurrentDirectory();
+        Console.WriteLine($"[DEBUG] Current working directory: {currentDirectory}");
 
-    public override void Load(bool hotReload) {
-        Console.WriteLine("[DEBUG] OSBase is loading...");
-        
-        // Ensure default configs
-        EnsureDefaultConfig(MapStartConfig, "// Default mapstart.cfg\n");
-        EnsureDefaultConfig(MapEndConfig, "// Default mapend.cfg\n");
+        string? gameBaseDirectory = Directory.GetParent(currentDirectory)?.Parent?.FullName;
 
-        RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
-        RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        if (gameBaseDirectory == null || !Directory.Exists(gameBaseDirectory)) {
+            throw new DirectoryNotFoundException("[ERROR] Could not resolve the game base directory.");
+        }
 
-        Console.WriteLine("[INFO] OSBase loaded!");
-}
-
-    private async void OnMapStart ( string mapName ) 
-    {
-        await Task.Delay(5000);
-        Console.WriteLine("Actions after 5-second delay!");
-        Console.WriteLine("Map started!");
+        Console.WriteLine($"[DEBUG] Resolved game base directory: {gameBaseDirectory}");
+        return gameBaseDirectory;
     }
 
-    private void OnMapEnd ( ) {
-        Console.WriteLine("Map ended!");
-    }
-
-
-    private void ExecuteConfig(string configPath) {
-        // Check if the file exists; if not, create a default one
-        EnsureDefaultConfig(configPath, $"// Default content for {Path.GetFileName(configPath)}\n");
-
-        // Execute the config
-        this.ExecuteConfig(configPath);
-        Console.WriteLine($"Executed config: {configPath}");
+    private static string ResolveConfigPath(string relativePath) {
+        string gameBaseDirectory = GetGameBaseDirectory();
+        return Path.Combine(gameBaseDirectory, relativePath);
     }
 
     private void EnsureDefaultConfig(string configPath, string defaultContent) {
@@ -72,6 +57,44 @@ public class OSBase : BasePlugin {
             }
         } else {
             Console.WriteLine($"[INFO] Config file already exists: {Path.GetFullPath(configPath)}");
+        }
+    }
+
+    public override void Load(bool hotReload) {
+        Console.WriteLine("[DEBUG] OSBase is loading...");
+
+        EnsureDefaultConfig(MapStartConfig, "// Default mapstart.cfg\n");
+        EnsureDefaultConfig(MapEndConfig, "// Default mapend.cfg\n");
+
+        RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
+        RegisterListener<Listeners.OnMapStart>(OnMapStart);
+
+        Console.WriteLine("[INFO] OSBase loaded!");
+    }
+
+    private void OnMapStart(string mapName) {
+        Console.WriteLine($"Map '{mapName}' started! Executing {MapStartConfig}...");
+        ExecuteConfigSafely(MapStartConfig);
+    }
+
+    private void OnMapEnd() {
+        Console.WriteLine($"Map ended! Executing {MapEndConfig}...");
+        ExecuteConfigSafely(MapEndConfig);
+    }
+
+    private void ExecuteConfigSafely(string configPath) {
+        if (!File.Exists(configPath)) {
+            Console.WriteLine($"[ERROR] Config file not found: {configPath}");
+            return;
+        }
+
+        try {
+            Console.WriteLine($"[INFO] Executing config: {configPath}");
+            Server.ExecuteCommand($"exec {configPath}");
+            Console.WriteLine($"[INFO] Successfully executed config: {configPath}");
+            
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] Failed to execute config: {configPath}, Exception: {ex.Message}");
         }
     }
 }
