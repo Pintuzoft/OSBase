@@ -1,4 +1,4 @@
-# CS2Base
+# OSBase
 OSBase CS2 plugin to further control CS2 servers like 
 
 1. Apply config to when matches starts
