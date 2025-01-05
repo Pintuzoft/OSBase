@@ -1,6 +1,7 @@
 ﻿using System.IO;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Cvars;
 
 namespace OSBase;
 
@@ -9,9 +10,10 @@ public class OSBase : BasePlugin {
     public override string ModuleVersion => "0.0.5";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
-
     private readonly string MapStartConfig = ResolveConfigPath("cfg/OSBase/mapstart.cfg");
     private readonly string MapEndConfig = ResolveConfigPath("cfg/OSBase/mapend.cfg");
+    private readonly string WarmupStartConfig = ResolveConfigPath("cfg/OSBase/warmupstart.cfg");
+    private readonly string WarmupEndConfig = ResolveConfigPath("cfg/OSBase/warmupend.cfg");
 
     private static string GetGameBaseDirectory() {
         // Start from the current working directory
@@ -68,6 +70,8 @@ public class OSBase : BasePlugin {
 
         EnsureDefaultConfig(MapStartConfig, "// Default mapstart.cfg\n");
         EnsureDefaultConfig(MapEndConfig, "// Default mapend.cfg\n");
+        EnsureDefaultConfig(WarmupStartConfig, "// Default warmupstart.cfg\n");
+        EnsureDefaultConfig(WarmupEndConfig, "// Default warmupend.cfg\n");
 
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
@@ -78,6 +82,28 @@ public class OSBase : BasePlugin {
     private void OnMapStart(string mapName) {
         Console.WriteLine($"Map '{mapName}' started! Executing {MapStartConfig}...");
         ExecuteConfigSafely(MapStartConfig);
+        
+        HandleWarmup();
+        
+    }
+
+    private void HandleWarmup() {
+        int warmupTime = GetWarmupTime();
+
+        if (warmupTime > 0) {
+            Console.WriteLine($"Warmup detected! Duration: {warmupTime} seconds.");
+            ExecuteConfigSafely(WarmupStartConfig);
+
+            // Schedule warmup end
+            Timer warmupTimer = new Timer(state => {
+                Console.WriteLine("Warmup has ended!");
+                ExecuteConfigSafely(WarmupEndConfig);
+            }, null, warmupTime * 1000, Timeout.Infinite);
+
+            Console.WriteLine($"Warmup end scheduled in {warmupTime} seconds.");
+        } else {
+            Console.WriteLine("No warmup detected.");
+        }
     }
 
     private void OnMapEnd() {
@@ -99,5 +125,31 @@ public class OSBase : BasePlugin {
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] Failed to execute config: {configPath}, Exception: {ex.Message}");
         }
+    }
+
+    private int GetWarmupTime() {
+        try {
+            // Attempt to find the ConVar for warmup time
+            var conVar = ConVar.Find("mp_warmuptime");
+
+            // Check if the ConVar is null
+            if (conVar == null) {
+                Console.WriteLine("[ERROR] Failed to find ConVar: mp_warmuptime.");
+                return 0; // Default to 0 if the ConVar doesn't exist
+            }
+
+            // Get the string value and attempt to parse it
+            string value = conVar.StringValue;
+            if (int.TryParse(value, out int warmupTime)) {
+                Console.WriteLine($"[DEBUG] Warmup time fetched: {warmupTime} seconds.");
+                return warmupTime;
+            } else {
+                Console.WriteLine("[ERROR] Failed to parse warmup time.");
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] Exception while fetching warmup time: {ex.Message}");
+        }
+
+        return 0; // Default to 0 if anything fails
     }
 }
