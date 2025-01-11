@@ -47,6 +47,8 @@ public class OSBase : BasePlugin {
      private HookResult onWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
         isWarmup = false;
         Console.WriteLine("[INFO] OSBase: WARMUP ENDED!!");
+        var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
+        SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
         return HookResult.Continue;
     }
     private HookResult onMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
@@ -58,24 +60,24 @@ public class OSBase : BasePlugin {
 
     private HookResult onRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         // Increment the round number
-        Console.WriteLine($"[INFO] Round started!");
+        Console.WriteLine($"[INFO] OSBase: Round started!");
 
         if (isWarmup) {
-            Console.WriteLine("[INFO] Warmup is ongoing. This is the first round.");
+            Console.WriteLine("[INFO] OSBase: Warmup is ongoing. This is the first round.");
             // Assume warmup ends after the first round
             isWarmup = false;
         } else {
-            Console.WriteLine("[INFO] Warmup has ended. This is a live round.");
+            Console.WriteLine("[INFO] OSBase: Warmup has ended. This is a live round.");
         }
         return HookResult.Continue;
     }
 
     private void SendCommand(string command) {
         try {
-            Console.WriteLine($"[INFO] Sending command: {command}");
+            Console.WriteLine($"[INFO] OSBase: Sending command: {command}");
             Server.ExecuteCommand(command); // Directly execute the command
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] Failed to send: {command}, Exception: {ex.Message}");
+            Console.WriteLine($"[ERROR] OSBase: Failed to send: {command}, Exception: {ex.Message}");
         }
     }
 
@@ -85,7 +87,5 @@ public class OSBase : BasePlugin {
     }    
     private void runStartOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
-        var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
-        SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
     }
 }
