@@ -11,15 +11,21 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.8";
+    public override string ModuleVersion => "0.0.9";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
     private string currentMap = "";
     private bool isWarmup = true;
 
+    private Dictionary<string, string> config = new();
+
     public override void Load(bool hotReload) {
         Console.WriteLine("[INFO] OSBase plugin is loading...");
+        
+        CreateDefaultGlobalConfig ( );
+        
+        LoadGlobalConfig();
 
         // Register listeners for round events
 
@@ -31,6 +37,88 @@ public class OSBase : BasePlugin {
         RegisterEventHandler<EventCsWinPanelMatch>(onMatchEndEvent);
 
         Console.WriteLine("[INFO] OSBase plugin loaded successfully!");
+    }
+    
+
+private void LoadGlobalConfig() {
+    try {
+        // Resolve the path to the global configuration file
+        string configPath = Path.Combine(ModuleDirectory, "OSBase/OSBase.cfg");
+
+        // Ensure the global configuration file exists
+        if (!File.Exists(configPath)) {
+            Console.WriteLine($"[ERROR] Global configuration file not found at: {configPath}");
+            return; // Exit if the file is missing
+        }
+
+        // Read the global configuration file
+        Console.WriteLine($"[INFO] Loading global configuration from {configPath}");
+        foreach (var line in File.ReadLines(configPath)) {
+            string trimmedLine = line.Trim();
+
+            // Skip comments and empty lines
+            if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//")) continue;
+
+            // Parse key-value pairs
+            var parts = trimmedLine.Split(new[] { ' ' }, 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 2) {
+                config[parts[0]] = parts[1];
+                Console.WriteLine($"[INFO] Config: {parts[0]} = {parts[1]}");
+            }
+        }
+    } catch (Exception ex) {
+        Console.WriteLine($"[ERROR] Failed to load global configuration: {ex.Message}");
+    }
+}
+  
+    private void CreateDefaultGlobalConfig ( ) {
+        try {
+            // Resolve the base directory for the configuration files
+            string configDirectory = Path.Combine(ModuleDirectory, "OSBase");
+
+            // Ensure the directory exists
+            if (!Directory.Exists(configDirectory)) {
+                Directory.CreateDirectory(configDirectory);
+                Console.WriteLine($"[INFO] Configuration directory created at: {configDirectory}");
+            }
+
+            // Define the global configuration file path
+            string globalConfigPath = Path.Combine(configDirectory, "OSBase.cfg");
+
+            // Create the global configuration file if it doesn't exist
+            if (!File.Exists(globalConfigPath)) {
+                var defaultGlobalConfig = new[] {
+                    "// OSBase.cfg",
+                    "// Global configuration for OSBase plugin",
+                    "autorecord 1" // Enable demo recording
+                };
+
+                File.WriteAllLines(globalConfigPath, defaultGlobalConfig);
+                Console.WriteLine($"[INFO] Default global configuration created at: {globalConfigPath}");
+            } else {
+                Console.WriteLine($"[INFO] Global configuration already exists at: {globalConfigPath}");
+            }
+
+            // Create individual configuration files if they don't exist
+            CreateStageConfig(Path.Combine(configDirectory, "warmupstart.cfg"), "// Commands for warmup start\nsv_gravity 200\n");
+            CreateStageConfig(Path.Combine(configDirectory, "warmupend.cfg"), "// Commands for warmup end\nsv_gravity 800\n");
+            CreateStageConfig(Path.Combine(configDirectory, "mapstart.cfg"), "// Commands for map start\n");
+            CreateStageConfig(Path.Combine(configDirectory, "mapend.cfg"), "// Commands for map end\ntv_stoprecord\n");
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] Failed to create configuration: {ex.Message}");
+        }
+    }
+    private void CreateStageConfig(string configPath, string defaultContent) {
+        try {
+            if (!File.Exists(configPath)) {
+                File.WriteAllText(configPath, defaultContent);
+                Console.WriteLine($"[INFO] Default stage configuration created at: {configPath}");
+            } else {
+                Console.WriteLine($"[INFO] Stage configuration already exists at: {configPath}");
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] Failed to create stage configuration: {ex.Message}");
+        }
     }
 
     private void onMapEnd ( ) {
@@ -92,8 +180,6 @@ public class OSBase : BasePlugin {
     private void runWarmupCommands() {
         Console.WriteLine("[INFO] OSBase: Running warmup commands...");
         SendCommand("sv_gravity 200");
-        SendCommand("sv_maxspeed 800");
-        SendCommand("sv_runspeed 800");
     }
 
     private void runWarmupEndCommands() {
@@ -102,7 +188,8 @@ public class OSBase : BasePlugin {
         SendCommand("tv_enable 1");
         SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
         SendCommand("sv_gravity 800");
-        SendCommand("sv_maxspeed 320");
-        SendCommand("sv_runspeed 320");
     }
+
+
+
 }
