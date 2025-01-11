@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.10";
+    public override string ModuleVersion => "0.0.11";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -74,7 +74,7 @@ private void LoadGlobalConfig() {
     private void CreateDefaultGlobalConfig ( ) {
         try {
             // Resolve the base directory for the configuration files
-            string configDirectory = Path.Combine(ModuleDirectory, "../../../configs/plugins/OSBase");
+            string configDirectory = Path.Combine(ModuleDirectory, "../../configs/plugins/OSBase");
 
 
             // Ensure the directory exists
