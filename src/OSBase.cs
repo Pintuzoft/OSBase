@@ -22,8 +22,9 @@ public class OSBase : BasePlugin {
 
         RegisterEventHandler<EventRoundStart>(onRoundStart);
         RegisterEventHandler<EventRoundEnd>(onRoundEnd);
+        RegisterEventHandler<EventMapTransition>(eventMapTransition);
 
-        RegisterEventHandler<EventGameEnd>(eventGameEnd);
+     //   RegisterEventHandler<EventGameEnd>(eventGameEnd);
 
      //   RegisterListener<OnRoundStart>(OnRoundStart);
      //   RegisterListener<OnRoundEnd>(OnRoundEnd);
@@ -31,11 +32,16 @@ public class OSBase : BasePlugin {
         Console.WriteLine("[INFO] OSBase plugin loaded successfully!");
     }
 
-    private HookResult eventGameEnd(EventGameEnd eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult eventMapTransition(EventMapTransition eventInfo, GameEventInfo gameEventInfo) {
         roundNumber = 0;
         isWarmup = true;
         return HookResult.Continue;
     }
+//    private HookResult eventGameEnd(EventGameEnd eventInfo, GameEventInfo gameEventInfo) {
+//        roundNumber = 0;
+//        isWarmup = true;
+//        return HookResult.Continue;
+//    }
     private HookResult onRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
         if ( isWarmup ) {
             Console.WriteLine("[INFO] Warmup has ended. This is a live round.");
