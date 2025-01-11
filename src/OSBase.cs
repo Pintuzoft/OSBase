@@ -20,7 +20,10 @@ public class OSBase : BasePlugin {
 
         // Register listeners for round events
 
-        RegisterEventHandler<EventRoundStart>(OnRoundStart);
+        RegisterEventHandler<EventRoundStart>(onRoundStart);
+        RegisterEventHandler<EventRoundEnd>(onRoundEnd);
+
+        RegisterEventHandler<EventGameEnd>(eventGameEnd);
 
      //   RegisterListener<OnRoundStart>(OnRoundStart);
      //   RegisterListener<OnRoundEnd>(OnRoundEnd);
@@ -28,7 +31,21 @@ public class OSBase : BasePlugin {
         Console.WriteLine("[INFO] OSBase plugin loaded successfully!");
     }
 
-    private HookResult  OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult eventGameEnd(EventGameEnd eventInfo, GameEventInfo gameEventInfo) {
+        roundNumber = 0;
+        isWarmup = true;
+        return HookResult.Continue;
+    }
+    private HookResult onRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+        if ( isWarmup ) {
+            Console.WriteLine("[INFO] Warmup has ended. This is a live round.");
+        } else {
+            Console.WriteLine("[INFO] Round has ended. This is a live round.");
+        }
+        isWarmup = false;
+        return HookResult.Continue;
+    }
+    private HookResult onRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         // Increment the round number
         roundNumber++;
         Console.WriteLine($"[INFO] Round {roundNumber} started!");
