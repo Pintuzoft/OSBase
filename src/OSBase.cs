@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.15";
+    public override string ModuleVersion => "0.0.16";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -45,7 +45,7 @@ public class OSBase : BasePlugin {
 private void LoadGlobalConfig() {
     try {
         // Resolve the path to the global configuration file
-        string configPath = Path.Combine(ModuleDirectory, "{configPluginPath}/OSBase.cfg");
+        string configPath = Path.Combine(ModuleDirectory, $"{configPluginPath}/OSBase.cfg");
 
         // Ensure the global configuration file exists
         if (!File.Exists(configPath)) {
@@ -65,7 +65,7 @@ private void LoadGlobalConfig() {
             var parts = trimmedLine.Split(new[] { ' ' }, 2, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length == 2) {
                 config[parts[0]] = parts[1];
-                Console.WriteLine($"[INFO] Config: {parts[0]} = {parts[1]}");
+                Console.WriteLine($"[INFO] OSBase: Config: {parts[0]} = {parts[1]}");
             }
         }
     } catch (Exception ex) {
