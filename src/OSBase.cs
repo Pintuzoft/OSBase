@@ -14,6 +14,8 @@ public class OSBase : BasePlugin {
     public override string ModuleVersion => "0.0.5";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
+    
+    private string currentMap = "";
     private bool isWarmup = true;
 
     public override void Load(bool hotReload) {
@@ -24,18 +26,23 @@ public class OSBase : BasePlugin {
         RegisterEventHandler<EventRoundStart>(onRoundStart);
         RegisterEventHandler<EventWarmupEnd>(onWarmupEnd);
 
+        RegisterListener<Listeners.OnMapStart>(onMapStart);
         RegisterListener<Listeners.OnMapEnd>(onMapEnd);
         RegisterEventHandler<EventCsWinPanelMatch>(onMatchEndEvent);
-
-     //   RegisterListener<OnRoundStart>(OnRoundStart);
-     //   RegisterListener<OnRoundEnd>(OnRoundEnd);
 
         Console.WriteLine("[INFO] OSBase plugin loaded successfully!");
     }
 
     private void onMapEnd ( ) {
         isWarmup = true;
+        runEndOfMapCommands();
         Console.WriteLine("[INFO] OSBase: MAP END!!");
+    }     
+    private void onMapStart ( string mapName ) {
+        isWarmup = true;
+        currentMap = mapName;
+        runStartOfMapCommands();
+        Console.WriteLine("[INFO] OSBase: MAP START!!");
     }   
      private HookResult onWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
         isWarmup = false;
@@ -45,6 +52,7 @@ public class OSBase : BasePlugin {
     private HookResult onMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
         isWarmup = true;
         Console.WriteLine("[INFO] OSBase: WIN PANEL MATCH!!");
+        runEndOfMapCommands();
         return HookResult.Continue;
     }
 
@@ -62,12 +70,22 @@ public class OSBase : BasePlugin {
         return HookResult.Continue;
     }
 
-    private void SendDummyCommand(string command) {
+    private void SendCommand(string command) {
         try {
-            Console.WriteLine($"[INFO] Sending dummy command: {command}");
+            Console.WriteLine($"[INFO] Sending command: {command}");
             Server.ExecuteCommand(command); // Directly execute the command
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] Failed to send command: {command}, Exception: {ex.Message}");
+            Console.WriteLine($"[ERROR] Failed to send: {command}, Exception: {ex.Message}");
         }
+    }
+
+    private void runEndOfMapCommands() {
+        Console.WriteLine("[INFO] OSBase: Running end of map commands...");
+        SendCommand("tv_stoprecord");
+    }    
+    private void runStartOfMapCommands() {
+        Console.WriteLine("[INFO] OSBase: Running end of map commands...");
+        var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
+        SendCommand("tv_startrecord demo-"+date+"-"+currentMap+".dem");
     }
 }
