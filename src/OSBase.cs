@@ -12,7 +12,6 @@ public class OSBase : BasePlugin {
     public override string ModuleVersion => "0.0.5";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
-    private int roundNumber = 0;
     private bool isWarmup = true;
 
     public override void Load(bool hotReload) {
@@ -21,10 +20,11 @@ public class OSBase : BasePlugin {
         // Register listeners for round events
 
         RegisterEventHandler<EventRoundStart>(onRoundStart);
-        RegisterEventHandler<EventRoundEnd>(onRoundEnd);
-        RegisterEventHandler<EventMapTransition>(eventMapTransition);
+        RegisterEventHandler<EventWarmupEnd>(onWarmupEnd);
 
-     //   RegisterEventHandler<EventGameEnd>(eventGameEnd);
+        RegisterEventHandler<EventGameNewmap>(onGameNewmap);
+
+        RegisterEventHandler<EventGameEnd>(onGameEnd);
 
      //   RegisterListener<OnRoundStart>(OnRoundStart);
      //   RegisterListener<OnRoundEnd>(OnRoundEnd);
@@ -32,16 +32,21 @@ public class OSBase : BasePlugin {
         Console.WriteLine("[INFO] OSBase plugin loaded successfully!");
     }
 
-    private HookResult eventMapTransition(EventMapTransition eventInfo, GameEventInfo gameEventInfo) {
-        roundNumber = 0;
+    private HookResult onGameNewmap(EventGameNewmap eventInfo, GameEventInfo gameEventInfo) {
         isWarmup = true;
+        Console.WriteLine("[INFO] OSBase: GAME NEW MAP!!");
+        return HookResult.Continue;
+    }   
+     private HookResult onWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+        isWarmup = false;
+        Console.WriteLine("[INFO] OSBase: WARMUP ENDED!!");
         return HookResult.Continue;
     }
-//    private HookResult eventGameEnd(EventGameEnd eventInfo, GameEventInfo gameEventInfo) {
-//        roundNumber = 0;
-//        isWarmup = true;
-//        return HookResult.Continue;
-//    }
+    private HookResult onGameEnd(EventGameEnd eventInfo, GameEventInfo gameEventInfo) {
+        isWarmup = true;
+        Console.WriteLine("[INFO] OSBase: GAME ENDED!!");
+        return HookResult.Continue;
+    }
     private HookResult onRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
         if ( isWarmup ) {
             Console.WriteLine("[INFO] Warmup has ended. This is a live round.");
@@ -53,25 +58,16 @@ public class OSBase : BasePlugin {
     }
     private HookResult onRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         // Increment the round number
-        roundNumber++;
-        Console.WriteLine($"[INFO] Round {roundNumber} started!");
+        Console.WriteLine($"[INFO] Round started!");
 
         if (isWarmup) {
             Console.WriteLine("[INFO] Warmup is ongoing. This is the first round.");
-            SendDummyCommand("say Warmup has started!");
-
             // Assume warmup ends after the first round
             isWarmup = false;
         } else {
             Console.WriteLine("[INFO] Warmup has ended. This is a live round.");
-            SendDummyCommand($"say Round {roundNumber} has started!");
         }
         return HookResult.Continue;
-    }
-
-    private void OnRoundEnd(int roundNumber, string winningTeam) {
-        Console.WriteLine($"[INFO] Round {roundNumber} ended! Winning team: {winningTeam}");
-        SendDummyCommand($"say Round {roundNumber} has ended! Winning team: {winningTeam}");
     }
 
     private void SendDummyCommand(string command) {
