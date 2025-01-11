@@ -47,9 +47,7 @@ public class OSBase : BasePlugin {
      private HookResult onWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
         isWarmup = false;
         Console.WriteLine("[INFO] OSBase: WARMUP ENDED!!");
-        var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
-        SendCommand("tv_enable 1");
-        SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
+        runWarmupEndCommands ( );
         return HookResult.Continue;
     }
     private HookResult onMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
@@ -64,9 +62,10 @@ public class OSBase : BasePlugin {
         Console.WriteLine($"[INFO] OSBase: Round started!");
 
         if (isWarmup) {
-            Console.WriteLine("[INFO] OSBase: Warmup is ongoing. This is the first round.");
+            Console.WriteLine("[INFO] OSBase: WARMUP IS ON.");
             // Assume warmup ends after the first round
             isWarmup = false;
+            runWarmupCommands();
         } else {
             Console.WriteLine("[INFO] OSBase: Warmup has ended. This is a live round.");
         }
@@ -89,5 +88,17 @@ public class OSBase : BasePlugin {
     }    
     private void runStartOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
+    }
+    private void runWarmupCommands() {
+        Console.WriteLine("[INFO] OSBase: Running warmup commands...");
+        SendCommand("gravity 200");
+    }
+
+    private void runWarmupEndCommands() {
+        Console.WriteLine("[INFO] OSBase: Running warmup end commands...");
+        var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
+        SendCommand("tv_enable 1");
+        SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
+        SendCommand("gravity 800");
     }
 }
