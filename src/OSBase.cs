@@ -4,6 +4,8 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Modules.Events;
+using System.Diagnostics.Tracing;
 
 namespace OSBase;
 
@@ -22,9 +24,8 @@ public class OSBase : BasePlugin {
         RegisterEventHandler<EventRoundStart>(onRoundStart);
         RegisterEventHandler<EventWarmupEnd>(onWarmupEnd);
 
-        RegisterEventHandler<EventGameNewmap>(onGameNewmap);
-
-        RegisterEventHandler<EventGameEnd>(onGameEnd);
+        RegisterListener<Listeners.OnMapEnd>(onMapEnd);
+        RegisterEventHandler<EventCsWinPanelMatch>(onMatchEndEvent);
 
      //   RegisterListener<OnRoundStart>(OnRoundStart);
      //   RegisterListener<OnRoundEnd>(OnRoundEnd);
@@ -32,30 +33,21 @@ public class OSBase : BasePlugin {
         Console.WriteLine("[INFO] OSBase plugin loaded successfully!");
     }
 
-    private HookResult onGameNewmap(EventGameNewmap eventInfo, GameEventInfo gameEventInfo) {
+    private void onMapEnd ( ) {
         isWarmup = true;
-        Console.WriteLine("[INFO] OSBase: GAME NEW MAP!!");
-        return HookResult.Continue;
+        Console.WriteLine("[INFO] OSBase: MAP END!!");
     }   
      private HookResult onWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
         isWarmup = false;
         Console.WriteLine("[INFO] OSBase: WARMUP ENDED!!");
         return HookResult.Continue;
     }
-    private HookResult onGameEnd(EventGameEnd eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult onMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
         isWarmup = true;
-        Console.WriteLine("[INFO] OSBase: GAME ENDED!!");
+        Console.WriteLine("[INFO] OSBase: WIN PANEL MATCH!!");
         return HookResult.Continue;
     }
-    private HookResult onRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-        if ( isWarmup ) {
-            Console.WriteLine("[INFO] Warmup has ended. This is a live round.");
-        } else {
-            Console.WriteLine("[INFO] Round has ended. This is a live round.");
-        }
-        isWarmup = false;
-        return HookResult.Continue;
-    }
+
     private HookResult onRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         // Increment the round number
         Console.WriteLine($"[INFO] Round started!");
