@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.14";
+    public override string ModuleVersion => "0.0.15";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -49,12 +49,12 @@ private void LoadGlobalConfig() {
 
         // Ensure the global configuration file exists
         if (!File.Exists(configPath)) {
-            Console.WriteLine($"[ERROR] Global configuration file not found at: {configPath}");
+            Console.WriteLine($"[ERROR] OSBase: Global configuration file not found at: {configPath}");
             return; // Exit if the file is missing
         }
 
         // Read the global configuration file
-        Console.WriteLine($"[INFO] Loading global configuration from {configPath}");
+        Console.WriteLine($"[INFO] OSBase: Loading global configuration from {configPath}");
         foreach (var line in File.ReadLines(configPath)) {
             string trimmedLine = line.Trim();
 
@@ -69,7 +69,7 @@ private void LoadGlobalConfig() {
             }
         }
     } catch (Exception ex) {
-        Console.WriteLine($"[ERROR] Failed to load global configuration: {ex.Message}");
+        Console.WriteLine($"[ERROR] OSBase: Failed to load global configuration: {ex.Message}");
     }
 }
   
@@ -82,7 +82,7 @@ private void LoadGlobalConfig() {
             // Ensure the directory exists
             if (!Directory.Exists(configDirectory)) {
                 Directory.CreateDirectory(configDirectory);
-                Console.WriteLine($"[INFO] Configuration directory created at: {configDirectory}");
+                Console.WriteLine($"[INFO] OSBase: Configuration directory created at: {configDirectory}");
             }
 
             // Define the global configuration file path
@@ -97,9 +97,9 @@ private void LoadGlobalConfig() {
                 };
 
                 File.WriteAllLines(globalConfigPath, defaultGlobalConfig);
-                Console.WriteLine($"[INFO] Default global configuration created at: {globalConfigPath}");
+                Console.WriteLine($"[INFO] OSBase: Default global configuration created at: {globalConfigPath}");
             } else {
-                Console.WriteLine($"[INFO] Global configuration already exists at: {globalConfigPath}");
+                Console.WriteLine($"[INFO] OSBase: Global configuration already exists at: {globalConfigPath}");
             }
 
             // Create individual configuration files if they don't exist
@@ -108,19 +108,19 @@ private void LoadGlobalConfig() {
             CreateStageConfig(Path.Combine(configDirectory, "mapstart.cfg"), "// Commands for map start\n");
             CreateStageConfig(Path.Combine(configDirectory, "mapend.cfg"), "// Commands for map end\n");
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] Failed to create configuration: {ex.Message}");
+            Console.WriteLine($"[ERROR] OSBase: Failed to create configuration: {ex.Message}");
         }
     }
     private void CreateStageConfig(string configPath, string defaultContent) {
         try {
             if (!File.Exists(configPath)) {
                 File.WriteAllText(configPath, defaultContent);
-                Console.WriteLine($"[INFO] Default stage configuration created at: {configPath}");
+                Console.WriteLine($"[INFO] OSBase: Default stage configuration created at: {configPath}");
             } else {
-                Console.WriteLine($"[INFO] Stage configuration already exists at: {configPath}");
+                Console.WriteLine($"[INFO] OSBase: Stage configuration already exists at: {configPath}");
             }
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] Failed to create stage configuration: {ex.Message}");
+            Console.WriteLine($"[ERROR] OSBase: Failed to create stage configuration: {ex.Message}");
         }
     }
 
@@ -150,15 +150,11 @@ private void LoadGlobalConfig() {
 
     private HookResult onRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         // Increment the round number
-        Console.WriteLine($"[INFO] OSBase: Round started!");
-
         if (isWarmup) {
             Console.WriteLine("[INFO] OSBase: WARMUP IS ON.");
             // Assume warmup ends after the first round
             isWarmup = false;
             runWarmupCommands();
-        } else {
-            Console.WriteLine("[INFO] OSBase: Warmup has ended. This is a live round.");
         }
         return HookResult.Continue;
     }
@@ -214,26 +210,25 @@ private void LoadGlobalConfig() {
 
                     // Skip comments and empty lines
                     if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//")) {
-                        Console.WriteLine($"[DEBUG] Skipping line: {trimmedLine}");
                         continue;
                     }
 
                     // Execute the command
-                    Console.WriteLine($"[INFO] Executing command: {trimmedLine}");
+                    Console.WriteLine($"[INFO] OSBase: Executing command: {trimmedLine}");
                     SendCommand(trimmedLine);
                 }
             } else {
-                Console.WriteLine($"[ERROR] Configuration file not found: {configPath}");
+                Console.WriteLine($"[ERROR] OSBase: Configuration file not found: {configPath}");
             }
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] Failed to execute configuration file: {ex.Message}");
+            Console.WriteLine($"[ERROR] OSBase: Failed to execute configuration file: {ex.Message}");
         }
     }
     private string GetConfigValue(string key, string defaultValue) {
         if (config.ContainsKey(key)) {
             return config[key];
         } else {
-            Console.WriteLine($"[INFO] Config key '{key}' not found. Using default value: {defaultValue}");
+            Console.WriteLine($"[INFO] OSBase: Config key '{key}' not found. Using default value: {defaultValue}");
             return defaultValue;
         }
     }
