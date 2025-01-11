@@ -11,12 +11,14 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.11";
+    public override string ModuleVersion => "0.0.12";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
     private string currentMap = "";
     private bool isWarmup = true;
+
+    private string configPluginPath = "../../configs/plugins/OSBase";
 
     private Dictionary<string, string> config = new();
 
@@ -43,7 +45,7 @@ public class OSBase : BasePlugin {
 private void LoadGlobalConfig() {
     try {
         // Resolve the path to the global configuration file
-        string configPath = Path.Combine(ModuleDirectory, "OSBase/OSBase.cfg");
+        string configPath = Path.Combine(ModuleDirectory, "{configPluginPath}/OSBase.cfg");
 
         // Ensure the global configuration file exists
         if (!File.Exists(configPath)) {
@@ -74,7 +76,7 @@ private void LoadGlobalConfig() {
     private void CreateDefaultGlobalConfig ( ) {
         try {
             // Resolve the base directory for the configuration files
-            string configDirectory = Path.Combine(ModuleDirectory, "../../configs/plugins/OSBase");
+            string configDirectory = Path.Combine(ModuleDirectory, configPluginPath);
 
 
             // Ensure the directory exists
@@ -172,25 +174,48 @@ private void LoadGlobalConfig() {
 
     private void runEndOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
-        SendCommand("tv_stoprecord");
-        SendCommand("tv_enable 0");
+        ExecuteStageConfig("mapend.cfg");
     }    
     private void runStartOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
+        ExecuteStageConfig("mapstart.cfg");
     }
     private void runWarmupCommands() {
         Console.WriteLine("[INFO] OSBase: Running warmup commands...");
-        SendCommand("sv_gravity 200");
+        ExecuteStageConfig("warmupstart.cfg");
     }
 
     private void runWarmupEndCommands() {
         Console.WriteLine("[INFO] OSBase: Running warmup end commands...");
-        var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
-        SendCommand("tv_enable 1");
-        SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
-        SendCommand("sv_gravity 800");
+
+        ExecuteStageConfig("warmupend.cfg");
+
+        // Check if autorecord is enabled
+        if (GetConfigValue("autorecord", "0") == "1") {
+            var date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            SendCommand("tv_enable 1");
+            SendCommand($"tv_record {date}-{currentMap}.dem");
+            Console.WriteLine("[INFO] Autorecord is enabled. Started recording demo.");
+        } else {
+            Console.WriteLine("[INFO] Autorecord is disabled. Skipping demo recording.");
+        }
     }
 
-
-
+    private void ExecuteStageConfig(string configName) {
+        string configPath = Path.Combine(ModuleDirectory, $"{configPluginPath}/{configName}");
+        if (File.Exists(configPath)) {
+            Console.WriteLine($"[INFO] Executing configuration: {configPath}");
+            SendCommand($"exec {configPath}");
+        } else {
+            Console.WriteLine($"[WARNING] Configuration file not found: {configPath}");
+        }
+    }
+    private string GetConfigValue(string key, string defaultValue) {
+        if (config.ContainsKey(key)) {
+            return config[key];
+        } else {
+            Console.WriteLine($"[INFO] Config key '{key}' not found. Using default value: {defaultValue}");
+            return defaultValue;
+        }
+    }
 }
