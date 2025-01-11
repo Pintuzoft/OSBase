@@ -86,6 +86,6 @@ public class OSBase : BasePlugin {
     private void runStartOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
         var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
-        SendCommand("tv_startrecord demo-"+date+"-"+currentMap+".dem");
+        SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
     }
 }
