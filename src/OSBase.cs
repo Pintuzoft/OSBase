@@ -91,7 +91,7 @@ public class OSBase : BasePlugin {
     }
     private void runWarmupCommands() {
         Console.WriteLine("[INFO] OSBase: Running warmup commands...");
-        SendCommand("gravity 200");
+        SendCommand("sv_gravity 200");
     }
 
     private void runWarmupEndCommands() {
@@ -99,6 +99,6 @@ public class OSBase : BasePlugin {
         var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
         SendCommand("tv_enable 1");
         SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
-        SendCommand("gravity 800");
+        SendCommand("sv_gravity 800");
     }
 }
