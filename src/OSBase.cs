@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.12";
+    public override string ModuleVersion => "0.0.13";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -106,7 +106,7 @@ private void LoadGlobalConfig() {
             CreateStageConfig(Path.Combine(configDirectory, "warmupstart.cfg"), "// Commands for warmup start\nsv_gravity 200\n");
             CreateStageConfig(Path.Combine(configDirectory, "warmupend.cfg"), "// Commands for warmup end\nsv_gravity 800\n");
             CreateStageConfig(Path.Combine(configDirectory, "mapstart.cfg"), "// Commands for map start\n");
-            CreateStageConfig(Path.Combine(configDirectory, "mapend.cfg"), "// Commands for map end\ntv_stoprecord\n");
+            CreateStageConfig(Path.Combine(configDirectory, "mapend.cfg"), "// Commands for map end\n");
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] Failed to create configuration: {ex.Message}");
         }
@@ -175,6 +175,11 @@ private void LoadGlobalConfig() {
     private void runEndOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
         ExecuteStageConfig("mapend.cfg");
+        if (GetConfigValue("autorecord", "0") == "1") {
+            SendCommand("tv_stoprecord");
+            SendCommand("tv_enable 0");
+            Console.WriteLine("[INFO] OSBase: Autorecord is enabled. Stopped recording demo.");
+        }
     }    
     private void runStartOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
@@ -195,19 +200,32 @@ private void LoadGlobalConfig() {
             var date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             SendCommand("tv_enable 1");
             SendCommand($"tv_record {date}-{currentMap}.dem");
-            Console.WriteLine("[INFO] Autorecord is enabled. Started recording demo.");
-        } else {
-            Console.WriteLine("[INFO] Autorecord is disabled. Skipping demo recording.");
-        }
+            Console.WriteLine("[INFO] OSBase: Autorecord is enabled. Started recording demo.");
+        } 
     }
 
-    private void ExecuteStageConfig(string configName) {
-        string configPath = Path.Combine(ModuleDirectory, $"{configPluginPath}/{configName}");
-        if (File.Exists(configPath)) {
-            Console.WriteLine($"[INFO] Executing configuration: {configPath}");
-            SendCommand($"exec {configPath}");
-        } else {
-            Console.WriteLine($"[WARNING] Configuration file not found: {configPath}");
+    private void ExecuteStageConfig(string configPath) {
+        try {
+            if (File.Exists(configPath)) {
+                Console.WriteLine($"[INFO] Executing configuration file: {configPath}");
+                foreach (var line in File.ReadLines(configPath)) {
+                    string trimmedLine = line.Trim();
+
+                    // Skip comments and empty lines
+                    if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//")) {
+                        Console.WriteLine($"[DEBUG] Skipping line: {trimmedLine}");
+                        continue;
+                    }
+
+                    // Execute the command
+                    Console.WriteLine($"[INFO] Executing command: {trimmedLine}");
+                    SendCommand(trimmedLine);
+                }
+            } else {
+                Console.WriteLine($"[ERROR] Configuration file not found: {configPath}");
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] Failed to execute configuration file: {ex.Message}");
         }
     }
     private string GetConfigValue(string key, string defaultValue) {
