@@ -14,6 +14,7 @@ public class OSBase : BasePlugin {
     private readonly string MapEndConfig = ResolveConfigPath("cfg/OSBase/mapend.cfg");
     private readonly string WarmupStartConfig = ResolveConfigPath("cfg/OSBase/warmupstart.cfg");
     private readonly string WarmupEndConfig = ResolveConfigPath("cfg/OSBase/warmupend.cfg");
+    private Timer? warmupPollingTimer;
 
     private static string GetGameBaseDirectory() {
         // Start from the current working directory
@@ -82,28 +83,21 @@ public class OSBase : BasePlugin {
     private void OnMapStart(string mapName) {
         Console.WriteLine($"Map '{mapName}' started! Executing {MapStartConfig}...");
         ExecuteConfigSafely(MapStartConfig);
-        
-        HandleWarmup();
+           
+        Console.WriteLine("Assuming warmup is active. Starting warmup polling...");
+        StartWarmupPolling();
         
     }
-
-    private void HandleWarmup() {
-        int warmupTime = GetWarmupTime();
-
-        if (warmupTime > 0) {
-            Console.WriteLine($"Warmup detected! Duration: {warmupTime} seconds.");
-            ExecuteConfigSafely(WarmupStartConfig);
-
-            // Schedule warmup end
-            Timer warmupTimer = new Timer(state => {
+    private void StartWarmupPolling() {
+        warmupPollingTimer = new Timer(state => {
+            if (!IsWarmupActive()) {
                 Console.WriteLine("Warmup has ended!");
-                ExecuteConfigSafely(WarmupEndConfig);
-            }, null, warmupTime * 1000, Timeout.Infinite);
+                ExecuteConfigSafely("cfg/OSBase/warmupend.cfg");
 
-            Console.WriteLine($"Warmup end scheduled in {warmupTime} seconds.");
-        } else {
-            Console.WriteLine("No warmup detected.");
-        }
+                // Stop the polling timer
+                StopWarmupPolling();
+            }
+        }, null, 0, 1000); // Poll every 1 second
     }
 
     private void OnMapEnd() {
@@ -126,30 +120,28 @@ public class OSBase : BasePlugin {
             Console.WriteLine($"[ERROR] Failed to execute config: {configPath}, Exception: {ex.Message}");
         }
     }
-
-    private int GetWarmupTime() {
-        try {
-            // Attempt to find the ConVar for warmup time
-            var conVar = ConVar.Find("mp_warmuptime");
-
-            // Check if the ConVar is null
-            if (conVar == null) {
-                Console.WriteLine("[ERROR] Failed to find ConVar: mp_warmuptime.");
-                return 0; // Default to 0 if the ConVar doesn't exist
-            }
-
-            // Get the string value and attempt to parse it
-            string value = conVar.StringValue;
-            if (int.TryParse(value, out int warmupTime)) {
-                Console.WriteLine($"[DEBUG] Warmup time fetched: {warmupTime} seconds.");
-                return warmupTime;
-            } else {
-                Console.WriteLine("[ERROR] Failed to parse warmup time.");
-            }
-        } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] Exception while fetching warmup time: {ex.Message}");
+    private void StopWarmupPolling() {
+        if (warmupPollingTimer != null) {
+            warmupPollingTimer.Dispose();
+            warmupPollingTimer = null;
+            Console.WriteLine("Warmup polling stopped.");
         }
+    }
+    private bool IsWarmupActive() {
+        try {
+            var conVar = ConVar.Find("mp_warmup_pausetimer");
+            if (conVar == null) {
+                Console.WriteLine("[ERROR] Failed to find ConVar: mp_warmup_pausetimer.");
+                return false; // Assume warmup is not active
+            }
 
-        return 0; // Default to 0 if anything fails
+            string value = conVar.StringValue;
+            bool isActive = value == "0"; // Replace with the appropriate logic
+            Console.WriteLine($"[DEBUG] Warmup active: {isActive}");
+            return isActive;
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] Exception while checking warmup state: {ex.Message}");
+            return false;
+        }
     }
 }
