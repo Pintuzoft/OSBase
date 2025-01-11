@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.13";
+    public override string ModuleVersion => "0.0.14";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -204,7 +204,8 @@ private void LoadGlobalConfig() {
         } 
     }
 
-    private void ExecuteStageConfig(string configPath) {
+    private void ExecuteStageConfig(string configFile) {
+        string configPath = Path.Combine(ModuleDirectory, $"{configPluginPath}/{configFile}");
         try {
             if (File.Exists(configPath)) {
                 Console.WriteLine($"[INFO] Executing configuration file: {configPath}");
