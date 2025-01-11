@@ -48,6 +48,7 @@ public class OSBase : BasePlugin {
         isWarmup = false;
         Console.WriteLine("[INFO] OSBase: WARMUP ENDED!!");
         var date = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
+        SendCommand("tv_enable 1");
         SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
         return HookResult.Continue;
     }
@@ -84,6 +85,7 @@ public class OSBase : BasePlugin {
     private void runEndOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
         SendCommand("tv_stoprecord");
+        SendCommand("tv_enable 0");
     }    
     private void runStartOfMapCommands() {
         Console.WriteLine("[INFO] OSBase: Running end of map commands...");
