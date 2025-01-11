@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.7";
+    public override string ModuleVersion => "0.0.8";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -93,6 +93,7 @@ public class OSBase : BasePlugin {
         Console.WriteLine("[INFO] OSBase: Running warmup commands...");
         SendCommand("sv_gravity 200");
         SendCommand("sv_maxspeed 800");
+        SendCommand("sv_runspeed 800");
     }
 
     private void runWarmupEndCommands() {
@@ -102,5 +103,6 @@ public class OSBase : BasePlugin {
         SendCommand("tv_record demo-"+date+"-"+currentMap+".dem");
         SendCommand("sv_gravity 800");
         SendCommand("sv_maxspeed 320");
+        SendCommand("sv_runspeed 320");
     }
 }
