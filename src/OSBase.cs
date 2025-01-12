@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.23";
+    public override string ModuleVersion => "0.0.24";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -247,6 +247,9 @@ public class OSBase : BasePlugin {
         if (attacker != null && 
             victim != null &&
             attacker.Team == victim.Team) {
+                if ( attacker == victim ) {
+                    return HookResult.Continue;
+                }
                 SendCommand($"css_slap #{attacker.UserId} {eventInfo.DmgHealth}");
                 SendCommand($"say [TD] {attacker.PlayerName} hurt {victim.PlayerName} for {eventInfo.DmgHealth} damage");
         }
@@ -268,6 +271,9 @@ public class OSBase : BasePlugin {
         if (attacker != null && 
             victim != null &&
             attacker.Team == victim.Team) {
+                if ( attacker == victim ) {
+                    return HookResult.Continue;
+                }
                 SendCommand($"css_slap #{attacker.UserId} {eventInfo.DmgHealth}");
                 SendCommand($"say [TK] {attacker.PlayerName} killed {victim.PlayerName}");
         }
