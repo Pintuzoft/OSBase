@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.21";
+    public override string ModuleVersion => "0.0.22";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -235,8 +235,7 @@ public class OSBase : BasePlugin {
 
     /* PLAYER HURT */
     private HookResult onPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
-        if (GetConfigValue("teamdamage_slaps", "0") != "1" ||
-            !isWarmup) {
+        if (GetConfigValue("teamdamage_slaps", "0") != "1" || isWarmup) {
             return HookResult.Continue;
         }
 
@@ -255,8 +254,7 @@ public class OSBase : BasePlugin {
 
     /* PLAYER DEATH */  
     private HookResult onPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        if (GetConfigValue("teamdamage_slaps", "0") != "1" ||
-            !isWarmup) {
+        if (GetConfigValue("teamdamage_slaps", "0") != "1" || isWarmup) {
             return HookResult.Continue;
         }
 
