@@ -52,6 +52,13 @@ public class MapEventsModule : IModule {
 
     private void OnMapEnd() {
         Console.WriteLine("[INFO] Map ended.");
+        Console.WriteLine("[INFO] OSBase: Running end of map commands...");
+        config?.ExecuteCustomConfig("mapend.cfg");
+        if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
+            osbase?.SendCommand("tv_stoprecord");
+            osbase?.SendCommand("tv_enable 0");
+            Console.WriteLine("[INFO] OSBase: Autorecord is enabled. Stopped recording demo.");
+        }
         config?.ExecuteCustomConfig("mapend.cfg");
     }
 
