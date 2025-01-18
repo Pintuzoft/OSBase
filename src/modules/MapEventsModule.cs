@@ -36,6 +36,7 @@ public class MapEventsModule : IModule {
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+        osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
     }
 
     private void OnMapStart(string mapName) {
@@ -70,6 +71,18 @@ public class MapEventsModule : IModule {
             Console.WriteLine("[INFO] Autorecord enabled. Demo recording started.");
         }
 
+        return HookResult.Continue;
+    }
+
+    private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
+        // Add any additional logic for match end event here
+        Console.WriteLine("[INFO] OSBase: Running end of map commands...");
+        config?.ExecuteCustomConfig("mapend.cfg");
+        if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
+            osbase?.SendCommand("tv_stoprecord");
+            osbase?.SendCommand("tv_enable 0");
+            Console.WriteLine("[INFO] OSBase: Autorecord is enabled. Stopped recording demo.");
+        }
         return HookResult.Continue;
     }
 }
