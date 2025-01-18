@@ -4,10 +4,16 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AssemblyTitle>OSBase Plugin</AssemblyTitle>
+    <AssemblyDescription>Plugin for handling map events with config execution</AssemblyDescription>
+    <Company>Pintuzoft</Company>
+    <Product>OSBase</Product>
+    <Version>0.1.0</Version>
+    <FileVersion>0.1.0</FileVersion>    
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.296" />
+    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.300" />
   </ItemGroup>
 
 </Project>
