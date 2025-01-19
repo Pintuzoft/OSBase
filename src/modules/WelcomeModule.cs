@@ -60,37 +60,39 @@ public class WelcomeModule : IModule {
         List<string> messages = config.FetchCustomConfig("welcome.cfg");
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Fetched {messages.Count} lines from welcome.cfg");
 
-        foreach (string message in messages) {
-            if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Skipping line: {message}");
-                continue;
-            }
-
-            // Send the message specifically to the connecting player
-            if (osbase != null) {
-                if (playerId != null && playerId.IsValid && !playerId.IsBot && !playerId.IsHLTV) {
-                    AddTimer(3, () => {
-                        playerId.PrintToChat(message);
-                    });
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending message: {message}");
-                } else {
-                    Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Player ID is null, cannot send message.");
-                }
+        // Send the message specifically to the connecting player
+        if (osbase != null) {
+            if (playerId != null && playerId.IsValid && !playerId.IsBot && !playerId.IsHLTV) {
+                SendMessagesDelayed(3, playerId, messages);
             } else {
-                Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: osbase is null, cannot send message.");
+                Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Player ID is null, cannot send message.");
             }
+        } else {
+            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: osbase is null, cannot send message.");
         }
 
         return HookResult.Continue;
     }
 
 
-    private void AddTimer(int seconds, Action action) {
-        System.Threading.Timer timer = new System.Threading.Timer(_ => { });
+    private void SendMessagesDelayed(int delaySeconds, dynamic playerId, List<string> messages) {
+        // Create a timer to execute the task after the delay
+        System.Threading.Timer? timer = null;
         timer = new System.Threading.Timer(_ => {
-            action();
-            timer.Dispose();
-        }, null, seconds * 1000, System.Threading.Timeout.Infinite);
+            // Loop through the messages and send them to the player
+            foreach (string message in messages) {
+                if (playerId == null) break; // Ensure playerId is valid
+                if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Skipping line: {message}");
+                    continue;
+                }
+                Console.WriteLine($"[DEBUG] Sending message to Player: {playerId.PlayerName ?? "Unknown"}");
+                playerId.PrintToChat(message);
+            }
+
+            // Dispose of the timer after execution
+            timer?.Dispose();
+        }, null, delaySeconds * 1000, System.Threading.Timeout.Infinite);
     }
 
 }
