@@ -48,11 +48,8 @@ private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEve
     }
 
     // Get the player's UserId
-    string playerId = eventInfo.Userid?.UserId?.ToString() ?? string.Empty;
-    if (string.IsNullOrEmpty(playerId)) {
-        Console.WriteLine("[DEBUG] Player ID is empty or null, skipping welcome message.");
-        return HookResult.Continue;
-    }
+    var playerId = eventInfo.Userid;
+    
     Console.WriteLine($"[DEBUG] Sending welcome message to Player ID: {playerId}");
 
     // Fetch the welcome messages from the configuration file
@@ -67,9 +64,12 @@ private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEve
 
         // Send the message specifically to the connecting player
         if (osbase != null) {
-            string command = $"say #{playerId} {message}";
-            Console.WriteLine($"[DEBUG] Executing command: {command}");
-            osbase.SendCommand(command);
+            if (playerId != null) {
+                playerId.PrintToConsole(message);
+                Console.WriteLine($"[DEBUG] Sending message: {message}");
+            } else {
+                Console.WriteLine("[DEBUG] Player ID is null, cannot send message.");
+            }
         } else {
             Console.WriteLine("[DEBUG] OSBase is null, cannot send message.");
         }
