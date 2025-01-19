@@ -115,5 +115,21 @@ public class ConfigModule {
         } else {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Custom configuration file not found: {filePath}");
         }
+    }    
+    
+    public List<string> FetchCustomConfig(string fileName) {
+        string filePath = Path.Combine(configDirectory, fileName);
+
+        List<string> lines = new List<string>();
+
+        if (File.Exists(filePath)) {
+            foreach (var line in File.ReadLines(filePath)) {
+                string trimmedLine = line.Trim();
+                lines.Add(trimmedLine);
+            }
+        } else {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Custom configuration file not found: {filePath}");
+        }
+        return lines;
     }
 }
