@@ -13,6 +13,7 @@ using System.Reflection;
 namespace OSBase.Modules;
 
 public class ConfigModule {
+    public string ModuleName = "DemosModule";
     private readonly OSBase osbase;
     private readonly string configDirectory;
     private readonly string globalConfigPath;
@@ -28,7 +29,7 @@ public class ConfigModule {
         // Ensure the configuration directory exists
         if (!Directory.Exists(configDirectory)) {
             Directory.CreateDirectory(configDirectory);
-            Console.WriteLine($"[INFO] OSBase: Configuration directory created at {configDirectory}");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Configuration directory created at {configDirectory}");
         }
 
         // Load or create global configuration
@@ -41,7 +42,7 @@ public class ConfigModule {
 
     private void LoadGlobalConfig() {
         if (!File.Exists(globalConfigPath)) {
-            Console.WriteLine($"[INFO] OSBase: Global config not found. Creating an empty config.");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Global config not found. Creating an empty config.");
             File.WriteAllText(globalConfigPath, "// OSBase.cfg\n// Global configuration for OSBase plugin\n");
         }
 
@@ -52,7 +53,7 @@ public class ConfigModule {
             var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length == 2) {
                 globalConfig[parts[0]] = parts[1];
-                Console.WriteLine($"[INFO] OSBase: Loaded global config: {parts[0]} = {parts[1]}");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Loaded global config: {parts[0]} = {parts[1]}");
             }
         }
     }
@@ -61,7 +62,7 @@ public class ConfigModule {
         if (!globalConfig.ContainsKey(key)) {
             globalConfig[key] = defaultValue;
             SaveGlobalConfig();
-            Console.WriteLine($"[INFO] OSBase: Added missing global config key: {key} = {defaultValue}");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Added missing global config key: {key} = {defaultValue}");
         }
     }
 
@@ -80,7 +81,7 @@ public class ConfigModule {
         }
 
         File.WriteAllLines(globalConfigPath, lines);
-        Console.WriteLine($"[INFO] OSBase: Global configuration saved to {globalConfigPath}");
+        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Global configuration saved to {globalConfigPath}");
     }
 
     /************************************************************************
@@ -92,9 +93,9 @@ public class ConfigModule {
 
         if (!File.Exists(filePath)) {
             File.WriteAllText(filePath, defaultContent);
-            Console.WriteLine($"[INFO] OSBase: Created custom configuration file: {filePath}");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Created custom configuration file: {filePath}");
         } else {
-            Console.WriteLine($"[INFO] OSBase: Custom configuration file already exists: {filePath}");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Custom configuration file already exists: {filePath}");
         }
     }
 
@@ -108,11 +109,11 @@ public class ConfigModule {
                 // Skip comments and empty lines
                 if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//")) continue;
 
-                Console.WriteLine($"[INFO] OSBase: Executing command from {fileName}: {trimmedLine}");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Executing command from {fileName}: {trimmedLine}");
                 Server.ExecuteCommand(trimmedLine);
             }
         } else {
-            Console.WriteLine($"[ERROR] OSBase: Custom configuration file not found: {filePath}");
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Custom configuration file not found: {filePath}");
         }
     }
 }

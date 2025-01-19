@@ -16,7 +16,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.28";
+    public override string ModuleVersion => "0.0.29";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -24,7 +24,7 @@ public class OSBase : BasePlugin {
     private ConfigModule? config;
     private readonly List<IModule> loadedModules = new();
     public override void Load(bool hotReload) {
-        Console.WriteLine("[INFO] OSBase plugin is loading...");
+        Console.WriteLine("[INFO] OSBase: plugin is loading...");
 
         // Load the configuration module
         config = new ConfigModule(this);

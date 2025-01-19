@@ -13,8 +13,8 @@ namespace OSBase.Modules;
 
 using System.IO;
 
-public class MapEventsModule : IModule {
-    public string ModuleName => "MapEventsModule";   
+public class DemosModule : IModule {
+    public string ModuleName => "DemosModule";   
      private OSBase? osbase;
     private ConfigModule? config;
     private bool isWarmup = true;
@@ -23,46 +23,50 @@ public class MapEventsModule : IModule {
         osbase = inOsbase;
         config = inConfig;
 
-        // Create custom config files
-        config.CreateCustomConfig("mapstart.cfg", "// Commands for map start\n");
-        config.CreateCustomConfig("mapend.cfg", "// Commands for map end\n");
-        config.CreateCustomConfig("warmupstart.cfg", "// Commands for warmup start\nsv_gravity 200\n");
-        config.CreateCustomConfig("warmupend.cfg", "// Commands for warmup end\nsv_gravity 800\n");
+        // Register required global config values
+        config.RegisterGlobalConfigValue("autorecord", "1");
 
         // Register event handlers and listeners
-        osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
         osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
     }
 
-    private void OnMapStart(string mapName) {
-        isWarmup = true;
-        if (osbase != null) {
-            osbase.currentMap = mapName;
-        }
-        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Warmup begins.");
-        config?.ExecuteCustomConfig("mapstart.cfg");
-        config?.ExecuteCustomConfig("warmupstart.cfg");
-    }
-
     private void OnMapEnd() {
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Running end of map commands...");
-        config?.ExecuteCustomConfig("mapend.cfg");
+
+        if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
+            osbase?.SendCommand("tv_stoprecord");
+            osbase?.SendCommand("tv_enable 0");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord is enabled. Stopped recording demo.");
+        }
     }
 
     private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
         if (!isWarmup) return HookResult.Continue;
+
         isWarmup = false;
-        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Warmup ended.");
-        config?.ExecuteCustomConfig("warmupend.cfg");
+        if (config != null && config.GetGlobalConfigValue("autorecord", "0") == "1") {
+            string date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            Server.ExecuteCommand("tv_enable 1");
+            if (osbase != null) {
+                Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}.dem");
+            }
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord enabled. Demo recording started.");
+        }
+
         return HookResult.Continue;
     }
 
     private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
         // Add any additional logic for match end event here
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Running end of map commands...");
-        config?.ExecuteCustomConfig("mapend.cfg");
+        if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
+            osbase?.SendCommand("tv_stoprecord");
+            osbase?.SendCommand("tv_enable 0");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord is enabled. Stopped recording demo.");
+        }
         return HookResult.Continue;
     }
+
 }
