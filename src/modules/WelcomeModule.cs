@@ -68,7 +68,7 @@ public class WelcomeModule : IModule {
 
             // Send the message specifically to the connecting player
             if (osbase != null) {
-                if (playerId != null) {
+                if (playerId != null && playerId.IsValid && !playerId.IsBot && !playerId.IsHLTV) {
                     AddTimer(3, () => {
                         playerId.PrintToChat(message);
                     });
