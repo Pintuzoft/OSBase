@@ -15,8 +15,10 @@ using System.IO;
 
 public class WelcomeModule : IModule {
     public string ModuleName => "WelcomeModule";   
-     private OSBase? osbase;
+    private OSBase? osbase;
     private ConfigModule? config;
+
+    float delay = 5.0f;
 
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
         osbase = inOsbase;
@@ -34,7 +36,6 @@ public class WelcomeModule : IModule {
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
 
     }
-
 
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
         if (config == null) {
@@ -63,7 +64,7 @@ public class WelcomeModule : IModule {
         // Send the message specifically to the connecting player
         if (osbase != null) {
             if (playerId != null && playerId.IsValid && !playerId.IsBot && !playerId.IsHLTV) {
-            osbase.AddTimer(3.0f, () => {
+            osbase.AddTimer(delay, () => {
                 foreach (string message in messages) {
                     if (playerId == null) break; // Ensure playerId is valid
                     if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
