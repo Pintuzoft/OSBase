@@ -13,7 +13,7 @@ using System.Reflection;
 namespace OSBase.Modules;
 
 public class ConfigModule {
-    public string ModuleName = "DemosModule";
+    public string ModuleName = "ConfigModule";
     private readonly OSBase osbase;
     private readonly string configDirectory;
     private readonly string globalConfigPath;

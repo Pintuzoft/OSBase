@@ -35,50 +35,62 @@ public class WelcomeModule : IModule {
 
     }
 
-private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
-    if (config == null) {
-        Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Config module is null, skipping welcome message.");
-        return HookResult.Continue;
-    }
 
-    // Check if welcome messages are enabled
-    string welcomeMsgEnabled = config.GetGlobalConfigValue("welcome_msg", "0");
-    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Welcome messages enabled: {welcomeMsgEnabled}");
+    private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
+        if (config == null) {
+            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Config module is null, skipping welcome message.");
+            return HookResult.Continue;
+        }
+        
+        // Check if welcome messages are enabled
+        string welcomeMsgEnabled = config.GetGlobalConfigValue("welcome_msg", "0");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Welcome messages enabled: {welcomeMsgEnabled}");
 
-    if (welcomeMsgEnabled != "1") {
-        Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Welcome messages are disabled, skipping.");
-        return HookResult.Continue;
-    }
-
-    // Get the player's UserId
-    var playerId = eventInfo.Userid;
-    
-    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending welcome message to Player ID: {playerId}");
-
-    // Fetch the welcome messages from the configuration file
-    List<string> messages = config.FetchCustomConfig("welcome.cfg");
-    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Fetched {messages.Count} lines from welcome.cfg");
-
-    foreach (string message in messages) {
-        if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Skipping line: {message}");
-            continue;
+        if (welcomeMsgEnabled != "1") {
+            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Welcome messages are disabled, skipping.");
+            return HookResult.Continue;
         }
 
-        // Send the message specifically to the connecting player
-        if (osbase != null) {
-            if (playerId != null) {
-                playerId.PrintToConsole(message);
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending message: {message}");
-            } else {
-                Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Player ID is null, cannot send message.");
+        // Get the player's UserId
+        var playerId = eventInfo.Userid;
+        
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending welcome message to Player ID: {playerId}");
+
+        // Fetch the welcome messages from the configuration file
+        List<string> messages = config.FetchCustomConfig("welcome.cfg");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Fetched {messages.Count} lines from welcome.cfg");
+
+        foreach (string message in messages) {
+            if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Skipping line: {message}");
+                continue;
             }
-        } else {
-            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: osbase is null, cannot send message.");
+
+            // Send the message specifically to the connecting player
+            if (osbase != null) {
+                if (playerId != null) {
+                    AddTimer(3, () => {
+                        playerId.PrintToChat(message);
+                    });
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending message: {message}");
+                } else {
+                    Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Player ID is null, cannot send message.");
+                }
+            } else {
+                Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: osbase is null, cannot send message.");
+            }
         }
+
+        return HookResult.Continue;
     }
 
-    return HookResult.Continue;
-}
+
+    private void AddTimer(int seconds, Action action) {
+        System.Threading.Timer timer = new System.Threading.Timer(_ => { });
+        timer = new System.Threading.Timer(_ => {
+            action();
+            timer.Dispose();
+        }, null, seconds * 1000, System.Threading.Timeout.Infinite);
+    }
 
 }
