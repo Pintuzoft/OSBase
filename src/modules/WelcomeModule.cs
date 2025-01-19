@@ -25,40 +25,43 @@ public class WelcomeModule : IModule {
         // Register required global config values
         config.RegisterGlobalConfigValue("welcome_msg", "1");
 
+        // Create custom config files
         config.CreateCustomConfig("welcome.cfg", "// Welcome message\n// Example: Welcome to the server!\n");
 
         // Register event handlers and listeners
         osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
 
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+
     }
 
 private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
     if (config == null) {
-        Console.WriteLine("[DEBUG] Config module is null, skipping welcome message.");
+        Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Config module is null, skipping welcome message.");
         return HookResult.Continue;
     }
 
     // Check if welcome messages are enabled
     string welcomeMsgEnabled = config.GetGlobalConfigValue("welcome_msg", "0");
-    Console.WriteLine($"[DEBUG] Welcome messages enabled: {welcomeMsgEnabled}");
+    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Welcome messages enabled: {welcomeMsgEnabled}");
 
     if (welcomeMsgEnabled != "1") {
-        Console.WriteLine("[DEBUG] Welcome messages are disabled, skipping.");
+        Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Welcome messages are disabled, skipping.");
         return HookResult.Continue;
     }
 
     // Get the player's UserId
     var playerId = eventInfo.Userid;
     
-    Console.WriteLine($"[DEBUG] Sending welcome message to Player ID: {playerId}");
+    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending welcome message to Player ID: {playerId}");
 
     // Fetch the welcome messages from the configuration file
     List<string> messages = config.FetchCustomConfig("welcome.cfg");
-    Console.WriteLine($"[DEBUG] Fetched {messages.Count} lines from welcome.cfg");
+    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Fetched {messages.Count} lines from welcome.cfg");
 
     foreach (string message in messages) {
         if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
-            Console.WriteLine($"[DEBUG] Skipping line: {message}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Skipping line: {message}");
             continue;
         }
 
@@ -66,12 +69,12 @@ private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEve
         if (osbase != null) {
             if (playerId != null) {
                 playerId.PrintToConsole(message);
-                Console.WriteLine($"[DEBUG] Sending message: {message}");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending message: {message}");
             } else {
-                Console.WriteLine("[DEBUG] Player ID is null, cannot send message.");
+                Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Player ID is null, cannot send message.");
             }
         } else {
-            Console.WriteLine("[DEBUG] OSBase is null, cannot send message.");
+            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: osbase is null, cannot send message.");
         }
     }
 

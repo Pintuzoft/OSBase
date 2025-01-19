@@ -34,6 +34,8 @@ public class MapEventsModule : IModule {
         osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
         osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
     private void OnMapStart(string mapName) {

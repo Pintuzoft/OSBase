@@ -34,6 +34,8 @@ public class ConfigModule {
 
         // Load or create global configuration
         LoadGlobalConfig();
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
     /************************************************************************

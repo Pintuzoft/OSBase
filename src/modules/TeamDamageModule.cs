@@ -27,6 +27,8 @@ public class TeamDamageModule : IModule {
         // Register event handlers and listeners
         osbase.RegisterEventHandler<EventPlayerHurt>(onPlayerHurt);
         osbase.RegisterEventHandler<EventPlayerDeath>(onPlayerDeath);
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
     /* PLAYER HURT */
