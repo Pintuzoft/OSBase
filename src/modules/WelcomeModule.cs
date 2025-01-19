@@ -67,7 +67,7 @@ private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEve
 
         // Send the message specifically to the connecting player
         if (osbase != null) {
-            string command = $"css_psay #{playerId} {message}"; // Replace 'css_psay' with the correct command
+            string command = $"say #{playerId} {message}";
             Console.WriteLine($"[DEBUG] Executing command: {command}");
             osbase.SendCommand(command);
         } else {
