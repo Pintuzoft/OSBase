@@ -49,7 +49,7 @@ public class TeamDamageModule : IModule {
                     return HookResult.Continue;
                 }
                 osbase?.SendCommand($"css_slap #{attacker.UserId} {eventInfo.DmgHealth}");
-                osbase?.SendCommand($"say [TD] {attacker.PlayerName} hurt {victim.PlayerName} for {eventInfo.DmgHealth} damage");
+                osbase?.SendCommand($"say [TeamDamage] {attacker.PlayerName} hurt {victim.PlayerName}");
         }
         
         return HookResult.Continue;
@@ -73,7 +73,7 @@ public class TeamDamageModule : IModule {
                     return HookResult.Continue;
                 }
                 osbase?.SendCommand($"css_slap #{attacker.UserId} {eventInfo.DmgHealth}");
-                osbase?.SendCommand($"say [TK] {attacker.PlayerName} killed {victim.PlayerName}");
+                osbase?.SendCommand($"say [TeamKill] {attacker.PlayerName} killed {victim.PlayerName}");
         }
         
         return HookResult.Continue;

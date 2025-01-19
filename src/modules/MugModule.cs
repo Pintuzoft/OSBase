@@ -59,7 +59,7 @@ public class MugModule : IModule {
                 victim.AddMoney(victimMoney);     // Give it back to the victim
 
                 Console.WriteLine($"[INFO] MugModule: {attacker.PlayerName} was punished for knifing their teammate {victim.PlayerName} and lost ${victimMoney}.");
-                osbase.SendCommand($"say \"{attacker.PlayerName} tried to mug their teammate {victim.PlayerName} and lost ${victimMoney} as punishment!\"");
+                Server.PrintToChatAll($"\"{attacker.PlayerName} tried to mug their teammate {victim.PlayerName} and lost ${victimMoney} as punishment!\"");
             } else {
                 Console.WriteLine("[DEBUG] MugModule: Attacker has no money to punish.");
             }
@@ -70,7 +70,7 @@ public class MugModule : IModule {
                 attacker.AddMoney(victimMoney);  // Give it to the attacker
 
                 Console.WriteLine($"[INFO] MugModule: {attacker.PlayerName} stole ${victimMoney} from {victim.PlayerName} with a knife.");
-                osbase.SendCommand($"say \"{attacker.PlayerName} mugged {victim.PlayerName} for ${victimMoney}!\"");
+                Server.PrintToChatAll($"\"{attacker.PlayerName} mugged {victim.PlayerName} for ${victimMoney}!\"");
             } else {
                 Console.WriteLine("[DEBUG] MugModule: Victim has no money to steal.");
             }
