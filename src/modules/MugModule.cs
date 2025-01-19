@@ -15,7 +15,6 @@ using System.IO;
 
 public class MugModule : IModule {
     public string ModuleName => "MugModule";
-
     private OSBase? osbase;
     private ConfigModule? config;
 
@@ -33,27 +32,27 @@ public class MugModule : IModule {
     }
 
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        if (config == null || osbase == null) 
+        if ( config == null || osbase == null ) 
             return HookResult.Continue;
 
         // Check if the mugging functionality is enabled
-        if (config.GetGlobalConfigValue("mug_enabled", "0") != "1") 
+        if ( config.GetGlobalConfigValue("mug_enabled", "0") != "1" ) 
             return HookResult.Continue;
 
         var attacker = eventInfo.Attacker;
         var victim = eventInfo.Userid;
 
         // Ensure both attacker and victim are valid players
-        if (attacker == null || victim == null || !attacker.IsValid || !victim.IsValid) 
+        if ( attacker == null || victim == null || !attacker.IsValid || !victim.IsValid ) 
             return HookResult.Continue;
 
         // Check if the attacker used a knife
-        if (eventInfo.Weapon != "knife") 
+        if ( ! eventInfo.Weapon.Contains("knife")) 
             return HookResult.Continue;
 
         int victimMoney = victim.InGameMoneyServices?.Account ?? 0;
 
-        if (attacker.Team == victim.Team) {
+        if ( attacker.Team == victim.Team ) {
             // Reverse punishment for team knifing
             if (victimMoney > 0) {
                 attacker.RemoveMoney(victimMoney); // Deduct all money from the attacker
