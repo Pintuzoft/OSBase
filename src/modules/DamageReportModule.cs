@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
@@ -10,9 +11,6 @@ using System.Diagnostics.Tracing;
 using System.Reflection;
 
 namespace OSBase.Modules;
-
-using System.IO;
-
 
 public class DamageReportModule : IModule {
     public string ModuleName => "DamageReportModule";
@@ -44,29 +42,42 @@ public class DamageReportModule : IModule {
 
         config.RegisterGlobalConfigValue("showdamagereport", "1");
 
-        InitializeHitboxNames();
         InitializePlayerNames();
 
         // Register event handlers
         osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
+        osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
-    private void InitializeHitboxNames() {
-        hitboxName[0]  = "Body";
-        hitboxName[1]  = "Head";
-        hitboxName[2]  = "Chest";
-        hitboxName[3]  = "Stomach";
-        hitboxName[4]  = "L-arm";
-        hitboxName[5]  = "R-arm";
-        hitboxName[6]  = "L-leg";
-        hitboxName[7]  = "R-leg";
-        hitboxName[8]  = "Neck";
-        hitboxName[9]  = "Unknown(9)";
-        hitboxName[10] = "Gear";
+    private string hitGroupToString(int hitGroup) {
+        switch (hitGroup) {
+            case 0:
+                return "Body";
+            case 1:
+                return "Head";
+            case 2:
+                return "Chest";
+            case 3:
+                return "Stomach";
+            case 4:
+                return "L-Arm";
+            case 5:
+                return "R-Arm";
+            case 6:
+                return "L-Leg";
+            case 7:
+                return "R-Leg";
+            case 8:
+                return "Neck";
+            case 10:
+                return "Gear";
+            default:
+                return "Unknown";
+        }
     }
 
     private void InitializePlayerNames() {
@@ -79,6 +90,38 @@ public class DamageReportModule : IModule {
         ClearAllDamageData();
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Round started, damage data cleared.");
         return HookResult.Continue;
+    }
+
+    private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Round ended. Displaying damage reports...");
+        DisplayDamageReports();
+        return HookResult.Continue;
+    }
+
+    private void DisplayDamageReports() {
+        List<CCSPlayerController> playersList = Utilities.GetPlayers(); // Get all players
+        foreach (var player in playersList) {
+            if (player.UserId.HasValue) {
+                int playerId = player.UserId.Value;
+                if (damageGiven[playerId, 0] > 0 || damageTaken[playerId, 0] > 0) {
+                    player.PrintToChat($"===[ Damage Report for {playerName[playerId]} ]===");
+
+                    // Show damage given
+                    for (int victim = 1; victim <= MaxPlayers; victim++) {
+                        if (damageGiven[playerId, victim] > 0) {
+                            player.PrintToChat($"To {playerName[victim]}: {hitsGiven[playerId, victim]} hits, {damageGiven[playerId, victim]} damage.");
+                        }
+                    }
+
+                    // Show damage taken
+                    for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
+                        if (damageTaken[playerId, attacker] > 0) {
+                            player.PrintToChat($"From {playerName[attacker]}: {hitsTaken[playerId, attacker]} hits, {damageTaken[playerId, attacker]} damage.");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
@@ -104,8 +147,9 @@ public class DamageReportModule : IModule {
         hitboxTakenDamage[victim, attacker, hitGroup] += damage;
 
         // Debug: Print hitbox hit information
-        string hitbox = hitboxName.Length > hitGroup && hitGroup >= 0 ? hitboxName[hitGroup] : "Unknown";
-        Server.PrintToChatAll($"[DEBUG] You hit {playerName[victim]} in the {hitbox} for {damage} damage.");
+        string hitbox = hitboxName.Length > hitGroup && hitGroup >= 0 ? hitGroupToString(hitGroup) : "Unknown";
+        var attackerPlayer = Utilities.GetPlayers().Find(p => p.UserId.HasValue && p.UserId.Value == attacker);
+        attackerPlayer?.PrintToChat($"[DEBUG] You hit {playerName[victim]} in the {hitbox} for {damage} damage.");
 
         return HookResult.Continue;
     }
@@ -121,8 +165,32 @@ public class DamageReportModule : IModule {
         int attacker = eventInfo.Attacker.UserId.Value;
         killedPlayer[attacker, victim] = 1;
 
+        // Show damage report for the killed player
+        DisplayDamageReportsForPlayer(victim);
+
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Player {victim} killed by {attacker}.");
         return HookResult.Continue;
+    }
+
+    private void DisplayDamageReportsForPlayer(int playerId) {
+        var player = Utilities.GetPlayers().Find(p => p.UserId.HasValue && p.UserId.Value == playerId);
+        if (player != null && (damageGiven[playerId, 0] > 0 || damageTaken[playerId, 0] > 0)) {
+            player.PrintToChat($"===[ Damage Report for {playerName[playerId]} ]===");
+
+            // Show damage given
+            for (int victim = 1; victim <= MaxPlayers; victim++) {
+                if (damageGiven[playerId, victim] > 0) {
+                    player.PrintToChat($"To {playerName[victim]}: {hitsGiven[playerId, victim]} hits, {damageGiven[playerId, victim]} damage.");
+                }
+            }
+
+            // Show damage taken
+            for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
+                if (damageTaken[playerId, attacker] > 0) {
+                    player.PrintToChat($"From {playerName[attacker]}: {hitsTaken[playerId, attacker]} hits, {damageTaken[playerId, attacker]} damage.");
+                }
+            }
+        }
     }
 
     private void ClearAllDamageData() {
