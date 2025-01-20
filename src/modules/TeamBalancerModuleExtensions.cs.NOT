@@ -1,0 +1,57 @@
+using System;
+using System.IO;
+using CounterStrikeSharp.API;
+using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Cvars;
+using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Modules.Events;
+using System.Diagnostics.Tracing;
+using System.Reflection;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace OSBase.Extensions {
+    public static class TeamBalancerModuleExtensions {
+        // In-memory stats storage
+        private static readonly Dictionary<string, PlayerStats> PlayerStats = new();
+
+        // Retrieves or initializes stats for a player.
+        public static PlayerStats GetStats(this CCSPlayerController player) {
+            string playerId = player.SteamID.ToString();
+
+            if (!PlayerStats.ContainsKey(playerId)) {
+                PlayerStats[playerId] = new PlayerStats { PlayerName = player.PlayerName };
+            }
+
+            return PlayerStats[playerId];
+        }
+
+        // Updates player stats (e.g., kills, deaths, objectives).
+        public static void UpdateStats(this CCSPlayerController player, int kills = 0, int deaths = 0, int objectives = 0) {
+            var stats = player.GetStats();
+            stats.Kills += kills;
+            stats.Deaths += deaths;
+            stats.ObjectivesCompleted += objectives;
+        }
+
+        // Calculates skill rating based on stats.
+        public static int GetSkillRating(this CCSPlayerController player) {
+            var stats = player.GetStats();
+            return (stats.Kills * 3) - (stats.Deaths * 2) + (stats.ObjectivesCompleted * 5);
+        }
+
+        // Calculates total team skill.
+        public static int CalculateTeamSkill(this IEnumerable<CCSPlayerController> team) {
+            return team.Sum(player => player.GetSkillRating());
+        }
+    }
+
+    // Data structure for player stats.
+    public class PlayerStats {
+        public string PlayerName { get; set; } = string.Empty;
+        public int Kills { get; set; } = 0;
+        public int Deaths { get; set; } = 0;
+        public int ObjectivesCompleted { get; set; } = 0;
+    }
+}
