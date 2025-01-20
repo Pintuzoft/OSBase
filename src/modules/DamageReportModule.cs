@@ -20,7 +20,7 @@ public class DamageReportModule : IModule {
     private ConfigModule? config;
 
     private const int MaxPlayers = 64;
-    private const int MaxHitGroups = 8;
+    private const int MaxHitGroups = 10;
 
     private int[,] damageGiven = new int[MaxPlayers + 1, MaxPlayers + 1];
     private int[,] hitsGiven = new int[MaxPlayers + 1, MaxPlayers + 1];
