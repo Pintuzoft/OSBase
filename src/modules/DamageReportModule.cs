@@ -200,23 +200,30 @@ public class DamageReportModule : IModule {
             info += " (killed by)";
         }
 
-        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg ->";
+        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg";
 
-        bool isFirst = true;
+        bool hasHitgroupData = false;
+        string hitgroupDetails = "";
+
         for (int hitgroup = 0; hitgroup < MaxHitGroups; hitgroup++) {
             if (hitboxTaken[victim, attacker, hitgroup] > 0) {
-                if (isFirst) {
-                    info += $" {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
-                    isFirst = false;
+                if (!hasHitgroupData) {
+                    hasHitgroupData = true;
+                    hitgroupDetails += $" -> {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
                 } else {
-                    info += $", {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
+                    hitgroupDetails += $", {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
                 }
             }
         }
 
+        if (!hasHitgroupData) {
+            hitgroupDetails = " -> No specific hitgroups recorded.";
+        }
+
+        info += hitgroupDetails;
         return info;
     }
-    
+
     private string FormatVictimReport(int attacker, int victim) {
         string report = $" - {playerName[victim]}";
 
