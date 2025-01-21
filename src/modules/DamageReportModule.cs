@@ -55,9 +55,17 @@ public class DamageReportModule : IModule {
 
         int attacker = eventInfo.Attacker.UserId.Value;
         int victim = eventInfo.Userid.UserId.Value;
+
         int damage = eventInfo.DmgHealth;
         int hitGroup = eventInfo.Hitgroup;
 
+        // Ensure hitGroup is valid
+        if (hitGroup < 0 || hitGroup >= MaxHitGroups) {
+            Console.WriteLine($"[DEBUG] OnPlayerHurt: Invalid HitGroup {hitGroup}. Setting to Unknown.");
+            hitGroup = hitboxName.Length - 1; // Default to "Unknown"
+        }
+
+        // Record damage and hits
         damageGiven[attacker, victim] += damage;
         hitsGiven[attacker, victim]++;
         hitboxGiven[attacker, victim, hitGroup]++;
