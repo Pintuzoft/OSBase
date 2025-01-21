@@ -15,13 +15,20 @@ public class DamageReportModule : IModule {
 
     private int[,] damageGiven = new int[MaxPlayers + 1, MaxPlayers + 1];
     private int[,] hitsGiven = new int[MaxPlayers + 1, MaxPlayers + 1];
+    private int[,,] hitboxGiven = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
+    private int[,,] hitboxGivenDamage = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
+
     private int[,] damageTaken = new int[MaxPlayers + 1, MaxPlayers + 1];
     private int[,] hitsTaken = new int[MaxPlayers + 1, MaxPlayers + 1];
+    private int[,,] hitboxTaken = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
+    private int[,,] hitboxTakenDamage = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
+
     private string[] playerName = new string[MaxPlayers + 1];
 
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
         osbase = inOsbase;
 
+        // Initialize player names
         for (int i = 0; i <= MaxPlayers; i++) {
             playerName[i] = "Unknown";
         }
@@ -30,7 +37,8 @@ public class DamageReportModule : IModule {
         osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
-        osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
+        osbase.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
+        osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
@@ -44,13 +52,18 @@ public class DamageReportModule : IModule {
         int attacker = eventInfo.Attacker.UserId.Value;
         int victim = eventInfo.Userid.UserId.Value;
         int damage = eventInfo.DmgHealth;
+        int hitGroup = eventInfo.Hitgroup;
 
         damageGiven[attacker, victim] += damage;
         hitsGiven[attacker, victim]++;
+        hitboxGiven[attacker, victim, hitGroup]++;
+        hitboxGivenDamage[attacker, victim, hitGroup] += damage;
+
         damageTaken[victim, attacker] += damage;
         hitsTaken[victim, attacker]++;
+        hitboxTaken[victim, attacker, hitGroup]++;
+        hitboxTakenDamage[victim, attacker, hitGroup] += damage;
 
-        Console.WriteLine($"[DEBUG] OnPlayerHurt: Attacker {attacker} hit Victim {victim} for {damage} damage.");
         return HookResult.Continue;
     }
 
@@ -61,21 +74,25 @@ public class DamageReportModule : IModule {
         }
 
         int victim = eventInfo.Userid.UserId.Value;
-        Console.WriteLine($"[DEBUG] OnPlayerDeath: Showing damage report for Victim {victim}.");
         DisplayDamageReport(victim);
+
         return HookResult.Continue;
     }
 
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         ClearDamageData();
         UpdatePlayerNames();
-        Console.WriteLine("[INFO] Round started. Damage data cleared and player names updated.");
+        Console.WriteLine("[INFO] Round started. Damage data cleared.");
         return HookResult.Continue;
     }
 
-    private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine("[INFO] Round ended. Displaying damage reports.");
-        DisplayAllDamageReports();
+    private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
+        UpdatePlayerNames();
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
+        UpdatePlayerNames();
         return HookResult.Continue;
     }
 
@@ -91,11 +108,6 @@ public class DamageReportModule : IModule {
     }
 
     private void DisplayDamageReport(int playerId) {
-        if (playerId == 0) {
-            Console.WriteLine("[DEBUG] Skipping damage report for Player 0 (world or invalid).");
-            return;
-        }
-
         var playersList = Utilities.GetPlayers();
         var player = playersList.Find(p => p.UserId.HasValue && p.UserId.Value == playerId);
 
@@ -106,37 +118,83 @@ public class DamageReportModule : IModule {
 
         player.PrintToChat($"===[ Damage Report for {playerName[playerId]} ]===");
 
-        // Show damage given
+        if (HasVictims(playerId)) {
+            player.PrintToChat($"===[ Victims - Total: [{TotalHitsGiven(playerId)}:{TotalDamageGiven(playerId)}] ]===");
+            for (int victim = 1; victim <= MaxPlayers; victim++) {
+                if (IsVictim(playerId, victim)) {
+                    player.PrintToChat(FormatVictimReport(playerId, victim));
+                }
+            }
+        }
+
+        if (HasAttackers(playerId)) {
+            player.PrintToChat($"===[ Attackers - Total: [{TotalHitsTaken(playerId)}:{TotalDamageTaken(playerId)}] ]===");
+            for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
+                if (IsVictim(attacker, playerId)) {
+                    player.PrintToChat(FormatAttackerReport(attacker, playerId));
+                }
+            }
+        }
+    }
+
+    private string FormatVictimReport(int attacker, int victim) {
+        string report = $" - {playerName[victim]}";
+        if (damageGiven[attacker, victim] > 0) {
+            report += $" ({hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} damage)";
+        }
+        return report;
+    }
+
+    private string FormatAttackerReport(int attacker, int victim) {
+        string report = $" - {playerName[attacker]}";
+        if (damageTaken[victim, attacker] > 0) {
+            report += $" ({hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} damage)";
+        }
+        return report;
+    }
+
+    private bool HasVictims(int playerId) => TotalDamageGiven(playerId) > 0;
+
+    private bool HasAttackers(int playerId) => TotalDamageTaken(playerId) > 0;
+
+    private int TotalDamageGiven(int playerId) {
+        int total = 0;
         for (int victim = 1; victim <= MaxPlayers; victim++) {
-            if (damageGiven[playerId, victim] > 0) {
-                player.PrintToChat($"To {playerName[victim]}: {hitsGiven[playerId, victim]} hits, {damageGiven[playerId, victim]} damage.");
-                Console.WriteLine($"[DEBUG] DamageGiven: Player {playerId} -> Victim {victim}: {damageGiven[playerId, victim]} damage.");
-            }
+            total += damageGiven[playerId, victim];
         }
+        return total;
+    }
 
-        // Show damage taken
+    private int TotalDamageTaken(int playerId) {
+        int total = 0;
         for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
-            if (damageTaken[playerId, attacker] > 0) {
-                player.PrintToChat($"From {playerName[attacker]}: {hitsTaken[playerId, attacker]} hits, {damageTaken[playerId, attacker]} damage.");
-                Console.WriteLine($"[DEBUG] DamageTaken: Player {playerId} <- Attacker {attacker}: {damageTaken[playerId, attacker]} damage.");
-            }
+            total += damageTaken[playerId, attacker];
         }
+        return total;
     }
 
-    private void DisplayAllDamageReports() {
-        var playersList = Utilities.GetPlayers();
-        foreach (var player in playersList) {
-            if (player.UserId.HasValue) {
-                DisplayDamageReport(player.UserId.Value);
-            }
+    private int TotalHitsGiven(int playerId) {
+        int total = 0;
+        for (int victim = 1; victim <= MaxPlayers; victim++) {
+            total += hitsGiven[playerId, victim];
         }
+        return total;
     }
+
+    private int TotalHitsTaken(int playerId) {
+        int total = 0;
+        for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
+            total += hitsTaken[playerId, attacker];
+        }
+        return total;
+    }
+
+    private bool IsVictim(int attacker, int victim) => damageGiven[attacker, victim] > 0;
 
     private void ClearDamageData() {
         Array.Clear(damageGiven, 0, damageGiven.Length);
         Array.Clear(hitsGiven, 0, hitsGiven.Length);
         Array.Clear(damageTaken, 0, damageTaken.Length);
         Array.Clear(hitsTaken, 0, hitsTaken.Length);
-        Console.WriteLine("[DEBUG] Damage data cleared.");
     }
 }
