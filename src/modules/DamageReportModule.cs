@@ -77,8 +77,8 @@ public class DamageReportModule : IModule {
         }
 
         int victim = eventInfo.Userid.UserId.Value;
+        Console.WriteLine($"[DEBUG] Generating damage report for Player {victim}.");
         DisplayDamageReport(victim);
-
         return HookResult.Continue;
     }
 
@@ -219,21 +219,29 @@ public class DamageReportModule : IModule {
     private int TotalDamageGiven(int playerId) {
         int total = 0;
         for (int victim = 1; victim <= MaxPlayers; victim++) {
-            total += damageGiven[playerId, victim];
+            if (damageGiven[playerId, victim] > 0) {
+                total += damageGiven[playerId, victim];
+            }
         }
+        Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {total}");
         return total;
     }
 
     private int TotalHitsGiven(int playerId) {
         int total = 0;
         for (int victim = 1; victim <= MaxPlayers; victim++) {
-            total += hitsGiven[playerId, victim];
+            if (hitsGiven[playerId, victim] > 0) {
+                total += hitsGiven[playerId, victim];
+            }
         }
+        Console.WriteLine($"[DEBUG] TotalHitsGiven[{playerId}] = {total}");
         return total;
     }
-
-    private bool IsVictim(int attacker, int victim) => damageGiven[attacker, victim] > 0;
-
+    private bool IsVictim(int attacker, int victim) {
+        bool result = damageGiven[attacker, victim] > 0;
+        Console.WriteLine($"[DEBUG] IsVictim({attacker}, {victim}): {result}");
+        return result;
+    }
     private void ClearDamageData() {
         Array.Clear(damageGiven, 0, damageGiven.Length);
         Array.Clear(hitsGiven, 0, hitsGiven.Length);
