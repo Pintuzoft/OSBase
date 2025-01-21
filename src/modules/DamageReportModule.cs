@@ -114,23 +114,15 @@ public class DamageReportModule : IModule {
         Console.WriteLine($"[DEBUG] Generating damage report for Player {playerId} ({playerName[playerId]}).");
 
         if (HasVictims(playerId)) {
-            Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {TotalDamageGiven(playerId)}.");
-            for (int victim = 0; victim < 4; victim++) { // Limit to 4 players
-                if (IsVictim(playerId, victim)) {
-                    Console.WriteLine($"[DEBUG] Victim {victim}: Hits {hitsGiven[playerId, victim]}, Damage {damageGiven[playerId, victim]}.");
-                }
-            }
+            int totalGiven = TotalDamageGiven(playerId);
+            Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {totalGiven}.");
         } else {
             Console.WriteLine($"[DEBUG] No victims found for Player {playerId}.");
         }
 
         if (HasAttackers(playerId)) {
-            Console.WriteLine($"[DEBUG] TotalDamageTaken[{playerId}] = {TotalDamageTaken(playerId)}.");
-            for (int attacker = 0; attacker < 4; attacker++) { // Limit to 4 players
-                if (IsVictim(attacker, playerId)) {
-                    Console.WriteLine($"[DEBUG] Attacker {attacker}: Hits {hitsTaken[playerId, attacker]}, Damage {damageTaken[playerId, attacker]}.");
-                }
-            }
+            int totalTaken = TotalDamageTaken(playerId);
+            Console.WriteLine($"[DEBUG] TotalDamageTaken[{playerId}] = {totalTaken}.");
         } else {
             Console.WriteLine($"[DEBUG] No attackers found for Player {playerId}.");
         }
@@ -226,22 +218,27 @@ public class DamageReportModule : IModule {
         return total;
     }
 
-    private int TotalDamageTaken(int playerId) {
-        int total = 0;
-        for (int attacker = 1; attacker <= 4; attacker++) {
-            total += damageTaken[playerId, attacker];
-        }
-        return total;
-    }
-
     private int TotalDamageGiven(int playerId) {
         int total = 0;
-        for (int victim = 1; victim <= 4; victim++) {
+        for (int victim = 0; victim < 4; victim++) { // Limit to first 4 players for debugging
             if (damageGiven[playerId, victim] > 0) {
                 total += damageGiven[playerId, victim];
+                Console.WriteLine($"[DEBUG] Adding damageGiven[{playerId}, {victim}] = {damageGiven[playerId, victim]} to TotalDamageGiven[{playerId}].");
             }
         }
         Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {total}");
+        return total;
+    }
+
+    private int TotalDamageTaken(int playerId) {
+        int total = 0;
+        for (int attacker = 0; attacker < 4; attacker++) { // Limit to first 4 players for debugging
+            if (damageTaken[playerId, attacker] > 0) {
+                total += damageTaken[playerId, attacker];
+                Console.WriteLine($"[DEBUG] Adding damageTaken[{playerId}, {attacker}] = {damageTaken[playerId, attacker]} to TotalDamageTaken[{playerId}].");
+            }
+        }
+        Console.WriteLine($"[DEBUG] TotalDamageTaken[{playerId}] = {total}");
         return total;
     }
 
