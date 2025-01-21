@@ -42,6 +42,7 @@ public class DamageReportModule : IModule {
         osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
+        osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
         osbase.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
@@ -89,6 +90,17 @@ public class DamageReportModule : IModule {
         ClearDamageData();
         UpdatePlayerNames();
         Console.WriteLine("[INFO] Round started. Damage data cleared.");
+        return HookResult.Continue;
+    }
+    private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine("[DEBUG] Round ended. Generating damage reports.");
+
+        for (int playerId = 0; playerId <= MaxPlayers; playerId++) {
+            if (!string.IsNullOrEmpty(playerName[playerId]) && playerName[playerId] != "Disconnected") {
+                DisplayDamageReport(playerId);
+            }
+        }
+
         return HookResult.Continue;
     }
 
