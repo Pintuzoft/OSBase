@@ -115,7 +115,7 @@ public class DamageReportModule : IModule {
 
         if (HasVictims(playerId)) {
             Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {TotalDamageGiven(playerId)}.");
-            for (int victim = 1; victim <= 4; victim++) { // Limit to 4 players
+            for (int victim = 0; victim < 4; victim++) { // Limit to 4 players
                 if (IsVictim(playerId, victim)) {
                     Console.WriteLine($"[DEBUG] Victim {victim}: Hits {hitsGiven[playerId, victim]}, Damage {damageGiven[playerId, victim]}.");
                 }
@@ -126,7 +126,7 @@ public class DamageReportModule : IModule {
 
         if (HasAttackers(playerId)) {
             Console.WriteLine($"[DEBUG] TotalDamageTaken[{playerId}] = {TotalDamageTaken(playerId)}.");
-            for (int attacker = 1; attacker <= 4; attacker++) { // Limit to 4 players
+            for (int attacker = 0; attacker < 4; attacker++) { // Limit to 4 players
                 if (IsVictim(attacker, playerId)) {
                     Console.WriteLine($"[DEBUG] Attacker {attacker}: Hits {hitsTaken[playerId, attacker]}, Damage {damageTaken[playerId, attacker]}.");
                 }
@@ -196,9 +196,27 @@ public class DamageReportModule : IModule {
         return report;
     }
 
-    private bool HasVictims(int playerId) => TotalDamageGiven(playerId) > 0;
+    private bool HasVictims(int playerId) {
+        for (int victim = 0; victim < 4; victim++) { // Adjust to loop over first 4 players
+            if (damageGiven[playerId, victim] > 0) {
+                Console.WriteLine($"[DEBUG] HasVictims: Player {playerId} has Victim {victim} with Damage {damageGiven[playerId, victim]}.");
+                return true;
+            }
+        }
+        Console.WriteLine($"[DEBUG] HasVictims: Player {playerId} has no victims.");
+        return false;
+    }
 
-    private bool HasAttackers(int playerId) => TotalDamageTaken(playerId) > 0;
+    private bool HasAttackers(int playerId) {
+        for (int attacker = 0; attacker < 4; attacker++) { // Adjust to loop over first 4 players
+            if (damageTaken[playerId, attacker] > 0) {
+                Console.WriteLine($"[DEBUG] HasAttackers: Player {playerId} was attacked by {attacker} with Damage {damageTaken[playerId, attacker]}.");
+                return true;
+            }
+        }
+        Console.WriteLine($"[DEBUG] HasAttackers: Player {playerId} has no attackers.");
+        return false;
+    }
 
     private int TotalHitsTaken(int playerId) {
         int total = 0;
@@ -242,11 +260,12 @@ public class DamageReportModule : IModule {
         Console.WriteLine($"[DEBUG] IsVictim({attacker}, {victim}): damageGiven[{attacker}, {victim}] = {damageGiven[attacker, victim]}, Result = {result}");
         return result;
     }
+
     private void ClearDamageData() {
+        Console.WriteLine("[DEBUG] Clearing damage data.");
         Array.Clear(damageGiven, 0, damageGiven.Length);
-        Array.Clear(hitsGiven, 0, hitsGiven.Length);
         Array.Clear(damageTaken, 0, damageTaken.Length);
+        Array.Clear(hitsGiven, 0, hitsGiven.Length);
         Array.Clear(hitsTaken, 0, hitsTaken.Length);
-        Console.WriteLine("[DEBUG] Damage data cleared.");
     }
 }
