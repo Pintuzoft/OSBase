@@ -193,23 +193,30 @@ public class DamageReportModule : IModule {
         return info;
     }
 
-private string FetchAttackerDamageInfo(int attacker, int victim) {
-    string info = $" - {playerName[attacker]}";
+    private string FetchAttackerDamageInfo(int attacker, int victim) {
+        string info = $" - {playerName[attacker]}";
 
-    if (killedPlayer[attacker, victim] == 1) {
-        info += " (killed by)";
-    }
-
-    info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg ->";
-
-    for (int hitgroup = 0; hitgroup < MaxHitGroups; hitgroup++) {
-        if (hitboxTaken[victim, attacker, hitgroup] > 0) {
-            info += $" {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
+        if (killedPlayer[attacker, victim] == 1) {
+            info += " (killed by)";
         }
-    }
 
-    return info;
-}
+        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg ->";
+
+        bool isFirst = true;
+        for (int hitgroup = 0; hitgroup < MaxHitGroups; hitgroup++) {
+            if (hitboxTaken[victim, attacker, hitgroup] > 0) {
+                if (isFirst) {
+                    info += $" {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
+                    isFirst = false;
+                } else {
+                    info += $", {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
+                }
+            }
+        }
+
+        return info;
+    }
+    
     private string FormatVictimReport(int attacker, int victim) {
         string report = $" - {playerName[victim]}";
 
