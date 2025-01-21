@@ -111,20 +111,44 @@ public class DamageReportModule : IModule {
     }
 
     private void DisplayDamageReport(int playerId) {
-        Console.WriteLine($"[DEBUG] Generating damage report for Player {playerId} ({playerName[playerId]}).");
-
+        Console.WriteLine($"===[ Damage Report for {playerName[playerId]} ]===");
+        
         if (HasVictims(playerId)) {
-            int totalGiven = TotalDamageGiven(playerId);
-            Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {totalGiven}.");
-        } else {
-            Console.WriteLine($"[DEBUG] No victims found for Player {playerId}.");
+            Console.WriteLine($"===[ Victims - Total: [{TotalHitsGiven(playerId)}:{TotalDamageGiven(playerId)}] ]===");
+            for (int victim = 0; victim < 4; victim++) {
+                if (IsVictim(playerId, victim)) {
+                    string report = $" - {playerName[victim]}: {hitsGiven[playerId, victim]} hits, {damageGiven[playerId, victim]} damage";
+                    bool first = true;
+                    for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
+                        if (hitboxGiven[playerId, victim, hitGroup] > 0) {
+                            report += first
+                                ? $" - {hitboxName[hitGroup]} {hitboxGiven[playerId, victim, hitGroup]}:{hitboxGivenDamage[playerId, victim, hitGroup]}"
+                                : $", {hitboxName[hitGroup]} {hitboxGiven[playerId, victim, hitGroup]}:{hitboxGivenDamage[playerId, victim, hitGroup]}";
+                            first = false;
+                        }
+                    }
+                    Console.WriteLine(report);
+                }
+            }
         }
 
         if (HasAttackers(playerId)) {
-            int totalTaken = TotalDamageTaken(playerId);
-            Console.WriteLine($"[DEBUG] TotalDamageTaken[{playerId}] = {totalTaken}.");
-        } else {
-            Console.WriteLine($"[DEBUG] No attackers found for Player {playerId}.");
+            Console.WriteLine($"===[ Attackers - Total: [{TotalHitsTaken(playerId)}:{TotalDamageTaken(playerId)}] ]===");
+            for (int attacker = 0; attacker < 4; attacker++) {
+                if (IsVictim(attacker, playerId)) {
+                    string report = $" - {playerName[attacker]}: {hitsTaken[playerId, attacker]} hits, {damageTaken[playerId, attacker]} damage";
+                    bool first = true;
+                    for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
+                        if (hitboxTaken[playerId, attacker, hitGroup] > 0) {
+                            report += first
+                                ? $" - {hitboxName[hitGroup]} {hitboxTaken[playerId, attacker, hitGroup]}:{hitboxTakenDamage[playerId, attacker, hitGroup]}"
+                                : $", {hitboxName[hitGroup]} {hitboxTaken[playerId, attacker, hitGroup]}:{hitboxTakenDamage[playerId, attacker, hitGroup]}";
+                            first = false;
+                        }
+                    }
+                    Console.WriteLine(report);
+                }
+            }
         }
     }
 
