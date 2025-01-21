@@ -55,28 +55,18 @@ public class DamageReportModule : IModule {
 
         int attacker = eventInfo.Attacker.UserId.Value;
         int victim = eventInfo.Userid.UserId.Value;
-
         int damage = eventInfo.DmgHealth;
         int hitGroup = eventInfo.Hitgroup;
 
-        // Ensure hitGroup is valid
-        if (hitGroup < 0 || hitGroup >= MaxHitGroups) {
-            Console.WriteLine($"[DEBUG] OnPlayerHurt: Invalid HitGroup {hitGroup}. Setting to Unknown.");
-            hitGroup = hitboxName.Length - 1; // Default to "Unknown"
-        }
-
-        // Record damage and hits
         damageGiven[attacker, victim] += damage;
         hitsGiven[attacker, victim]++;
-        hitboxGiven[attacker, victim, hitGroup]++;
-        hitboxGivenDamage[attacker, victim, hitGroup] += damage;
-
         damageTaken[victim, attacker] += damage;
         hitsTaken[victim, attacker]++;
-        hitboxTaken[victim, attacker, hitGroup]++;
-        hitboxTakenDamage[victim, attacker, hitGroup] += damage;
 
         Console.WriteLine($"[DEBUG] OnPlayerHurt: Attacker {attacker}, Victim {victim}, Damage {damage}, HitGroup {hitboxName[hitGroup]}.");
+        Console.WriteLine($"[DEBUG] Updated damageGiven[{attacker}, {victim}] = {damageGiven[attacker, victim]}.");
+        Console.WriteLine($"[DEBUG] Updated damageTaken[{victim}, {attacker}] = {damageTaken[victim, attacker]}.");
+
         return HookResult.Continue;
     }
 
@@ -121,29 +111,13 @@ public class DamageReportModule : IModule {
     }
 
     private void DisplayDamageReport(int playerId) {
-        if (playerId == 0) {
-            Console.WriteLine("[DEBUG] Skipping damage report for Player 0 (world or invalid).");
-            return;
-        }
-
-        var playersList = Utilities.GetPlayers();
-        var player = playersList.Find(p => p.UserId.HasValue && p.UserId.Value == playerId);
-
-        if (player == null) {
-            Console.WriteLine($"[DEBUG] Player {playerId} not found.");
-            return;
-        }
-
-        player.PrintToChat($"===[ Damage Report for {playerName[playerId]} ]===");
-
-        bool hasReport = false;
+        Console.WriteLine($"[DEBUG] Generating damage report for Player {playerId} ({playerName[playerId]}).");
 
         if (HasVictims(playerId)) {
-            player.PrintToChat($"===[ Victims - Total: [{TotalHitsGiven(playerId)}:{TotalDamageGiven(playerId)}] ]===");
+            Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {TotalDamageGiven(playerId)}.");
             for (int victim = 1; victim <= MaxPlayers; victim++) {
                 if (IsVictim(playerId, victim)) {
-                    player.PrintToChat(FormatVictimReport(playerId, victim));
-                    hasReport = true;
+                    Console.WriteLine($"[DEBUG] Victim {victim}: Hits {hitsGiven[playerId, victim]}, Damage {damageGiven[playerId, victim]}.");
                 }
             }
         } else {
@@ -151,20 +125,14 @@ public class DamageReportModule : IModule {
         }
 
         if (HasAttackers(playerId)) {
-            player.PrintToChat($"===[ Attackers - Total: [{TotalHitsTaken(playerId)}:{TotalDamageTaken(playerId)}] ]===");
+            Console.WriteLine($"[DEBUG] TotalDamageTaken[{playerId}] = {TotalDamageTaken(playerId)}.");
             for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
                 if (IsVictim(attacker, playerId)) {
-                    player.PrintToChat(FormatAttackerReport(attacker, playerId));
-                    hasReport = true;
+                    Console.WriteLine($"[DEBUG] Attacker {attacker}: Hits {hitsTaken[playerId, attacker]}, Damage {damageTaken[playerId, attacker]}.");
                 }
             }
         } else {
             Console.WriteLine($"[DEBUG] No attackers found for Player {playerId}.");
-        }
-
-        if (!hasReport) {
-            player.PrintToChat("No damage data available for this round.");
-            Console.WriteLine($"[DEBUG] No damage data available for Player {playerId}.");
         }
     }
 
