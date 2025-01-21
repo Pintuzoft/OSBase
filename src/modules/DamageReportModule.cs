@@ -239,7 +239,7 @@ public class DamageReportModule : IModule {
     }
     private bool IsVictim(int attacker, int victim) {
         bool result = damageGiven[attacker, victim] > 0;
-        Console.WriteLine($"[DEBUG] IsVictim({attacker}, {victim}): {result}");
+        Console.WriteLine($"[DEBUG] IsVictim({attacker}, {victim}): damageGiven[{attacker}, {victim}] = {damageGiven[attacker, victim]}, Result = {result}");
         return result;
     }
     private void ClearDamageData() {
@@ -247,5 +247,6 @@ public class DamageReportModule : IModule {
         Array.Clear(hitsGiven, 0, hitsGiven.Length);
         Array.Clear(damageTaken, 0, damageTaken.Length);
         Array.Clear(hitsTaken, 0, hitsTaken.Length);
+        Console.WriteLine("[DEBUG] Damage data cleared.");
     }
 }
