@@ -210,7 +210,7 @@ public class DamageReportModule : IModule {
 
     private int TotalDamageTaken(int playerId) {
         int total = 0;
-        for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
+        for (int attacker = 1; attacker <= 4; attacker++) {
             total += damageTaken[playerId, attacker];
         }
         return total;
@@ -218,7 +218,7 @@ public class DamageReportModule : IModule {
 
     private int TotalDamageGiven(int playerId) {
         int total = 0;
-        for (int victim = 1; victim <= MaxPlayers; victim++) {
+        for (int victim = 1; victim <= 4; victim++) {
             if (damageGiven[playerId, victim] > 0) {
                 total += damageGiven[playerId, victim];
             }
