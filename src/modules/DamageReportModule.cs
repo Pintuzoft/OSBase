@@ -115,7 +115,7 @@ public class DamageReportModule : IModule {
 
         if (HasVictims(playerId)) {
             Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {TotalDamageGiven(playerId)}.");
-            for (int victim = 1; victim <= 4; victim++) {
+            for (int victim = 1; victim <= 4; victim++) { // Limit to 4 players
                 if (IsVictim(playerId, victim)) {
                     Console.WriteLine($"[DEBUG] Victim {victim}: Hits {hitsGiven[playerId, victim]}, Damage {damageGiven[playerId, victim]}.");
                 }
@@ -126,7 +126,7 @@ public class DamageReportModule : IModule {
 
         if (HasAttackers(playerId)) {
             Console.WriteLine($"[DEBUG] TotalDamageTaken[{playerId}] = {TotalDamageTaken(playerId)}.");
-            for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
+            for (int attacker = 1; attacker <= 4; attacker++) { // Limit to 4 players
                 if (IsVictim(attacker, playerId)) {
                     Console.WriteLine($"[DEBUG] Attacker {attacker}: Hits {hitsTaken[playerId, attacker]}, Damage {damageTaken[playerId, attacker]}.");
                 }
