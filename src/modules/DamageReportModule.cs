@@ -126,8 +126,8 @@ public class DamageReportModule : IModule {
         // Victims Section
         if (HasVictims(playerId)) {
             Console.WriteLine($"===[ Victims - Total: [{TotalHitsGiven(playerId)}:{TotalDamageGiven(playerId)}] (hits:damage) ]===");
-            for (int victim = 0; victim < 4; victim++) { // Limit for debugging
-                if (IsVictim(playerId, victim)) {
+            for (int victim = 0; victim <= MaxPlayers; victim++) {
+                if (IsVictim(playerId, victim) && !string.IsNullOrEmpty(playerName[victim]) && playerName[victim] != "Unknown") {
                     string victimInfo = FetchVictimDamageInfo(playerId, victim);
                     Console.WriteLine(victimInfo);
                 }
@@ -137,8 +137,8 @@ public class DamageReportModule : IModule {
         // Attackers Section
         if (HasAttackers(playerId)) {
             Console.WriteLine($"===[ Attackers - Total: [{TotalHitsTaken(playerId)}:{TotalDamageTaken(playerId)}] (hits:damage) ]===");
-            for (int attacker = 0; attacker < 4; attacker++) { // Limit for debugging
-                if (IsVictim(attacker, playerId)) {
+            for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
+                if (IsVictim(attacker, playerId) && !string.IsNullOrEmpty(playerName[attacker]) && playerName[attacker] != "Unknown") {
                     string attackerInfo = FetchAttackerDamageInfo(attacker, playerId);
                     Console.WriteLine(attackerInfo);
                 }
@@ -146,6 +146,28 @@ public class DamageReportModule : IModule {
         }
     }
 
+    private void GenerateDamageReports() {
+        Console.WriteLine("[DEBUG] Generating damage reports...");
+
+        for (int playerId = 0; playerId <= MaxPlayers; playerId++) {
+            // Skip disconnected or inactive players
+            if (string.IsNullOrEmpty(playerName[playerId]) || playerName[playerId] == "Unknown") {
+                continue;
+            }
+
+            // Check if player has relevant data
+            bool hasVictims = HasVictims(playerId);
+            bool hasAttackers = HasAttackers(playerId);
+
+            if (!hasVictims && !hasAttackers) {
+                Console.WriteLine($"[DEBUG] Skipping report for Player {playerId} ({playerName[playerId]}): No data.");
+                continue;
+            }
+
+            // Generate report
+            DisplayDamageReport(playerId);
+        }
+    }
     private string FetchVictimDamageInfo(int attacker, int victim) {
         string info = $" - {playerName[victim]}";
 
