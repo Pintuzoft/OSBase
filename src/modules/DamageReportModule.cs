@@ -56,13 +56,10 @@ public class DamageReportModule : IModule {
 
         damageGiven[attacker, victim] += damage;
         hitsGiven[attacker, victim]++;
-        hitboxGiven[attacker, victim, hitGroup]++;
-        hitboxGivenDamage[attacker, victim, hitGroup] += damage;
-
         damageTaken[victim, attacker] += damage;
         hitsTaken[victim, attacker]++;
-        hitboxTaken[victim, attacker, hitGroup]++;
-        hitboxTakenDamage[victim, attacker, hitGroup] += damage;
+
+        Console.WriteLine($"[DEBUG] OnPlayerHurt: Attacker {attacker} hit Victim {victim} for {damage} damage. TotalDamageGiven[{attacker}, {victim}] = {damageGiven[attacker, victim]}.");
 
         return HookResult.Continue;
     }
@@ -108,6 +105,11 @@ public class DamageReportModule : IModule {
     }
 
     private void DisplayDamageReport(int playerId) {
+        if (playerId == 0) {
+            Console.WriteLine("[DEBUG] Skipping damage report for Player 0 (world or invalid).");
+            return;
+        }
+
         var playersList = Utilities.GetPlayers();
         var player = playersList.Find(p => p.UserId.HasValue && p.UserId.Value == playerId);
 
@@ -122,18 +124,24 @@ public class DamageReportModule : IModule {
             player.PrintToChat($"===[ Victims - Total: [{TotalHitsGiven(playerId)}:{TotalDamageGiven(playerId)}] ]===");
             for (int victim = 1; victim <= MaxPlayers; victim++) {
                 if (IsVictim(playerId, victim)) {
+                    Console.WriteLine($"[DEBUG] Victim {victim} found for Player {playerId}. Hits: {hitsGiven[playerId, victim]}, Damage: {damageGiven[playerId, victim]}.");
                     player.PrintToChat(FormatVictimReport(playerId, victim));
                 }
             }
+        } else {
+            Console.WriteLine($"[DEBUG] No victims found for Player {playerId}.");
         }
 
         if (HasAttackers(playerId)) {
             player.PrintToChat($"===[ Attackers - Total: [{TotalHitsTaken(playerId)}:{TotalDamageTaken(playerId)}] ]===");
             for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
                 if (IsVictim(attacker, playerId)) {
+                    Console.WriteLine($"[DEBUG] Attacker {attacker} found for Player {playerId}. Hits: {hitsTaken[playerId, attacker]}, Damage: {damageTaken[playerId, attacker]}.");
                     player.PrintToChat(FormatAttackerReport(attacker, playerId));
                 }
             }
+        } else {
+            Console.WriteLine($"[DEBUG] No attackers found for Player {playerId}.");
         }
     }
 
