@@ -115,7 +115,7 @@ public class DamageReportModule : IModule {
 
         if (HasVictims(playerId)) {
             Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {TotalDamageGiven(playerId)}.");
-            for (int victim = 1; victim <= MaxPlayers; victim++) {
+            for (int victim = 1; victim <= 4; victim++) {
                 if (IsVictim(playerId, victim)) {
                     Console.WriteLine($"[DEBUG] Victim {victim}: Hits {hitsGiven[playerId, victim]}, Damage {damageGiven[playerId, victim]}.");
                 }
