@@ -149,13 +149,13 @@ public class DamageReportModule : IModule {
     private void GenerateDamageReports() {
         Console.WriteLine("[DEBUG] Generating damage reports...");
 
+        // Iterate over only active players
         for (int playerId = 0; playerId <= MaxPlayers; playerId++) {
-            // Skip disconnected or inactive players
             if (string.IsNullOrEmpty(playerName[playerId]) || playerName[playerId] == "Unknown") {
-                continue;
+                continue; // Skip inactive or unknown players
             }
 
-            // Check if player has relevant data
+            // Check if the player has meaningful data
             bool hasVictims = HasVictims(playerId);
             bool hasAttackers = HasAttackers(playerId);
 
@@ -164,7 +164,7 @@ public class DamageReportModule : IModule {
                 continue;
             }
 
-            // Generate report
+            // Generate and display the damage report
             DisplayDamageReport(playerId);
         }
     }
