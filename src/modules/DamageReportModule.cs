@@ -168,53 +168,42 @@ public class DamageReportModule : IModule {
             DisplayDamageReport(playerId);
         }
     }
+
     private string FetchVictimDamageInfo(int attacker, int victim) {
         string info = $" - {playerName[victim]}";
 
-        // Check if attacker killed the victim
         if (killedPlayer[attacker, victim] == 1) {
             info += " (Killed)";
         }
 
-        // Add total hits and damage
-        info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg \x08- ";
+        info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg ->";
 
-        // Add per-hitgroup breakdown
-        bool first = true;
-        for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
+        for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
             if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                string hitInfo = $"{hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
-                info += first ? hitInfo : $", {hitInfo}";
-                first = false;
+                info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";              
             }
         }
 
         return info;
     }
 
-    private string FetchAttackerDamageInfo(int attacker, int victim) {
-        string info = $" - {playerName[attacker]}";
+private string FetchAttackerDamageInfo(int attacker, int victim) {
+    string info = $" - {playerName[attacker]}";
 
-        // Check if attacker killed the victim
-        if (killedPlayer[attacker, victim] == 1) {
-            info += " (killed by)";
-        }
-
-        // Add total hits and damage
-        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg \x08- ";
-
-        // Add per-hitgroup breakdown
-        bool first = true;
-        for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
-            if (hitboxTaken[victim, attacker, hitGroup] > 0) {
-                string hitInfo = $"{hitboxName[hitGroup]} {hitboxTaken[victim, attacker, hitGroup]}:{hitboxTakenDamage[victim, attacker, hitGroup]}";
-                info += first ? hitInfo : $", {hitInfo}";
-                first = false;
-            }
-        }
-
-        return info;
+    if (killedPlayer[attacker, victim] == 1) {
+        info += " (killed by)";
     }
+
+    info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg ->";
+
+    for (int hitgroup = 0; hitgroup < MaxHitGroups; hitgroup++) {
+        if (hitboxTaken[victim, attacker, hitgroup] > 0) {
+            info += $" {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
+        }
+    }
+
+    return info;
+}
     private string FormatVictimReport(int attacker, int victim) {
         string report = $" - {playerName[victim]}";
 
