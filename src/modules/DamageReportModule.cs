@@ -127,6 +127,9 @@ public class DamageReportModule : IModule {
         if (HasVictims(playerId)) {
             Console.WriteLine($"===[ Victims - Total: [{TotalHitsGiven(playerId)}:{TotalDamageGiven(playerId)}] (hits:damage) ]===");
             for (int victim = 0; victim <= MaxPlayers; victim++) {
+                if (string.IsNullOrEmpty(playerName[playerId]) || playerName[playerId] == "Unknown") {
+                    continue; // Skip inactive or unknown players
+                }
                 if (IsVictim(playerId, victim) && !string.IsNullOrEmpty(playerName[victim]) && playerName[victim] != "Unknown") {
                     string victimInfo = FetchVictimDamageInfo(playerId, victim);
                     Console.WriteLine(victimInfo);
@@ -138,6 +141,9 @@ public class DamageReportModule : IModule {
         if (HasAttackers(playerId)) {
             Console.WriteLine($"===[ Attackers - Total: [{TotalHitsTaken(playerId)}:{TotalDamageTaken(playerId)}] (hits:damage) ]===");
             for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
+                if (string.IsNullOrEmpty(playerName[playerId]) || playerName[playerId] == "Unknown") {
+                   continue; // Skip inactive or unknown players
+                }
                 if (IsVictim(attacker, playerId) && !string.IsNullOrEmpty(playerName[attacker]) && playerName[attacker] != "Unknown") {
                     string attackerInfo = FetchAttackerDamageInfo(attacker, playerId);
                     Console.WriteLine(attackerInfo);
