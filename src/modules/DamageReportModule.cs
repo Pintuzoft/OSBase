@@ -176,13 +176,24 @@ public class DamageReportModule : IModule {
         }
 
         bool first = true;
+        int totalHits = 0;
+        int totalDamage = 0;
+
         for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
             if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                string hitDetails = $"{hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
+                int hits = hitboxGiven[attacker, victim, hitGroup];
+                int damage = hitboxGivenDamage[attacker, victim, hitGroup];
+                totalHits += hits;
+                totalDamage += damage;
+
+                string hitDetails = $"{hitboxName[hitGroup]} {hits}:{damage}";
                 report += first ? $" - {hitDetails}" : $", {hitDetails}";
                 first = false;
             }
         }
+
+        // Debug totals
+        Console.WriteLine($"[DEBUG] Victim {victim} <- Attacker {attacker}: Total Hits {totalHits}, Total Damage {totalDamage}.");
 
         return report;
     }
@@ -195,13 +206,24 @@ public class DamageReportModule : IModule {
         }
 
         bool first = true;
+        int totalHits = 0;
+        int totalDamage = 0;
+
         for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
             if (hitboxTaken[victim, attacker, hitGroup] > 0) {
-                string hitDetails = $"{hitboxName[hitGroup]} {hitboxTaken[victim, attacker, hitGroup]}:{hitboxTakenDamage[victim, attacker, hitGroup]}";
+                int hits = hitboxTaken[victim, attacker, hitGroup];
+                int damage = hitboxTakenDamage[victim, attacker, hitGroup];
+                totalHits += hits;
+                totalDamage += damage;
+
+                string hitDetails = $"{hitboxName[hitGroup]} {hits}:{damage}";
                 report += first ? $" - {hitDetails}" : $", {hitDetails}";
                 first = false;
             }
         }
+
+        // Debug totals
+        Console.WriteLine($"[DEBUG] Attacker {attacker} -> Victim {victim}: Total Hits {totalHits}, Total Damage {totalDamage}.");
 
         return report;
     }
@@ -210,10 +232,10 @@ public class DamageReportModule : IModule {
 
     private bool HasAttackers(int playerId) => TotalDamageTaken(playerId) > 0;
 
-    private int TotalDamageGiven(int playerId) {
+    private int TotalHitsTaken(int playerId) {
         int total = 0;
-        for (int victim = 1; victim <= MaxPlayers; victim++) {
-            total += damageGiven[playerId, victim];
+        for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
+            total += hitsTaken[playerId, attacker];
         }
         return total;
     }
@@ -226,18 +248,18 @@ public class DamageReportModule : IModule {
         return total;
     }
 
-    private int TotalHitsGiven(int playerId) {
+    private int TotalDamageGiven(int playerId) {
         int total = 0;
         for (int victim = 1; victim <= MaxPlayers; victim++) {
-            total += hitsGiven[playerId, victim];
+            total += damageGiven[playerId, victim];
         }
         return total;
     }
 
-    private int TotalHitsTaken(int playerId) {
+    private int TotalHitsGiven(int playerId) {
         int total = 0;
-        for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
-            total += hitsTaken[playerId, attacker];
+        for (int victim = 1; victim <= MaxPlayers; victim++) {
+            total += hitsGiven[playerId, victim];
         }
         return total;
     }
