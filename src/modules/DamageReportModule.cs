@@ -25,6 +25,10 @@ public class DamageReportModule : IModule {
 
     private string[] playerName = new string[MaxPlayers + 1];
 
+    private readonly string[] hitboxName = {
+        "Body", "Head", "Chest", "Stomach", "L-Arm", "R-Arm", "L-Leg", "R-Leg", "Neck", "Unknown", "Gear"
+    };
+
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
         osbase = inOsbase;
 
@@ -56,11 +60,15 @@ public class DamageReportModule : IModule {
 
         damageGiven[attacker, victim] += damage;
         hitsGiven[attacker, victim]++;
+        hitboxGiven[attacker, victim, hitGroup]++;
+        hitboxGivenDamage[attacker, victim, hitGroup] += damage;
+
         damageTaken[victim, attacker] += damage;
         hitsTaken[victim, attacker]++;
+        hitboxTaken[victim, attacker, hitGroup]++;
+        hitboxTakenDamage[victim, attacker, hitGroup] += damage;
 
-        Console.WriteLine($"[DEBUG] OnPlayerHurt: Attacker {attacker} hit Victim {victim} for {damage} damage. TotalDamageGiven[{attacker}, {victim}] = {damageGiven[attacker, victim]}.");
-
+        Console.WriteLine($"[DEBUG] OnPlayerHurt: Attacker {attacker}, Victim {victim}, Damage {damage}, HitGroup {hitboxName[hitGroup]}.");
         return HookResult.Continue;
     }
 
@@ -120,12 +128,14 @@ public class DamageReportModule : IModule {
 
         player.PrintToChat($"===[ Damage Report for {playerName[playerId]} ]===");
 
+        bool hasReport = false;
+
         if (HasVictims(playerId)) {
             player.PrintToChat($"===[ Victims - Total: [{TotalHitsGiven(playerId)}:{TotalDamageGiven(playerId)}] ]===");
             for (int victim = 1; victim <= MaxPlayers; victim++) {
                 if (IsVictim(playerId, victim)) {
-                    Console.WriteLine($"[DEBUG] Victim {victim} found for Player {playerId}. Hits: {hitsGiven[playerId, victim]}, Damage: {damageGiven[playerId, victim]}.");
                     player.PrintToChat(FormatVictimReport(playerId, victim));
+                    hasReport = true;
                 }
             }
         } else {
@@ -136,28 +146,55 @@ public class DamageReportModule : IModule {
             player.PrintToChat($"===[ Attackers - Total: [{TotalHitsTaken(playerId)}:{TotalDamageTaken(playerId)}] ]===");
             for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
                 if (IsVictim(attacker, playerId)) {
-                    Console.WriteLine($"[DEBUG] Attacker {attacker} found for Player {playerId}. Hits: {hitsTaken[playerId, attacker]}, Damage: {damageTaken[playerId, attacker]}.");
                     player.PrintToChat(FormatAttackerReport(attacker, playerId));
+                    hasReport = true;
                 }
             }
         } else {
             Console.WriteLine($"[DEBUG] No attackers found for Player {playerId}.");
         }
+
+        if (!hasReport) {
+            player.PrintToChat("No damage data available for this round.");
+            Console.WriteLine($"[DEBUG] No damage data available for Player {playerId}.");
+        }
     }
 
     private string FormatVictimReport(int attacker, int victim) {
         string report = $" - {playerName[victim]}";
+
         if (damageGiven[attacker, victim] > 0) {
             report += $" ({hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} damage)";
         }
+
+        bool first = true;
+        for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
+            if (hitboxGiven[attacker, victim, hitGroup] > 0) {
+                string hitDetails = $"{hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
+                report += first ? $" - {hitDetails}" : $", {hitDetails}";
+                first = false;
+            }
+        }
+
         return report;
     }
 
     private string FormatAttackerReport(int attacker, int victim) {
         string report = $" - {playerName[attacker]}";
+
         if (damageTaken[victim, attacker] > 0) {
             report += $" ({hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} damage)";
         }
+
+        bool first = true;
+        for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
+            if (hitboxTaken[victim, attacker, hitGroup] > 0) {
+                string hitDetails = $"{hitboxName[hitGroup]} {hitboxTaken[victim, attacker, hitGroup]}:{hitboxTakenDamage[victim, attacker, hitGroup]}";
+                report += first ? $" - {hitDetails}" : $", {hitDetails}";
+                first = false;
+            }
+        }
+
         return report;
     }
 
