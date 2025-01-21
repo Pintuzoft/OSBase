@@ -197,30 +197,29 @@ public class DamageReportModule : IModule {
         string info = $" - {playerName[attacker]}";
 
         if (killedPlayer[attacker, victim] == 1) {
-            info += " (killed by)";
+            info += " (Killed)";
         }
 
-        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg";
+        info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg ->";
 
         bool hasHitgroupData = false;
-        string hitgroupDetails = "";
-
         for (int hitgroup = 0; hitgroup < MaxHitGroups; hitgroup++) {
-            if (hitboxTaken[victim, attacker, hitgroup] > 0) {
+            if (hitboxGiven[attacker, victim, hitgroup] > 0) {
                 if (!hasHitgroupData) {
                     hasHitgroupData = true;
-                    hitgroupDetails += $" -> {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
+                    info += $" {hitboxName[hitgroup]} {hitboxGiven[attacker, victim, hitgroup]}:{hitboxGivenDamage[attacker, victim, hitgroup]}";
                 } else {
-                    hitgroupDetails += $", {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
+                    info += $", {hitboxName[hitgroup]} {hitboxGiven[attacker, victim, hitgroup]}:{hitboxGivenDamage[attacker, victim, hitgroup]}";
                 }
             }
         }
 
         if (!hasHitgroupData) {
-            hitgroupDetails = " -> No specific hitgroups recorded.";
+            info += " No specific hitgroups recorded.";
         }
 
-        info += hitgroupDetails;
+        // Debug to ensure the hitgroup data is being processed correctly
+        Console.WriteLine($"[DEBUG] Generated attacker info for {playerName[attacker]}: {info}");
         return info;
     }
 
