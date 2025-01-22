@@ -71,9 +71,23 @@ public class DamageReportModule : IModule {
         // Update damage and hitgroup data
         damageGiven[attacker, victim] += damage;
         damageTaken[victim, attacker] += damage;
+        hitsGiven[attacker, victim]++;
         hitboxGiven[attacker, victim, hitgroup]++;
         hitboxGivenDamage[attacker, victim, hitgroup] += damage;
         return HookResult.Continue;
+    }
+
+    private void OnPlayerHurt(int attacker, int victim, int damage, int hitgroup) {
+        if (attacker != victim && attacker != ENVIRONMENT) { // Ensure it's a valid attack
+            // Increment hitsGiven for the attacker-victim pair
+            hitsGiven[attacker, victim]++;
+            // Increment damageGiven and damageTaken
+            damageGiven[attacker, victim] += damage;
+            damageTaken[victim, attacker] += damage;
+            // Increment specific hitbox data
+            hitboxGiven[attacker, victim, hitgroup]++;
+            hitboxGivenDamage[attacker, victim, hitgroup] += damage;
+        }
     }
 
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
@@ -198,7 +212,7 @@ public class DamageReportModule : IModule {
         } else if (attacker == victim) {
             info += " (suicide)";
         } else {
-            info += $" (killed by {playerName[attacker]})";
+            info += $" (killed)";
         }
 
         info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg ->";
