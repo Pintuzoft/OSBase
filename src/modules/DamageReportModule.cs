@@ -206,31 +206,24 @@ public class DamageReportModule : IModule {
     private string FetchVictimDamageInfo(int attacker, int victim) {
         string info = $" - {playerName[victim]}";
 
-        // Distinguish between environment, suicide, and attacker
         if (attacker == ENVIRONMENT) {
-            info += " (killed by environment)";
+            if (victim == attacker) {
+                info += " (Killed by world)";
+            } else {
+                info += " (World damage)";
+            }
         } else if (attacker == victim) {
-            info += " (suicide)";
+            info += " (Suicide)";
         } else {
-            info += $" (killed)";
+            info += $" (Killed by {playerName[attacker]})";
         }
 
         info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg ->";
 
-        bool hasHitgroupData = false;
         for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
             if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                if (!hasHitgroupData) {
-                    hasHitgroupData = true;
-                    info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
-                } else {
-                    info += $", {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
-                }
+                info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";              
             }
-        }
-
-        if (!hasHitgroupData) {
-            info += " No specific hitgroups recorded.";
         }
 
         return info;
@@ -239,25 +232,26 @@ public class DamageReportModule : IModule {
     private string FetchAttackerDamageInfo(int attacker, int victim) {
         string info = $" - {playerName[attacker]}";
 
-        // Distinguish between environment, suicide, and attacker
         if (attacker == ENVIRONMENT) {
-            info += " (environmental kill)";
-        } else if (attacker == victim) {
-            info += " (suicide)";
-        } else if (killedPlayer[attacker, victim] == 1) {
-            info += " (Killed)";
+            if (killedPlayer[victim, ENVIRONMENT] == 1) {
+                info = " - World (Killed by)";
+            } else {
+                info = " - World";
+            }
+        } else if (killedPlayer[victim, attacker] == 1) {
+            info += " (Killed by)";
         }
 
-        info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg ->";
+        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg ->";
 
         bool hasHitgroupData = false;
         for (int hitgroup = 0; hitgroup < MaxHitGroups; hitgroup++) {
-            if (hitboxGiven[attacker, victim, hitgroup] > 0) {
+            if (hitboxTaken[victim, attacker, hitgroup] > 0) {
                 if (!hasHitgroupData) {
                     hasHitgroupData = true;
-                    info += $" {hitboxName[hitgroup]} {hitboxGiven[attacker, victim, hitgroup]}:{hitboxGivenDamage[attacker, victim, hitgroup]}";
+                    info += $" {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
                 } else {
-                    info += $", {hitboxName[hitgroup]} {hitboxGiven[attacker, victim, hitgroup]}:{hitboxGivenDamage[attacker, victim, hitgroup]}";
+                    info += $", {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
                 }
             }
         }
