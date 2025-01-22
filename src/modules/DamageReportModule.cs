@@ -26,6 +26,8 @@ public class DamageReportModule : IModule {
 
     private string[] playerName = new string[MaxPlayers + 1];
 
+    private const int ENVIRONMENT = -1; // Represents environmental or bomb kills
+
     private readonly string[] hitboxName = {
         "Body", "Head", "Chest", "Stomach", "L-Arm", "R-Arm", "L-Leg", "R-Leg", "Neck", "Unknown", "Gear"
     };
@@ -53,7 +55,11 @@ public class DamageReportModule : IModule {
             Console.WriteLine("[ERROR] Attacker UserId is null.");
             return HookResult.Continue;
         }
-        int attacker = eventInfo.Attacker.UserId.Value; // Assuming EventPlayerHurt has an Attacker property
+        int attacker = eventInfo.Attacker?.UserId ?? -1; // Assuming EventPlayerHurt has an Attacker property
+        if (attacker == -1) {
+            Console.WriteLine("[ERROR] Attacker UserId is null.");
+            return HookResult.Continue;
+        }
         int victim = eventInfo.Userid?.UserId ?? -1;    // Assuming EventPlayerHurt has a Victim property
         if (victim == -1) {
             Console.WriteLine("[ERROR] Victim UserId is null.");
@@ -71,17 +77,26 @@ public class DamageReportModule : IModule {
     }
 
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        if (eventInfo.Attacker?.UserId == null || eventInfo.Userid?.UserId == null) {
+        int victim = eventInfo.Userid?.UserId ?? -1;
+        if (victim == -1) {
+            Console.WriteLine("[ERROR] Victim UserId is null.");
             return HookResult.Continue;
         }
+        int attacker = eventInfo.Attacker?.UserId ?? -1;
+        
+        string weapon = eventInfo.Weapon;
 
-        int attacker = eventInfo.Attacker.UserId.Value;
-        int victim = eventInfo.Userid.UserId.Value;
+        Console.WriteLine($"[DEBUG] Player {victim} was killed by {attacker} with weapon: {weapon}");
 
-        // Mark that the attacker killed the victim
-        killedPlayer[attacker, victim] = 1;
+        if (weapon.Contains("c4") || weapon.Contains("worldspawn")) {
+            // Handle bomb or environmental death
+            killedPlayer[ENVIRONMENT, victim] = 1; // Mark as killed by environment
+            Console.WriteLine($"[DEBUG] Player {victim} was killed by {weapon} (environmental death).");
+        } else {
+            killedPlayer[attacker, victim] = 1;
+            Console.WriteLine($"[DEBUG] Player {attacker} killed Player {victim} with {weapon}.");
+        }
 
-        Console.WriteLine($"[DEBUG] Player {attacker} killed Player {victim}.");
         return HookResult.Continue;
     }
 
@@ -177,16 +192,31 @@ public class DamageReportModule : IModule {
     private string FetchVictimDamageInfo(int attacker, int victim) {
         string info = $" - {playerName[victim]}";
 
-        if (killedPlayer[attacker, victim] == 1) {
-            info += " (Killed)";
+        // Distinguish between environment, suicide, and attacker
+        if (attacker == ENVIRONMENT) {
+            info += " (killed by environment)";
+        } else if (attacker == victim) {
+            info += " (suicide)";
+        } else {
+            info += $" (killed by {playerName[attacker]})";
         }
 
         info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg ->";
 
+        bool hasHitgroupData = false;
         for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
             if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";              
+                if (!hasHitgroupData) {
+                    hasHitgroupData = true;
+                    info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
+                } else {
+                    info += $", {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
+                }
             }
+        }
+
+        if (!hasHitgroupData) {
+            info += " No specific hitgroups recorded.";
         }
 
         return info;
@@ -195,7 +225,12 @@ public class DamageReportModule : IModule {
     private string FetchAttackerDamageInfo(int attacker, int victim) {
         string info = $" - {playerName[attacker]}";
 
-        if (killedPlayer[attacker, victim] == 1) {
+        // Distinguish between environment, suicide, and attacker
+        if (attacker == ENVIRONMENT) {
+            info += " (environmental kill)";
+        } else if (attacker == victim) {
+            info += " (suicide)";
+        } else if (killedPlayer[attacker, victim] == 1) {
             info += " (Killed)";
         }
 
