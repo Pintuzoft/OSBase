@@ -49,25 +49,24 @@ public class DamageReportModule : IModule {
     }
 
     private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
-        if (eventInfo.Attacker?.UserId == null || eventInfo.Userid?.UserId == null) {
-            Console.WriteLine("[DEBUG] OnPlayerHurt: Invalid Attacker or Victim.");
+        if (eventInfo.Attacker?.UserId == null) {
+            Console.WriteLine("[ERROR] Attacker UserId is null.");
             return HookResult.Continue;
         }
+        int attacker = eventInfo.Attacker.UserId.Value; // Assuming EventPlayerHurt has an Attacker property
+        int victim = eventInfo.Userid?.UserId ?? -1;    // Assuming EventPlayerHurt has a Victim property
+        if (victim == -1) {
+            Console.WriteLine("[ERROR] Victim UserId is null.");
+            return HookResult.Continue;
+        }
+        int damage = eventInfo.DmgHealth;    // Assuming EventPlayerHurt has a Damage property
+        int hitgroup = eventInfo.Hitgroup; // Assuming EventPlayerHurt has a HitGroup property
 
-        int attacker = eventInfo.Attacker.UserId.Value;
-        int victim = eventInfo.Userid.UserId.Value;
-        int damage = eventInfo.DmgHealth;
-        int hitGroup = eventInfo.Hitgroup;
-
+        // Update damage and hitgroup data
         damageGiven[attacker, victim] += damage;
-        hitsGiven[attacker, victim]++;
         damageTaken[victim, attacker] += damage;
-        hitsTaken[victim, attacker]++;
-
-        Console.WriteLine($"[DEBUG] OnPlayerHurt: Attacker {attacker}, Victim {victim}, Damage {damage}, HitGroup {hitboxName[hitGroup]}.");
-        Console.WriteLine($"[DEBUG] Updated damageGiven[{attacker}, {victim}] = {damageGiven[attacker, victim]}.");
-        Console.WriteLine($"[DEBUG] Updated damageTaken[{victim}, {attacker}] = {damageTaken[victim, attacker]}.");
-
+        hitboxGiven[attacker, victim, hitgroup]++;
+        hitboxGivenDamage[attacker, victim, hitgroup] += damage;
         return HookResult.Continue;
     }
 
@@ -218,8 +217,6 @@ public class DamageReportModule : IModule {
             info += " No specific hitgroups recorded.";
         }
 
-        // Debug to ensure the hitgroup data is being processed correctly
-        Console.WriteLine($"[DEBUG] Generated attacker info for {playerName[attacker]}: {info}");
         return info;
     }
 
