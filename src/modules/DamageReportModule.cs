@@ -77,19 +77,6 @@ public class DamageReportModule : IModule {
         return HookResult.Continue;
     }
 
-    private void OnPlayerHurt(int attacker, int victim, int damage, int hitgroup) {
-        if (attacker != victim && attacker != ENVIRONMENT) { // Ensure it's a valid attack
-            // Increment hitsGiven for the attacker-victim pair
-            hitsGiven[attacker, victim]++;
-            // Increment damageGiven and damageTaken
-            damageGiven[attacker, victim] += damage;
-            damageTaken[victim, attacker] += damage;
-            // Increment specific hitbox data
-            hitboxGiven[attacker, victim, hitgroup]++;
-            hitboxGivenDamage[attacker, victim, hitgroup] += damage;
-        }
-    }
-
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         int victim = eventInfo.Userid?.UserId ?? -1;
         if (victim == -1) {
@@ -215,14 +202,14 @@ public class DamageReportModule : IModule {
         } else if (attacker == victim) {
             info += " (Suicide)";
         } else {
-            info += $" (Killed by {playerName[attacker]})";
+            info += " (Killed)";
         }
 
         info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg ->";
 
         for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
             if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";              
+                info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
             }
         }
 
@@ -233,13 +220,12 @@ public class DamageReportModule : IModule {
         string info = $" - {playerName[attacker]}";
 
         if (attacker == ENVIRONMENT) {
+            info = " - World";
             if (killedPlayer[victim, ENVIRONMENT] == 1) {
-                info = " - World (Killed by)";
-            } else {
-                info = " - World";
+                info += " (Killed by)";
             }
-        } else if (killedPlayer[victim, attacker] == 1) {
-            info += " (Killed by)";
+        } else if (killedPlayer[attacker, victim] == 1) {
+            info += " (Killed)";
         }
 
         info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg ->";
