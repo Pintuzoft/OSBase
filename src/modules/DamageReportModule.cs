@@ -79,6 +79,7 @@ public class DamageReportModule : IModule {
         damageGiven[attacker, victim] += damage;
         damageTaken[victim, attacker] += damage;
         hitsGiven[attacker, victim]++;
+        hitsTaken[victim, attacker]++;
         hitboxGiven[attacker, victim, hitgroup]++;
         hitboxGivenDamage[attacker, victim, hitgroup] += damage;
 
