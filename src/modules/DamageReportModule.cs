@@ -72,23 +72,25 @@ public class DamageReportModule : IModule {
         int damage = eventInfo.DmgHealth;
         int hitgroup = eventInfo.Hitgroup;
 
+        // Check if this is a slap (environmental damage)
+        if (attacker == victim && eventInfo.Weapon == "world") {
+            Console.WriteLine($"[DEBUG] Slap detected. Assigning damage to environment.");
+            attacker = ENVIRONMENT; // Assign damage to environment
+        }
+
         // Validate hitgroup index
         if (hitgroup < 0 || hitgroup >= MaxHitGroups) {
             Console.WriteLine($"[ERROR] Invalid hitgroup: {hitgroup}. Skipping hitgroup update.");
             return HookResult.Continue;
         }
 
-        // Track damage and hits for the attacker (Given) and victim (Taken)
+        // Track damage and hits
         damageGiven[attacker, victim] += damage;
         damageTaken[victim, attacker] += damage;
-
         hitsGiven[attacker, victim]++;
         hitsTaken[victim, attacker]++;
-
-        // Update hitgroup data for attacker (Given) and victim (Taken)
         hitboxGiven[attacker, victim, hitgroup]++;
         hitboxGivenDamage[attacker, victim, hitgroup] += damage;
-
         hitboxTaken[victim, attacker, hitgroup]++;
         hitboxTakenDamage[victim, attacker, hitgroup] += damage;
 
@@ -103,7 +105,7 @@ public class DamageReportModule : IModule {
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         int victim = eventInfo.Userid?.UserId ?? -1; // Victim ID
-        int attacker = eventInfo.Attacker?.UserId ?? ENVIRONMENT; // Attacker ID or ENVIRONMENT for world kills
+        int attacker = eventInfo.Attacker?.UserId ?? ENVIRONMENT; // Attacker ID or ENVIRONMENT
         string weapon = eventInfo.Weapon ?? "unknown";
 
         Console.WriteLine($"[DEBUG] Player {victim} was killed by {attacker} with weapon: {weapon}");
@@ -114,17 +116,14 @@ public class DamageReportModule : IModule {
             return HookResult.Continue;
         }
 
-        // Register kills
+        // Handle suicides
         if (attacker == victim) {
-            // Suicide
             killedPlayer[victim, victim] = 1;
             Console.WriteLine($"[DEBUG] Player {victim} committed suicide.");
         } else if (attacker == ENVIRONMENT) {
-            // Environmental kill
             killedPlayer[ENVIRONMENT, victim] = 1;
             Console.WriteLine($"[DEBUG] Player {victim} was killed by environment (weapon: {weapon}).");
         } else {
-            // Normal player kill
             killedPlayer[attacker, victim] = 1;
             Console.WriteLine($"[DEBUG] Player {attacker} killed Player {victim} with {weapon}.");
         }
@@ -232,23 +231,53 @@ public class DamageReportModule : IModule {
 
     // Fetch detailed damage info for a victim
     private string FetchVictimDamageInfo(int attacker, int victim) {
-        string info = $" - {playerName[victim]}: {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} damage";
+        string info = $" - {playerName[victim]}";
+
+        if (attacker == ENVIRONMENT) {
+            info += " (Killed by environment)";
+        } else if (attacker == victim) {
+            info += " (Suicide)";
+        } else if (killedPlayer[attacker, victim] == 1) {
+            info += " (Killed)";
+        }
+
+        info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} damage ->";
+
+        // Add hitgroup details
         for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
             if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                info += $", {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
+                info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
             }
         }
+
         return info;
     }
 
     // Fetch detailed damage info for an attacker
     private string FetchAttackerDamageInfo(int attacker, int victim) {
-        string info = $" - {playerName[attacker]}: {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} damage";
+        string info = $" - {playerName[attacker]}";
+
+        if (attacker == ENVIRONMENT) {
+            // Environmental kill
+            info += " (Environment)";
+        } else if (attacker == victim) {
+            // Suicide
+            info += " (Suicide)";
+        } else if (killedPlayer[attacker, victim] == 1) {
+            // Regular kill
+            info += " (Killed)";
+        }
+
+        // Add damage and hits
+        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} damage";
+
+        // Add hitgroup details
         for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
             if (hitboxTaken[victim, attacker, hitGroup] > 0) {
                 info += $", {hitboxName[hitGroup]} {hitboxTaken[victim, attacker, hitGroup]}:{hitboxTakenDamage[victim, attacker, hitGroup]}";
             }
         }
+
         return info;
     }
 
