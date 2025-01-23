@@ -6,15 +6,21 @@ using CounterStrikeSharp.API.Modules.Events;
 
 namespace OSBase.Modules;
 
+// Defines the Damage Report Module
 public class DamageReportModule : IModule {
+    // Module name property
     public string ModuleName => "DamageReportModule";
-    private OSBase? osbase;
+    private OSBase? osbase; // Reference to the main OSBase instance
 
+    // Constants for maximum players and hit groups
     private const int MaxPlayers = 64;
     private const int MaxHitGroups = 10;
 
+    // 2D arrays to track damage and hits between players
     private int[,] damageGiven = new int[MaxPlayers + 1, MaxPlayers + 1];
     private int[,] hitsGiven = new int[MaxPlayers + 1, MaxPlayers + 1];
+
+    // 3D arrays to track hitbox-specific data
     private int[,,] hitboxGiven = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
     private int[,,] hitboxGivenDamage = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
 
@@ -22,25 +28,28 @@ public class DamageReportModule : IModule {
     private int[,] hitsTaken = new int[MaxPlayers + 1, MaxPlayers + 1];
     private int[,,] hitboxTaken = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
     private int[,,] hitboxTakenDamage = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
-    private int[,] killedPlayer = new int[MaxPlayers + 1, MaxPlayers + 1];
+    private int[,] killedPlayer = new int[MaxPlayers + 1, MaxPlayers + 1]; // Tracks kills between players
 
-    private string[] playerName = new string[MaxPlayers + 1];
+    private string[] playerName = new string[MaxPlayers + 1]; // Stores player names
 
-    private const int ENVIRONMENT = -1; // Represents environmental or bomb kills
+    // Constant to represent environmental kills
+    private const int ENVIRONMENT = -1;
 
+    // Names of hit groups for easier identification in reports
     private readonly string[] hitboxName = {
         "Body", "Head", "Chest", "Stomach", "L-Arm", "R-Arm", "L-Leg", "R-Leg", "Neck", "Unknown", "Gear"
     };
 
+    // Module initialization method
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
-        osbase = inOsbase;
+        osbase = inOsbase; // Set the OSBase reference
 
-        // Initialize player names
+        // Initialize player names to "Unknown"
         for (int i = 0; i <= MaxPlayers; i++) {
             playerName[i] = "Unknown";
         }
 
-        // Register event handlers
+        // Register event handlers for various game events
         osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
@@ -50,49 +59,44 @@ public class DamageReportModule : IModule {
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
+    // Event handler for player hurt event
     private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
-        if (eventInfo.Attacker?.UserId == null) {
-            Console.WriteLine("[ERROR] Attacker UserId is null.");
+        // Check if attacker or victim is null
+        if (eventInfo.Attacker?.UserId == null || eventInfo.Userid?.UserId == null) {
+            Console.WriteLine("[ERROR] Missing UserId for attacker or victim.");
             return HookResult.Continue;
         }
-        int attacker = eventInfo.Attacker?.UserId ?? -1; // Assuming EventPlayerHurt has an Attacker property
-        if (attacker == -1) {
-            Console.WriteLine("[ERROR] Attacker UserId is null.");
-            return HookResult.Continue;
-        }
-        int victim = eventInfo.Userid?.UserId ?? -1;    // Assuming EventPlayerHurt has a Victim property
-        if (victim == -1) {
-            Console.WriteLine("[ERROR] Victim UserId is null.");
-            return HookResult.Continue;
-        }
-        int damage = eventInfo.DmgHealth;    // Assuming EventPlayerHurt has a Damage property
-        int hitgroup = eventInfo.Hitgroup; // Assuming EventPlayerHurt has a HitGroup property
 
-        // Update damage and hitgroup data
+        // Get attacker and victim IDs
+        int attacker = eventInfo.Attacker.UserId.Value;
+        int victim = eventInfo.Userid.UserId.Value;
+
+        // Get damage and hit group from event
+        int damage = eventInfo.DmgHealth;
+        int hitgroup = eventInfo.Hitgroup;
+
+        // Update damage and hit data
         damageGiven[attacker, victim] += damage;
         damageTaken[victim, attacker] += damage;
         hitsGiven[attacker, victim]++;
         hitboxGiven[attacker, victim, hitgroup]++;
         hitboxGivenDamage[attacker, victim, hitgroup] += damage;
+
         return HookResult.Continue;
     }
 
+    // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         int victim = eventInfo.Userid?.UserId ?? -1;
-        if (victim == -1) {
-            Console.WriteLine("[ERROR] Victim UserId is null.");
-            return HookResult.Continue;
-        }
         int attacker = eventInfo.Attacker?.UserId ?? -1;
-        
         string weapon = eventInfo.Weapon;
 
         Console.WriteLine($"[DEBUG] Player {victim} was killed by {attacker} with weapon: {weapon}");
 
+        // Handle environmental or bomb deaths
         if (weapon.Contains("c4") || weapon.Contains("worldspawn")) {
-            // Handle bomb or environmental death
-            killedPlayer[ENVIRONMENT, victim] = 1; // Mark as killed by environment
-            Console.WriteLine($"[DEBUG] Player {victim} was killed by {weapon} (environmental death).");
+            killedPlayer[ENVIRONMENT, victim] = 1;
+            Console.WriteLine($"[DEBUG] Player {victim} was killed by environmental factors.");
         } else {
             killedPlayer[attacker, victim] = 1;
             Console.WriteLine($"[DEBUG] Player {attacker} killed Player {victim} with {weapon}.");
@@ -101,15 +105,19 @@ public class DamageReportModule : IModule {
         return HookResult.Continue;
     }
 
+    // Event handler for round start
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
-        ClearDamageData();
-        UpdatePlayerNames();
+        ClearDamageData(); // Reset all damage data
+        UpdatePlayerNames(); // Refresh player names
         Console.WriteLine("[INFO] Round started. Damage data cleared.");
         return HookResult.Continue;
     }
+
+    // Event handler for round end
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
         Console.WriteLine("[DEBUG] Round ended. Generating damage reports.");
 
+        // Generate damage report for all active players
         for (int playerId = 0; playerId <= MaxPlayers; playerId++) {
             if (!string.IsNullOrEmpty(playerName[playerId]) && playerName[playerId] != "Disconnected") {
                 DisplayDamageReport(playerId);
@@ -119,11 +127,13 @@ public class DamageReportModule : IModule {
         return HookResult.Continue;
     }
 
+    // Event handler for player connect
     private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
-        UpdatePlayerNames();
+        UpdatePlayerNames(); // Refresh player names upon connection
         return HookResult.Continue;
     }
 
+    // Update player names by iterating through active players
     private void UpdatePlayerNames() {
         var playersList = Utilities.GetPlayers();
         foreach (var player in playersList) {
@@ -135,250 +145,109 @@ public class DamageReportModule : IModule {
         }
     }
 
+    // Display damage report for a specific player
     private void DisplayDamageReport(int playerId) {
         Console.WriteLine($"===[ Damage Report for {playerName[playerId]} ]===");
 
-        // Victims Section
         if (HasVictims(playerId)) {
-            Console.WriteLine($"===[ Victims - Total: [{TotalHitsGiven(playerId)}:{TotalDamageGiven(playerId)}] (hits:damage) ]===");
+            Console.WriteLine($"===[ Victims: Hits: {TotalHitsGiven(playerId)}, Damage: {TotalDamageGiven(playerId)} ]===");
             for (int victim = 0; victim <= MaxPlayers; victim++) {
-                if (string.IsNullOrEmpty(playerName[playerId]) || playerName[playerId] == "Unknown") {
-                    continue; // Skip inactive or unknown players
-                }
-                if (IsVictim(playerId, victim) && !string.IsNullOrEmpty(playerName[victim]) && playerName[victim] != "Unknown") {
-                    string victimInfo = FetchVictimDamageInfo(playerId, victim);
-                    Console.WriteLine(victimInfo);
+                if (IsVictim(playerId, victim)) {
+                    Console.WriteLine(FetchVictimDamageInfo(playerId, victim));
                 }
             }
         }
 
-        // Attackers Section
         if (HasAttackers(playerId)) {
-            Console.WriteLine($"===[ Attackers - Total: [{TotalHitsTaken(playerId)}:{TotalDamageTaken(playerId)}] (hits:damage) ]===");
+            Console.WriteLine($"===[ Attackers: Hits: {TotalHitsTaken(playerId)}, Damage: {TotalDamageTaken(playerId)} ]===");
             for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
-                if (string.IsNullOrEmpty(playerName[playerId]) || playerName[playerId] == "Unknown") {
-                   continue; // Skip inactive or unknown players
-                }
-                if (IsVictim(attacker, playerId) && !string.IsNullOrEmpty(playerName[attacker]) && playerName[attacker] != "Unknown") {
-                    string attackerInfo = FetchAttackerDamageInfo(attacker, playerId);
-                    Console.WriteLine(attackerInfo);
+                if (IsVictim(attacker, playerId)) {
+                    Console.WriteLine(FetchAttackerDamageInfo(attacker, playerId));
                 }
             }
         }
     }
 
-    private void GenerateDamageReports() {
-        Console.WriteLine("[DEBUG] Generating damage reports...");
-
-        // Iterate over only active players
-        for (int playerId = 0; playerId <= MaxPlayers; playerId++) {
-            if (string.IsNullOrEmpty(playerName[playerId]) || playerName[playerId] == "Unknown") {
-                continue; // Skip inactive or unknown players
-            }
-
-            // Check if the player has meaningful data
-            bool hasVictims = HasVictims(playerId);
-            bool hasAttackers = HasAttackers(playerId);
-
-            if (!hasVictims && !hasAttackers) {
-                Console.WriteLine($"[DEBUG] Skipping report for Player {playerId} ({playerName[playerId]}): No data.");
-                continue;
-            }
-
-            // Generate and display the damage report
-            DisplayDamageReport(playerId);
+    // Calculate the total damage a player has given
+    private int TotalDamageGiven(int playerId) {
+        int total = 0;
+        for (int victim = 0; victim <= MaxPlayers; victim++) {
+            total += damageGiven[playerId, victim];
         }
+        return total;
     }
 
-    private string FetchVictimDamageInfo(int attacker, int victim) {
-        string info = $" - {playerName[victim]}";
-
-        if (attacker == ENVIRONMENT) {
-            if (victim == attacker) {
-                info += " (Killed by world)";
-            } else {
-                info += " (World damage)";
-            }
-        } else if (attacker == victim) {
-            info += " (Suicide)";
-        } else {
-            info += " (Killed)";
+    // Calculate the total hits a player has given
+    private int TotalHitsGiven(int playerId) {
+        int total = 0;
+        for (int victim = 0; victim <= MaxPlayers; victim++) {
+            total += hitsGiven[playerId, victim];
         }
-
-        info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} dmg ->";
-
-        for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
-            if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
-            }
-        }
-
-        return info;
+        return total;
     }
 
-    private string FetchAttackerDamageInfo(int attacker, int victim) {
-        string info = $" - {playerName[attacker]}";
-
-        if (attacker == ENVIRONMENT) {
-            info = " - World";
-            if (killedPlayer[victim, ENVIRONMENT] == 1) {
-                info += " (Killed by)";
-            }
-        } else if (killedPlayer[attacker, victim] == 1) {
-            info += " (Killed)";
+    // Calculate the total damage a player has taken
+    private int TotalDamageTaken(int playerId) {
+        int total = 0;
+        for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
+            total += damageTaken[playerId, attacker];
         }
-
-        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} dmg ->";
-
-        bool hasHitgroupData = false;
-        for (int hitgroup = 0; hitgroup < MaxHitGroups; hitgroup++) {
-            if (hitboxTaken[victim, attacker, hitgroup] > 0) {
-                if (!hasHitgroupData) {
-                    hasHitgroupData = true;
-                    info += $" {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
-                } else {
-                    info += $", {hitboxName[hitgroup]} {hitboxTaken[victim, attacker, hitgroup]}:{hitboxTakenDamage[victim, attacker, hitgroup]}";
-                }
-            }
-        }
-
-        if (!hasHitgroupData) {
-            info += " No specific hitgroups recorded.";
-        }
-
-        return info;
+        return total;
     }
 
-    private string FormatVictimReport(int attacker, int victim) {
-        string report = $" - {playerName[victim]}";
-
-        if (damageGiven[attacker, victim] > 0) {
-            report += $" ({hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} damage)";
-        }
-
-        bool first = true;
-        int totalHits = 0;
-        int totalDamage = 0;
-
-        for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
-            if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                int hits = hitboxGiven[attacker, victim, hitGroup];
-                int damage = hitboxGivenDamage[attacker, victim, hitGroup];
-                totalHits += hits;
-                totalDamage += damage;
-
-                string hitDetails = $"{hitboxName[hitGroup]} {hits}:{damage}";
-                report += first ? $" - {hitDetails}" : $", {hitDetails}";
-                first = false;
-            }
-        }
-
-        // Debug totals
-        Console.WriteLine($"[DEBUG] Victim {victim} <- Attacker {attacker}: Total Hits {totalHits}, Total Damage {totalDamage}.");
-
-        return report;
-    }
-
-    private string FormatAttackerReport(int attacker, int victim) {
-        string report = $" - {playerName[attacker]}";
-
-        if (damageTaken[victim, attacker] > 0) {
-            report += $" ({hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} damage)";
-        }
-
-        bool first = true;
-        int totalHits = 0;
-        int totalDamage = 0;
-
-        for (int hitGroup = 0; hitGroup <= MaxHitGroups; hitGroup++) {
-            if (hitboxTaken[victim, attacker, hitGroup] > 0) {
-                int hits = hitboxTaken[victim, attacker, hitGroup];
-                int damage = hitboxTakenDamage[victim, attacker, hitGroup];
-                totalHits += hits;
-                totalDamage += damage;
-
-                string hitDetails = $"{hitboxName[hitGroup]} {hits}:{damage}";
-                report += first ? $" - {hitDetails}" : $", {hitDetails}";
-                first = false;
-            }
-        }
-
-        // Debug totals
-        Console.WriteLine($"[DEBUG] Attacker {attacker} -> Victim {victim}: Total Hits {totalHits}, Total Damage {totalDamage}.");
-
-        return report;
-    }
-
-    private bool HasVictims(int playerId) {
-        for (int victim = 0; victim < 4; victim++) { // Adjust to loop over first 4 players
-            if (damageGiven[playerId, victim] > 0) {
-                Console.WriteLine($"[DEBUG] HasVictims: Player {playerId} has Victim {victim} with Damage {damageGiven[playerId, victim]}.");
-                return true;
-            }
-        }
-        Console.WriteLine($"[DEBUG] HasVictims: Player {playerId} has no victims.");
-        return false;
-    }
-
-    private bool HasAttackers(int playerId) {
-        for (int attacker = 0; attacker < 4; attacker++) { // Adjust to loop over first 4 players
-            if (damageTaken[playerId, attacker] > 0) {
-                Console.WriteLine($"[DEBUG] HasAttackers: Player {playerId} was attacked by {attacker} with Damage {damageTaken[playerId, attacker]}.");
-                return true;
-            }
-        }
-        Console.WriteLine($"[DEBUG] HasAttackers: Player {playerId} has no attackers.");
-        return false;
-    }
-
+    // Calculate the total hits a player has taken
     private int TotalHitsTaken(int playerId) {
         int total = 0;
-        for (int attacker = 1; attacker <= MaxPlayers; attacker++) {
+        for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
             total += hitsTaken[playerId, attacker];
         }
         return total;
     }
 
-    private int TotalDamageGiven(int playerId) {
-        int total = 0;
-        for (int victim = 0; victim < 4; victim++) { // Limit to first 4 players for debugging
-            if (damageGiven[playerId, victim] > 0) {
-                total += damageGiven[playerId, victim];
-                Console.WriteLine($"[DEBUG] Adding damageGiven[{playerId}, {victim}] = {damageGiven[playerId, victim]} to TotalDamageGiven[{playerId}].");
+    // Fetch detailed damage info for a victim
+    private string FetchVictimDamageInfo(int attacker, int victim) {
+        string info = $" - {playerName[victim]}: {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} damage";
+        for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
+            if (hitboxGiven[attacker, victim, hitGroup] > 0) {
+                info += $", {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
             }
         }
-        Console.WriteLine($"[DEBUG] TotalDamageGiven[{playerId}] = {total}");
-        return total;
+        return info;
     }
 
-    private int TotalDamageTaken(int playerId) {
-        int total = 0;
-        for (int attacker = 0; attacker < 4; attacker++) { // Limit to first 4 players for debugging
-            if (damageTaken[playerId, attacker] > 0) {
-                total += damageTaken[playerId, attacker];
-                Console.WriteLine($"[DEBUG] Adding damageTaken[{playerId}, {attacker}] = {damageTaken[playerId, attacker]} to TotalDamageTaken[{playerId}].");
+    // Fetch detailed damage info for an attacker
+    private string FetchAttackerDamageInfo(int attacker, int victim) {
+        string info = $" - {playerName[attacker]}: {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} damage";
+        for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
+            if (hitboxTaken[victim, attacker, hitGroup] > 0) {
+                info += $", {hitboxName[hitGroup]} {hitboxTaken[victim, attacker, hitGroup]}:{hitboxTakenDamage[victim, attacker, hitGroup]}";
             }
         }
-        Console.WriteLine($"[DEBUG] TotalDamageTaken[{playerId}] = {total}");
-        return total;
+        return info;
     }
 
-    private int TotalHitsGiven(int playerId) {
-        int total = 0;
-        for (int victim = 1; victim <= MaxPlayers; victim++) {
-            if (hitsGiven[playerId, victim] > 0) {
-                total += hitsGiven[playerId, victim];
-            }
+    // Check if a player has inflicted damage on others
+    private bool HasVictims(int playerId) {
+        for (int victim = 0; victim <= MaxPlayers; victim++) {
+            if (damageGiven[playerId, victim] > 0) return true;
         }
-        Console.WriteLine($"[DEBUG] TotalHitsGiven[{playerId}] = {total}");
-        return total;
+        return false;
     }
+
+    // Check if a player has taken damage from others
+    private bool HasAttackers(int playerId) {
+        for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
+            if (damageTaken[playerId, attacker] > 0) return true;
+        }
+        return false;
+    }
+
+    // Check if a player is a victim of another player
     private bool IsVictim(int attacker, int victim) {
-        bool result = damageGiven[attacker, victim] > 0;
-        Console.WriteLine($"[DEBUG] IsVictim({attacker}, {victim}): damageGiven[{attacker}, {victim}] = {damageGiven[attacker, victim]}, Result = {result}");
-        return result;
+        return damageGiven[attacker, victim] > 0;
     }
 
+    // Helper method to clear all damage-related data
     private void ClearDamageData() {
         Console.WriteLine("[DEBUG] Clearing damage data.");
         Array.Clear(damageGiven, 0, damageGiven.Length);
@@ -389,6 +258,6 @@ public class DamageReportModule : IModule {
         Array.Clear(hitboxGivenDamage, 0, hitboxGivenDamage.Length);
         Array.Clear(hitboxTaken, 0, hitboxTaken.Length);
         Array.Clear(hitboxTakenDamage, 0, hitboxTakenDamage.Length);
-        Array.Clear(killedPlayer, 0, killedPlayer.Length); // Clear killedPlayer
+        Array.Clear(killedPlayer, 0, killedPlayer.Length);
     }
 }
