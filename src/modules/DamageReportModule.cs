@@ -72,15 +72,30 @@ public class DamageReportModule : IModule {
         int damage = eventInfo.DmgHealth;
         int hitgroup = eventInfo.Hitgroup;
 
-        // Track damage and hits
+        // Validate hitgroup index
+        if (hitgroup < 0 || hitgroup >= MaxHitGroups) {
+            Console.WriteLine($"[ERROR] Invalid hitgroup: {hitgroup}. Skipping hitgroup update.");
+            return HookResult.Continue;
+        }
+
+        // Track damage and hits for the attacker (Given) and victim (Taken)
         damageGiven[attacker, victim] += damage;
         damageTaken[victim, attacker] += damage;
+
         hitsGiven[attacker, victim]++;
         hitsTaken[victim, attacker]++;
+
+        // Update hitgroup data for attacker (Given) and victim (Taken)
         hitboxGiven[attacker, victim, hitgroup]++;
         hitboxGivenDamage[attacker, victim, hitgroup] += damage;
 
+        hitboxTaken[victim, attacker, hitgroup]++;
+        hitboxTakenDamage[victim, attacker, hitgroup] += damage;
+
+        // Debug logs
         Console.WriteLine($"[DEBUG] Damage recorded: Attacker {attacker} -> Victim {victim}, Damage: {damage}, HitGroup: {hitgroup}");
+        Console.WriteLine($"[DEBUG] hitboxGiven[{attacker}, {victim}, {hitgroup}] = {hitboxGiven[attacker, victim, hitgroup]}");
+        Console.WriteLine($"[DEBUG] hitboxTaken[{victim}, {attacker}, {hitgroup}] = {hitboxTaken[victim, attacker, hitgroup]}");
 
         return HookResult.Continue;
     }
