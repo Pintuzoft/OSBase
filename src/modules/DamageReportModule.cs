@@ -61,21 +61,18 @@ public class DamageReportModule : IModule {
 
     // Event handler for player hurt event
     private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
-        // Check if attacker or victim is null
+        // Validate attacker and victim
         if (eventInfo.Attacker?.UserId == null || eventInfo.Userid?.UserId == null) {
-            Console.WriteLine("[ERROR] Missing UserId for attacker or victim.");
+            Console.WriteLine("[ERROR] Missing attacker or victim in OnPlayerHurt.");
             return HookResult.Continue;
         }
 
-        // Get attacker and victim IDs
         int attacker = eventInfo.Attacker.UserId.Value;
         int victim = eventInfo.Userid.UserId.Value;
-
-        // Get damage and hit group from event
         int damage = eventInfo.DmgHealth;
         int hitgroup = eventInfo.Hitgroup;
 
-        // Update damage and hit data
+        // Track damage and hits
         damageGiven[attacker, victim] += damage;
         damageTaken[victim, attacker] += damage;
         hitsGiven[attacker, victim]++;
@@ -83,29 +80,42 @@ public class DamageReportModule : IModule {
         hitboxGiven[attacker, victim, hitgroup]++;
         hitboxGivenDamage[attacker, victim, hitgroup] += damage;
 
+        Console.WriteLine($"[DEBUG] Damage recorded: Attacker {attacker} -> Victim {victim}, Damage: {damage}, HitGroup: {hitgroup}");
+
         return HookResult.Continue;
     }
 
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        int victim = eventInfo.Userid?.UserId ?? -1;
-        int attacker = eventInfo.Attacker?.UserId ?? -1;
-        string weapon = eventInfo.Weapon;
+        int victim = eventInfo.Userid?.UserId ?? -1; // Victim ID
+        int attacker = eventInfo.Attacker?.UserId ?? ENVIRONMENT; // Attacker ID or ENVIRONMENT for world kills
+        string weapon = eventInfo.Weapon ?? "unknown";
 
         Console.WriteLine($"[DEBUG] Player {victim} was killed by {attacker} with weapon: {weapon}");
 
-        // Handle environmental or bomb deaths
-        if (weapon.Contains("c4") || weapon.Contains("worldspawn")) {
+        // Validate victim
+        if (victim < 0 || victim > MaxPlayers) {
+            Console.WriteLine($"[ERROR] Invalid victim ID: {victim}. Skipping death handling.");
+            return HookResult.Continue;
+        }
+
+        // Register kills
+        if (attacker == victim) {
+            // Suicide
+            killedPlayer[victim, victim] = 1;
+            Console.WriteLine($"[DEBUG] Player {victim} committed suicide.");
+        } else if (attacker == ENVIRONMENT) {
+            // Environmental kill
             killedPlayer[ENVIRONMENT, victim] = 1;
-            Console.WriteLine($"[DEBUG] Player {victim} was killed by environmental factors.");
+            Console.WriteLine($"[DEBUG] Player {victim} was killed by environment (weapon: {weapon}).");
         } else {
+            // Normal player kill
             killedPlayer[attacker, victim] = 1;
             Console.WriteLine($"[DEBUG] Player {attacker} killed Player {victim} with {weapon}.");
         }
 
         return HookResult.Continue;
     }
-
     // Event handler for round start
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         ClearDamageData(); // Reset all damage data
