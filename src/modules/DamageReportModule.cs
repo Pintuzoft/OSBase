@@ -265,7 +265,7 @@ public class DamageReportModule : IModule {
             info += " (Suicide)";
         } else if (killedPlayer[attacker, victim] == 1) {
             // Regular kill
-            info += " (Killed)";
+            info += " (Killed by)";
         }
 
         // Add damage and hits
