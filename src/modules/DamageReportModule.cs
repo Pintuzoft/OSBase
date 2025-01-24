@@ -172,7 +172,7 @@ public class DamageReportModule : IModule {
 
     // Display damage report for a specific player
     private void DisplayDamageReport(int playerId) {
-        Console.WriteLine($"===[ Damage Report for {playerName[playerId]} ]===");
+        Console.WriteLine("===[ Damage Report (hits:damage) ]===");
 
         // Victims Section
         if (HasVictims(playerId)) {
