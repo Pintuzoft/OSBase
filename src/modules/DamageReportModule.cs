@@ -174,20 +174,24 @@ public class DamageReportModule : IModule {
     private void DisplayDamageReport(int playerId) {
         Console.WriteLine($"===[ Damage Report for {playerName[playerId]} ]===");
 
+        // Victims Section
         if (HasVictims(playerId)) {
-            Console.WriteLine($"===[ Victims: Hits: {TotalHitsGiven(playerId)}, Damage: {TotalDamageGiven(playerId)} ]===");
+            Console.WriteLine($"Victims ({TotalHitsGiven(playerId)} hits, {TotalDamageGiven(playerId)} damage):");
             for (int victim = 0; victim <= MaxPlayers; victim++) {
                 if (IsVictim(playerId, victim)) {
-                    Console.WriteLine(FetchVictimDamageInfo(playerId, victim));
+                    string victimInfo = FetchVictimDamageInfo(playerId, victim);
+                    Console.WriteLine($" - {victimInfo}");
                 }
             }
         }
 
+        // Attackers Section
         if (HasAttackers(playerId)) {
-            Console.WriteLine($"===[ Attackers: Hits: {TotalHitsTaken(playerId)}, Damage: {TotalDamageTaken(playerId)} ]===");
+            Console.WriteLine($"Attackers ({TotalHitsTaken(playerId)} hits, {TotalDamageTaken(playerId)} damage):");
             for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
                 if (IsVictim(attacker, playerId)) {
-                    Console.WriteLine(FetchAttackerDamageInfo(attacker, playerId));
+                    string attackerInfo = FetchAttackerDamageInfo(attacker, playerId);
+                    Console.WriteLine($" - {attackerInfo}");
                 }
             }
         }
@@ -231,54 +235,48 @@ public class DamageReportModule : IModule {
 
     // Fetch detailed damage info for a victim
     private string FetchVictimDamageInfo(int attacker, int victim) {
-        string info = $" - {playerName[victim]}";
+        string info = $"{playerName[victim]}";
 
         if (attacker == ENVIRONMENT) {
-            info += " (Killed by environment)";
+            info += " (Environment)";
         } else if (attacker == victim) {
             info += " (Suicide)";
         } else if (killedPlayer[attacker, victim] == 1) {
             info += " (Killed)";
         }
 
-        info += $": {hitsGiven[attacker, victim]} hits, {damageGiven[attacker, victim]} damage ->";
-
-        // Add hitgroup details
+        info += $": ";
         for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
             if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                info += $" {hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}";
+                info += $"{hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}, ";
             }
         }
 
-        return info;
+        // Trim trailing comma and space
+        return info.TrimEnd(',', ' ');
     }
 
     // Fetch detailed damage info for an attacker
     private string FetchAttackerDamageInfo(int attacker, int victim) {
-        string info = $" - {playerName[attacker]}";
+        string info = $"{playerName[attacker]}";
 
         if (attacker == ENVIRONMENT) {
-            // Environmental kill
             info += " (Environment)";
         } else if (attacker == victim) {
-            // Suicide
             info += " (Suicide)";
         } else if (killedPlayer[attacker, victim] == 1) {
-            // Regular kill
             info += " (Killed by)";
         }
 
-        // Add damage and hits
-        info += $": {hitsTaken[victim, attacker]} hits, {damageTaken[victim, attacker]} damage";
-
-        // Add hitgroup details
+        info += $": ";
         for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
             if (hitboxTaken[victim, attacker, hitGroup] > 0) {
-                info += $", {hitboxName[hitGroup]} {hitboxTaken[victim, attacker, hitGroup]}:{hitboxTakenDamage[victim, attacker, hitGroup]}";
+                info += $"{hitboxName[hitGroup]} {hitboxTaken[victim, attacker, hitGroup]}:{hitboxTakenDamage[victim, attacker, hitGroup]}, ";
             }
         }
 
-        return info;
+        // Trim trailing comma and space
+        return info.TrimEnd(',', ' ');
     }
 
     // Check if a player has inflicted damage on others
