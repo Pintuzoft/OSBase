@@ -33,16 +33,38 @@ public class DemosModule : IModule {
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
+    /*
+        EVENT HANDLERS
+    */
+
     private void OnMapEnd() {
+        runMapEnd();
+    }
+
+    private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+        runWarmupEnd(); 
+        return HookResult.Continue;
+    }
+
+    private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
+        runMapEnd();
+        return HookResult.Continue;
+    }
+
+
+    /*
+        METHODS
+    */
+
+    private void runMapEnd() {
         if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
             osbase?.SendCommand("tv_stoprecord");
             osbase?.SendCommand("tv_enable 0");
             Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord is enabled. Stopped recording demo.");
         }
     }
-
-    private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-        if (config != null && config.GetGlobalConfigValue("autorecord", "0") == "1") {
+    private void runWarmupEnd() {
+        if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
             string date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             Server.ExecuteCommand("tv_enable 1");
             if (osbase != null) {
@@ -50,17 +72,5 @@ public class DemosModule : IModule {
             }
             Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord enabled. Demo recording started.");
         }
-
-        return HookResult.Continue;
     }
-
-    private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
-        if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
-            osbase?.SendCommand("tv_stoprecord");
-            osbase?.SendCommand("tv_enable 0");
-            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord is enabled. Stopped recording demo.");
-        }
-        return HookResult.Continue;
-    }
-
 }
