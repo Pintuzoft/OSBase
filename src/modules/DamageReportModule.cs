@@ -104,28 +104,31 @@ public class DamageReportModule : IModule {
 
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        int victim = eventInfo.Userid?.UserId ?? -1; // Victim ID
-        int attacker = eventInfo.Attacker?.UserId ?? ENVIRONMENT; // Attacker ID or ENVIRONMENT
-        string weapon = eventInfo.Weapon ?? "unknown";
+        int victimId = eventInfo.Userid?.UserId ?? -1; // ID of the victim
+        int attackerId = eventInfo.Attacker?.UserId ?? ENVIRONMENT; // ID of the attacker or ENVIRONMENT
+        string weapon = eventInfo.Weapon ?? "unknown"; // Weapon used in the kill
 
-        Console.WriteLine($"[DEBUG] Player {victim} was killed by {attacker} with weapon: {weapon}");
+        // Log the death event
+        Console.WriteLine($"[DEBUG] Player {victimId} was killed by {attackerId} with weapon: {weapon}");
 
-        // Validate victim
-        if (victim < 0 || victim > MaxPlayers) {
-            Console.WriteLine($"[ERROR] Invalid victim ID: {victim}. Skipping death handling.");
+        // Check if the victim is valid
+        if (victimId < 0 || string.IsNullOrEmpty(playerName[victimId])) {
+            Console.WriteLine($"[ERROR] Invalid victim: {victimId}");
             return HookResult.Continue;
         }
 
-        // Handle suicides
-        if (attacker == victim) {
-            killedPlayer[victim, victim] = 1;
-            Console.WriteLine($"[DEBUG] Player {victim} committed suicide.");
-        } else if (attacker == ENVIRONMENT) {
-            killedPlayer[ENVIRONMENT, victim] = 1;
-            Console.WriteLine($"[DEBUG] Player {victim} was killed by environment (weapon: {weapon}).");
+        // Mark the kill in your tracking data
+        if (attackerId != victimId) {
+            // Regular kill (not suicide)
+            killedPlayer[attackerId, victimId] = 1;
         } else {
-            killedPlayer[attacker, victim] = 1;
-            Console.WriteLine($"[DEBUG] Player {attacker} killed Player {victim} with {weapon}.");
+            // Suicide
+            Console.WriteLine($"[DEBUG] Player {victimId} committed suicide.");
+        }
+
+        // Send the damage report to the killed player
+        if (eventInfo.Userid != null && eventInfo.Userid.Connected == PlayerConnectedState.PlayerConnected) {
+            DisplayDamageReport(victimId);
         }
 
         return HookResult.Continue;
@@ -142,12 +145,20 @@ public class DamageReportModule : IModule {
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
         Console.WriteLine("[DEBUG] Round ended. Generating damage reports.");
 
-        // Generate damage report for all active players
-        for (int playerId = 0; playerId <= MaxPlayers; playerId++) {
-            if (!string.IsNullOrEmpty(playerName[playerId]) && playerName[playerId] != "Disconnected") {
-                DisplayDamageReport(playerId);
-            }
-        }
+        // Filter and display damage reports for live players
+        Utilities.GetPlayers()
+            .Where(p => p?.IsValid == true 
+                    && p.PlayerPawn?.IsValid == true 
+                    && !p.IsBot 
+                    && !p.IsHLTV 
+                    && p.Connected == PlayerConnectedState.PlayerConnected 
+                    && p.TeamNum != 0) // Exclude unassigned/spectators
+            .ToList()
+            .ForEach(player => {
+                if (player.UserId.HasValue) {
+                    DisplayDamageReport(player.UserId.Value);
+                }
+            }); // Replace with your method
 
         return HookResult.Continue;
     }
@@ -172,10 +183,16 @@ public class DamageReportModule : IModule {
 
     // Display damage report for a specific player
     private void DisplayDamageReport(int playerId) {
-        Console.WriteLine("===[ Damage Report (hits:damage) ]===");
+        bool hasVictimData = HasVictims(playerId);
+        bool hasAttackerData = HasAttackers(playerId);
+
+        // Only send the title if there's any data to show
+        if (hasVictimData || hasAttackerData) {
+            Console.WriteLine("===[ Damage Report (hits:damage) ]===");
+        }
 
         // Victims Section
-        if (HasVictims(playerId)) {
+        if (hasVictimData) {
             Console.WriteLine($"Victims ({TotalHitsGiven(playerId)} hits, {TotalDamageGiven(playerId)} damage):");
             for (int victim = 0; victim <= MaxPlayers; victim++) {
                 if (IsVictim(playerId, victim)) {
@@ -186,7 +203,7 @@ public class DamageReportModule : IModule {
         }
 
         // Attackers Section
-        if (HasAttackers(playerId)) {
+        if (hasAttackerData) {
             Console.WriteLine($"Attackers ({TotalHitsTaken(playerId)} hits, {TotalDamageTaken(playerId)} damage):");
             for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
                 if (IsVictim(attacker, playerId)) {
@@ -237,11 +254,7 @@ public class DamageReportModule : IModule {
     private string FetchVictimDamageInfo(int attacker, int victim) {
         string info = $"{playerName[victim]}";
 
-        if (attacker == ENVIRONMENT) {
-            info += " (Environment)";
-        } else if (attacker == victim) {
-            info += " (Suicide)";
-        } else if (killedPlayer[attacker, victim] == 1) {
+        if (killedPlayer[attacker, victim] == 1) {
             info += " (Killed)";
         }
 
@@ -260,11 +273,7 @@ public class DamageReportModule : IModule {
     private string FetchAttackerDamageInfo(int attacker, int victim) {
         string info = $"{playerName[attacker]}";
 
-        if (attacker == ENVIRONMENT) {
-            info += " (Environment)";
-        } else if (attacker == victim) {
-            info += " (Suicide)";
-        } else if (killedPlayer[attacker, victim] == 1) {
+        if (killedPlayer[attacker, victim] == 1) {
             info += " (Killed by)";
         }
 
