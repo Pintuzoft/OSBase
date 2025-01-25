@@ -147,10 +147,12 @@ public class DamageReportModule : IModule {
 
         var playersList = Utilities.GetPlayers();
         foreach (var player in playersList) {
+            Console.WriteLine("[DEBUG] - "+player.PlayerName);
             if ( player.IsValid && 
                 !player.IsHLTV &&
                  player.UserId.HasValue && 
                  player.Health > 0 ) {
+                Console.WriteLine("[DEBUG] --- "+player.PlayerName+" sent...");
                 DisplayDamageReport(player.UserId.Value);
             }
         }
