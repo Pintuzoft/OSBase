@@ -147,23 +147,36 @@ public class DamageReportModule : IModule {
 
         var playersList = Utilities.GetPlayers();
         foreach (var player in playersList) {
-            Console.WriteLine("[DEBUG] - "+player.PlayerName);
-            Console.WriteLine("[DEBUG]   - isvalid: "+player.IsValid);
-            Console.WriteLine("[DEBUG]   - ishltv: "+player.IsHLTV);
-            Console.WriteLine("[DEBUG]   - hasvalue: "+player.UserId.HasValue);
-            Console.WriteLine("[DEBUG]   - health: "+player.Health);
-            if ( player.IsValid && 
-                !player.IsHLTV &&
-                 player.UserId.HasValue && 
-                 player.Health > 0 ) {
-                Console.WriteLine("[DEBUG] --- "+player.PlayerName+" sent...");
-                DisplayDamageReport(player.UserId.Value);
+            Console.WriteLine("[DEBUG] - " + player.PlayerName);
+            Console.WriteLine("[DEBUG]   - isvalid: " + player.IsValid);
+            Console.WriteLine("[DEBUG]   - ishltv: " + player.IsHLTV);
+            Console.WriteLine("[DEBUG]   - hasvalue: " + player.UserId.HasValue);
+
+            if (player.IsValid && 
+                !player.IsHLTV && 
+                player.UserId.HasValue) {
+                
+                int playerId = player.UserId.Value;
+
+                if (!HasBeenKilled(playerId)) {
+                    Console.WriteLine("[DEBUG] --- " + player.PlayerName + " sent...");
+                    DisplayDamageReport(playerId);
+                } else {
+                    Console.WriteLine("[DEBUG] --- " + player.PlayerName + " was already killed, skipping...");
+                }
             }
         }
 
         return HookResult.Continue;
     }
-
+    private bool HasBeenKilled(int playerId) {
+        for (int attackerId = 0; attackerId <= MaxPlayers; attackerId++) {
+            if (killedPlayer[attackerId, playerId] == 1) {
+                return true; // Player was killed by someone
+            }
+        }
+        return false; // Player was not killed and is still alive
+    }
     // Event handler for player connect
     private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
         UpdatePlayerNames(); // Refresh player names upon connection
