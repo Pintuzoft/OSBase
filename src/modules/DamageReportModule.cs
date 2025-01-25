@@ -150,7 +150,7 @@ public class DamageReportModule : IModule {
             if ( player.IsValid && 
                 !player.IsHLTV &&
                  player.UserId.HasValue && 
-                 HasBeenKilled(player.UserId.Value)) {
+                 player.Health > 0 ) {
                 DisplayDamageReport(player.UserId.Value);
             }
         }
@@ -306,14 +306,6 @@ public class DamageReportModule : IModule {
         return damageGiven[attacker, victim] > 0;
     }
 
-    private bool HasBeenKilled(int playerId) {
-        for (int attackerId = 0; attackerId <= MaxPlayers; attackerId++) {
-            if (killedPlayer[attackerId, playerId] == 1) {
-                return true; // Player was killed by someone
-            }
-        }
-        return false; // Player is still alive
-    }
     // Helper method to clear all damage-related data
     private void ClearDamageData() {
         Console.WriteLine("[DEBUG] Clearing damage data.");
