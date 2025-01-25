@@ -113,7 +113,7 @@ public class DamageReportModule : IModule {
             int localVictimId = victimId;
 
             // Schedule the damage report with a delay
-            osbase?.AddTimer(2000, () => {
+            osbase.AddTimer(2.0f, () => {
                 if (IsPlayerConnected(localVictimId)) {
                     Console.WriteLine($"[DEBUG] Sending delayed damage report to player {localVictimId} ({playerName[localVictimId]}).");
                     DisplayDamageReport(localVictimId);
