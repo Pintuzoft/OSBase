@@ -104,34 +104,24 @@ public class DamageReportModule : IModule {
 
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        int victimId = eventInfo.Userid?.UserId ?? -1; // ID of the victim
-        int attackerId = eventInfo.Attacker?.UserId ?? ENVIRONMENT; // ID of the attacker or ENVIRONMENT
-        string weapon = eventInfo.Weapon ?? "unknown"; // Weapon used in the kill
+        int victimId = eventInfo.Userid?.UserId ?? -1;
 
-        // Log the death event
-        Console.WriteLine($"[DEBUG] Player {victimId} was killed by {attackerId} with weapon: {weapon}");
+        // Validate victim and schedule the damage report
+        if (victimId >= 0 && IsPlayerConnected(victimId)) {
+            Console.WriteLine($"[DEBUG] Player {victimId} was killed. Scheduling damage report...");
 
-        // Check if the victim is valid
-        if (victimId < 0 || string.IsNullOrEmpty(playerName[victimId])) {
-            Console.WriteLine($"[ERROR] Invalid victim: {victimId}");
-            return HookResult.Continue;
+            // Schedule the damage report with a delay
+            osbase?.AddTimer(3000, () => {
+                if (IsPlayerConnected(victimId)) { // Check again to ensure the player is still valid
+                    Console.WriteLine($"[DEBUG] Sending delayed damage report to player {victimId} ({playerName[victimId]}).");
+                    DisplayDamageReport(victimId);
+                } else {
+                    Console.WriteLine($"[DEBUG] Player {victimId} disconnected before damage report could be sent.");
+                }
+            });
         }
 
-        // Mark the kill in your tracking data
-        if (attackerId != victimId) {
-            // Regular kill (not suicide)
-            killedPlayer[attackerId, victimId] = 1;
-        } else {
-            // Suicide
-            Console.WriteLine($"[DEBUG] Player {victimId} committed suicide.");
-        }
-
-        // Send the damage report to the killed player
-        if (eventInfo.Userid != null && eventInfo.Userid.Connected == PlayerConnectedState.PlayerConnected) {
-            DisplayDamageReport(victimId);
-        }
-
-        return HookResult.Continue;
+        return HookResult.Continue; // Ensure the game flow continues
     }
     // Event handler for round start
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
@@ -177,6 +167,17 @@ public class DamageReportModule : IModule {
         }
         return false; // Player was not killed and is still alive
     }
+    // Check if a player is connected
+    private bool IsPlayerConnected(int playerId) {
+        var playersList = Utilities.GetPlayers();
+        foreach (var player in playersList) {
+            if (player.UserId.HasValue && player.UserId.Value == playerId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Event handler for player connect
     private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
         UpdatePlayerNames(); // Refresh player names upon connection

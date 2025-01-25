@@ -64,17 +64,17 @@ public class WelcomeModule : IModule {
         // Send the message specifically to the connecting player
         if (osbase != null) {
             if (playerId != null && playerId.IsValid && !playerId.IsBot && !playerId.IsHLTV) {
-            osbase.AddTimer(delay, () => {
-                foreach (string message in messages) {
-                    if (playerId == null) break; // Ensure playerId is valid
-                    if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Skipping line: {message}");
-                        continue;
+                osbase.AddTimer(delay, () => {
+                    foreach (string message in messages) {
+                        if (playerId == null) break; // Ensure playerId is valid
+                        if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
+                            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Skipping line: {message}");
+                            continue;
+                        }
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending message to Player: {playerId.PlayerName ?? "Unknown"}");
+                        playerId.PrintToChat(message);
                     }
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending message to Player: {playerId.PlayerName ?? "Unknown"}");
-                    playerId.PrintToChat(message);
-                }
-            });
+                });
             } else {
                 Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Player ID is null, cannot send message.");
             }
