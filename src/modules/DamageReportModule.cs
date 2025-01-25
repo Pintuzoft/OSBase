@@ -139,23 +139,18 @@ public class DamageReportModule : IModule {
 
         var playersList = Utilities.GetPlayers();
         foreach (var player in playersList) {
-            Console.WriteLine("[DEBUG] - " + player.PlayerName);
-            Console.WriteLine("[DEBUG]   - isvalid: " + player.IsValid);
-            Console.WriteLine("[DEBUG]   - ishltv: " + player.IsHLTV);
-            Console.WriteLine("[DEBUG]   - hasvalue: " + player.UserId.HasValue);
+            int playerId = player.UserId ?? -1;
 
+            // Check if the player is valid and hasn't already received their report
             if (player.IsValid && 
                 !player.IsHLTV && 
-                player.UserId.HasValue) {
+                player.UserId.HasValue &&
+                !HasBeenKilled(playerId)) {
                 
-                int playerId = player.UserId.Value;
-
-                if (!HasBeenKilled(playerId)) {
-                    Console.WriteLine("[DEBUG] --- " + player.PlayerName + " sent...");
-                    DisplayDamageReport(playerId);
-                } else {
-                    Console.WriteLine("[DEBUG] --- " + player.PlayerName + " was already killed, skipping...");
-                }
+                Console.WriteLine($"[DEBUG] --- {player.PlayerName} sent...");
+                DisplayDamageReport(playerId);
+            } else {
+                Console.WriteLine($"[DEBUG] --- {player.PlayerName} skipped (already received or invalid).");
             }
         }
 
