@@ -137,7 +137,6 @@ public class DamageReportModule : IModule {
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         ClearDamageData(); // Reset all damage data
         UpdatePlayerNames(); // Refresh player names
-        Console.WriteLine("[INFO] Round started. Damage data cleared.");
         return HookResult.Continue;
     }
 
@@ -343,7 +342,6 @@ public class DamageReportModule : IModule {
 
     // Helper method to clear all damage-related data
     private void ClearDamageData() {
-        Console.WriteLine("[DEBUG] Clearing damage data.");
         Array.Clear(damageGiven, 0, damageGiven.Length);
         Array.Clear(damageTaken, 0, damageTaken.Length);
         Array.Clear(hitsGiven, 0, hitsGiven.Length);
@@ -354,6 +352,5 @@ public class DamageReportModule : IModule {
         Array.Clear(hitboxTakenDamage, 0, hitboxTakenDamage.Length);
         Array.Clear(killedPlayer, 0, killedPlayer.Length);
         reportedPlayers.Clear();
-        Console.WriteLine("[DEBUG] Reset reported players.");
     }
 }
