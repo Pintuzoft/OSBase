@@ -106,22 +106,24 @@ public class DamageReportModule : IModule {
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         int victimId = eventInfo.Userid?.UserId ?? -1;
 
-        // Validate victim and schedule the damage report
         if (victimId >= 0 && IsPlayerConnected(victimId)) {
             Console.WriteLine($"[DEBUG] Player {victimId} was killed. Scheduling damage report...");
 
+            // Capture victimId locally to avoid referencing the wrong data
+            int localVictimId = victimId;
+
             // Schedule the damage report with a delay
-            osbase?.AddTimer(3000, () => {
-                if (IsPlayerConnected(victimId)) { // Check again to ensure the player is still valid
-                    Console.WriteLine($"[DEBUG] Sending delayed damage report to player {victimId} ({playerName[victimId]}).");
-                    DisplayDamageReport(victimId);
+            osbase?.AddTimer(2000, () => {
+                if (IsPlayerConnected(localVictimId)) {
+                    Console.WriteLine($"[DEBUG] Sending delayed damage report to player {localVictimId} ({playerName[localVictimId]}).");
+                    DisplayDamageReport(localVictimId);
                 } else {
-                    Console.WriteLine($"[DEBUG] Player {victimId} disconnected before damage report could be sent.");
+                    Console.WriteLine($"[DEBUG] Player {localVictimId} disconnected before damage report could be sent.");
                 }
             });
         }
 
-        return HookResult.Continue; // Ensure the game flow continues
+        return HookResult.Continue;
     }
     // Event handler for round start
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
