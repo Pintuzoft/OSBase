@@ -148,7 +148,7 @@ public class DamageReportModule : IModule {
         var playersList = Utilities.GetPlayers();
         foreach (var player in playersList) {
             if ( player.IsValid && 
-                !player.IsBot && 
+                !player.IsHLTV &&
                  player.UserId.HasValue && 
                  HasBeenKilled(player.UserId.Value)) {
                 DisplayDamageReport(player.UserId.Value);
