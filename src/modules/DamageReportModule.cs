@@ -108,27 +108,26 @@ public class DamageReportModule : IModule {
 
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+        CCSPlayerController? victim = eventInfo.Userid;
         int victimId = eventInfo.Userid?.UserId ?? -1;
 
         // Skip if the round has ended or the player was already reported
-        if (victimId < 0 || !IsPlayerConnected(victimId) || reportedPlayers.Contains(victimId)) {
-            Console.WriteLine($"[DEBUG] Player {victimId} skipped in OnPlayerDeath (round ended or already reported).");
+        if (osbase == null || victim == null || victimId < 0 || !IsPlayerConnected(victimId) || reportedPlayers.Contains(victimId)) {
             return HookResult.Continue;
         }
 
         Console.WriteLine($"[DEBUG] Player {victimId} was killed. Scheduling damage report...");
 
         // Schedule the damage report
-        int localVictimId = victimId; // Capture the victimId
         osbase.AddTimer(delay, () => {
-            if (IsPlayerConnected(localVictimId) && !reportedPlayers.Contains(localVictimId)) {
-                Console.WriteLine($"[DEBUG] Sending delayed damage report to player {localVictimId} ({playerName[localVictimId]}).");
-                DisplayDamageReport(localVictimId);
+            if (IsPlayerConnected(victimId) && !reportedPlayers.Contains(victimId)) {
+                Console.WriteLine($"[DEBUG] Sending delayed damage report to player {victimId} ({playerName[victimId]}).");
+                DisplayDamageReport(victim);
 
                 // Mark player as reported
-                reportedPlayers.Add(localVictimId);
+                reportedPlayers.Add(victimId);
             } else {
-                Console.WriteLine($"[DEBUG] Player {localVictimId} disconnected or already reported.");
+                Console.WriteLine($"[DEBUG] Player {victimId} disconnected or already reported.");
             }
         });
 
@@ -144,7 +143,6 @@ public class DamageReportModule : IModule {
 
     // Event handler for round end
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine("[DEBUG] Round ended. Generating damage reports with delay.");
 
         // Add a delay to allow all post-round damage to be recorded
         osbase?.AddTimer(delay, () => {
@@ -154,24 +152,14 @@ public class DamageReportModule : IModule {
                     !player.IsHLTV &&
                     player.UserId.HasValue &&
                     !reportedPlayers.Contains(player.UserId.Value) ) {
-                    Console.WriteLine($"[DEBUG] --- {player.PlayerName} sent (round end)...");
-                    DisplayDamageReport(player.UserId.Value);
-                } else {
-                    Console.WriteLine($"[DEBUG] --- {player.PlayerName} skipped (already reported or invalid).");
-                }
+                    DisplayDamageReport(player);
+                } 
             }
         });
 
         return HookResult.Continue;
     }
-    private bool HasBeenKilled(int playerId) {
-        for (int attackerId = 0; attackerId <= MaxPlayers; attackerId++) {
-            if (killedPlayer[attackerId, playerId] == 1) {
-                return true; // Player was killed by someone
-            }
-        }
-        return false; // Player was not killed and is still alive
-    }
+
     // Check if a player is connected
     private bool IsPlayerConnected(int playerId) {
         var playersList = Utilities.GetPlayers();
@@ -196,39 +184,43 @@ public class DamageReportModule : IModule {
             if (player.UserId.HasValue) {
                 int playerId = player.UserId.Value;
                 playerName[playerId] = string.IsNullOrEmpty(player.PlayerName) ? "Bot" : player.PlayerName;
-                Console.WriteLine($"[DEBUG] Updated PlayerName[{playerId}] = {playerName[playerId]}.");
             }
         }
     }
 
     // Display damage report for a specific player
-    private void DisplayDamageReport(int playerId) {
+    private void DisplayDamageReport(CCSPlayerController player) {
+        if ( player == null || player.UserId == null ) {
+            Console.WriteLine("[ERROR] Invalid player or player ID in DisplayDamageReport.");
+            return;
+        }
+        int playerId = player.UserId.Value;
         bool hasVictimData = HasVictims(playerId);
         bool hasAttackerData = HasAttackers(playerId);
 
         // Only send the title if there's any data to show
         if (hasVictimData || hasAttackerData) {
-            Console.WriteLine("===[ Damage Report (hits:damage) ]===");
+            player.PrintToChat("===[ Damage Report (hits:damage) ]===");
         }
 
         // Victims Section
         if (hasVictimData) {
-            Console.WriteLine($"Victims ({TotalHitsGiven(playerId)} hits, {TotalDamageGiven(playerId)} damage):");
+            player.PrintToChat($"Victims ({TotalHitsGiven(playerId)} hits, {TotalDamageGiven(playerId)} damage):");
             for (int victim = 0; victim <= MaxPlayers; victim++) {
                 if (IsVictim(playerId, victim)) {
                     string victimInfo = FetchVictimDamageInfo(playerId, victim);
-                    Console.WriteLine($" - {victimInfo}");
+                    player.PrintToChat($" - {victimInfo}");
                 }
             }
         }
 
         // Attackers Section
         if (hasAttackerData) {
-            Console.WriteLine($"Attackers ({TotalHitsTaken(playerId)} hits, {TotalDamageTaken(playerId)} damage):");
+            player.PrintToChat($"Attackers ({TotalHitsTaken(playerId)} hits, {TotalDamageTaken(playerId)} damage):");
             for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
                 if (IsVictim(attacker, playerId)) {
                     string attackerInfo = FetchAttackerDamageInfo(attacker, playerId);
-                    Console.WriteLine($" - {attackerInfo}");
+                    player.PrintToChat($" - {attackerInfo}");
                 }
             }
         }
