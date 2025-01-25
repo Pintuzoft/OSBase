@@ -179,12 +179,30 @@ public class DamageReportModule : IModule {
 
     // Update player names by iterating through active players
     private void UpdatePlayerNames() {
-        var playersList = Utilities.GetPlayers();
-        foreach (var player in playersList) {
-            if (player.UserId.HasValue) {
-                int playerId = player.UserId.Value;
-                playerName[playerId] = string.IsNullOrEmpty(player.PlayerName) ? "Bot" : player.PlayerName;
+        try {
+            var playersList = Utilities.GetPlayers();
+
+            if (playersList == null) {
+                Console.WriteLine("[ERROR] Players list is null in UpdatePlayerNames.");
+                return;
             }
+
+            foreach (var player in playersList) {
+                if (player == null) {
+                    Console.WriteLine("[DEBUG] Found null player in players list.");
+                    continue;
+                }
+
+                if (player.UserId.HasValue) {
+                    int playerId = player.UserId.Value;
+                    playerName[playerId] = string.IsNullOrEmpty(player.PlayerName) ? "Bot" : player.PlayerName;
+                    Console.WriteLine($"[DEBUG] Updated player name: ID={playerId}, Name={playerName[playerId]}");
+                } else {
+                    Console.WriteLine("[DEBUG] Player does not have a UserId.");
+                }
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] Exception in UpdatePlayerNames: {ex.Message}\n{ex.StackTrace}");
         }
     }
 
