@@ -42,6 +42,8 @@ public class DamageReportModule : IModule {
         "Body", "Head", "Chest", "Stomach", "L-Arm", "R-Arm", "L-Leg", "R-Leg", "Neck", "Unknown", "Gear"
     };
 
+    float delay = 3.0f; // Delay in seconds before sending damage reports
+
     // Module initialization method
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
         osbase = inOsbase; // Set the OSBase reference
@@ -118,7 +120,7 @@ public class DamageReportModule : IModule {
 
         // Schedule the damage report
         int localVictimId = victimId; // Capture the victimId
-        osbase.AddTimer(2.0f, () => {
+        osbase.AddTimer(delay, () => {
             if (IsPlayerConnected(localVictimId) && !reportedPlayers.Contains(localVictimId)) {
                 Console.WriteLine($"[DEBUG] Sending delayed damage report to player {localVictimId} ({playerName[localVictimId]}).");
                 DisplayDamageReport(localVictimId);
@@ -142,27 +144,23 @@ public class DamageReportModule : IModule {
 
     // Event handler for round end
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine("[DEBUG] Round ended. Generating damage reports.");
+        Console.WriteLine("[DEBUG] Round ended. Generating damage reports with delay.");
 
-        var playersList = Utilities.GetPlayers();
-        foreach (var player in playersList) {
-            int playerId = player.UserId ?? -1;
-
-            // Check if the player is valid and hasn't already been reported
-            if (player.IsValid && 
-                !player.IsHLTV && 
-                player.UserId.HasValue && 
-                !reportedPlayers.Contains(playerId)) {
-                
-                Console.WriteLine($"[DEBUG] --- {player.PlayerName} sent...");
-                DisplayDamageReport(playerId);
-
-                // Mark player as reported
-                reportedPlayers.Add(playerId);
-            } else {
-                Console.WriteLine($"[DEBUG] --- {player.PlayerName} skipped (already reported or invalid).");
+        // Add a delay to allow all post-round damage to be recorded
+        osbase?.AddTimer(delay, () => {
+            var playersList = Utilities.GetPlayers();
+            foreach (var player in playersList) {
+                if (player.IsValid &&
+                    !player.IsHLTV &&
+                    player.UserId.HasValue &&
+                    !reportedPlayers.Contains(player.UserId.Value) ) {
+                    Console.WriteLine($"[DEBUG] --- {player.PlayerName} sent (round end)...");
+                    DisplayDamageReport(player.UserId.Value);
+                } else {
+                    Console.WriteLine($"[DEBUG] --- {player.PlayerName} skipped (already reported or invalid).");
+                }
             }
-        }
+        });
 
         return HookResult.Continue;
     }
