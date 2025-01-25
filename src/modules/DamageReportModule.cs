@@ -148,6 +148,10 @@ public class DamageReportModule : IModule {
         var playersList = Utilities.GetPlayers();
         foreach (var player in playersList) {
             Console.WriteLine("[DEBUG] - "+player.PlayerName);
+            Console.WriteLine("[DEBUG]   - isvalid: "+player.IsValid);
+            Console.WriteLine("[DEBUG]   - ishltv: "+player.IsHLTV);
+            Console.WriteLine("[DEBUG]   - hasvalue: "+player.UserId.HasValue);
+            Console.WriteLine("[DEBUG]   - health: "+player.Health);
             if ( player.IsValid && 
                 !player.IsHLTV &&
                  player.UserId.HasValue && 
