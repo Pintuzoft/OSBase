@@ -145,20 +145,15 @@ public class DamageReportModule : IModule {
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
         Console.WriteLine("[DEBUG] Round ended. Generating damage reports.");
 
-        // Filter and display damage reports for live players
-        Utilities.GetPlayers()
-            .Where(p => p?.IsValid == true 
-                    && p.PlayerPawn?.IsValid == true 
-                    && !p.IsBot 
-                    && !p.IsHLTV 
-                    && p.Connected == PlayerConnectedState.PlayerConnected 
-                    && p.TeamNum != 0) // Exclude unassigned/spectators
-            .ToList()
-            .ForEach(player => {
-                if (player.UserId.HasValue) {
-                    DisplayDamageReport(player.UserId.Value);
-                }
-            }); // Replace with your method
+        var playersList = Utilities.GetPlayers();
+        foreach (var player in playersList) {
+            if ( player.IsValid && 
+                !player.IsBot && 
+                 player.UserId.HasValue && 
+                 HasBeenKilled(player.UserId.Value)) {
+                DisplayDamageReport(player.UserId.Value);
+            }
+        }
 
         return HookResult.Continue;
     }
@@ -291,7 +286,8 @@ public class DamageReportModule : IModule {
     // Check if a player has inflicted damage on others
     private bool HasVictims(int playerId) {
         for (int victim = 0; victim <= MaxPlayers; victim++) {
-            if (damageGiven[playerId, victim] > 0) return true;
+            if (damageGiven[playerId, victim] > 0) 
+                return true;
         }
         return false;
     }
@@ -299,7 +295,8 @@ public class DamageReportModule : IModule {
     // Check if a player has taken damage from others
     private bool HasAttackers(int playerId) {
         for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
-            if (damageTaken[playerId, attacker] > 0) return true;
+            if (damageTaken[playerId, attacker] > 0) 
+                return true;
         }
         return false;
     }
@@ -309,6 +306,14 @@ public class DamageReportModule : IModule {
         return damageGiven[attacker, victim] > 0;
     }
 
+    private bool HasBeenKilled(int playerId) {
+        for (int attackerId = 0; attackerId <= MaxPlayers; attackerId++) {
+            if (killedPlayer[attackerId, playerId] == 1) {
+                return true; // Player was killed by someone
+            }
+        }
+        return false; // Player is still alive
+    }
     // Helper method to clear all damage-related data
     private void ClearDamageData() {
         Console.WriteLine("[DEBUG] Clearing damage data.");
