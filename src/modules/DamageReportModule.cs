@@ -32,6 +32,8 @@ public class DamageReportModule : IModule {
 
     private string[] playerName = new string[MaxPlayers + 1]; // Stores player names
 
+    private HashSet<int> reportedPlayers = new HashSet<int>();
+
     // Constant to represent environmental kills
     private const int ENVIRONMENT = -1;
 
@@ -106,22 +108,27 @@ public class DamageReportModule : IModule {
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         int victimId = eventInfo.Userid?.UserId ?? -1;
 
-        if (victimId >= 0 && IsPlayerConnected(victimId)) {
-            Console.WriteLine($"[DEBUG] Player {victimId} was killed. Scheduling damage report...");
-
-            // Capture victimId locally to avoid referencing the wrong data
-            int localVictimId = victimId;
-
-            // Schedule the damage report with a delay
-            osbase.AddTimer(2.0f, () => {
-                if (IsPlayerConnected(localVictimId)) {
-                    Console.WriteLine($"[DEBUG] Sending delayed damage report to player {localVictimId} ({playerName[localVictimId]}).");
-                    DisplayDamageReport(localVictimId);
-                } else {
-                    Console.WriteLine($"[DEBUG] Player {localVictimId} disconnected before damage report could be sent.");
-                }
-            });
+        // Skip if the round has ended or the player was already reported
+        if (victimId < 0 || !IsPlayerConnected(victimId) || reportedPlayers.Contains(victimId)) {
+            Console.WriteLine($"[DEBUG] Player {victimId} skipped in OnPlayerDeath (round ended or already reported).");
+            return HookResult.Continue;
         }
+
+        Console.WriteLine($"[DEBUG] Player {victimId} was killed. Scheduling damage report...");
+
+        // Schedule the damage report
+        int localVictimId = victimId; // Capture the victimId
+        osbase.AddTimer(2.0f, () => {
+            if (IsPlayerConnected(localVictimId) && !reportedPlayers.Contains(localVictimId)) {
+                Console.WriteLine($"[DEBUG] Sending delayed damage report to player {localVictimId} ({playerName[localVictimId]}).");
+                DisplayDamageReport(localVictimId);
+
+                // Mark player as reported
+                reportedPlayers.Add(localVictimId);
+            } else {
+                Console.WriteLine($"[DEBUG] Player {localVictimId} disconnected or already reported.");
+            }
+        });
 
         return HookResult.Continue;
     }
@@ -141,16 +148,19 @@ public class DamageReportModule : IModule {
         foreach (var player in playersList) {
             int playerId = player.UserId ?? -1;
 
-            // Check if the player is valid and hasn't already received their report
+            // Check if the player is valid and hasn't already been reported
             if (player.IsValid && 
                 !player.IsHLTV && 
-                player.UserId.HasValue &&
-                !HasBeenKilled(playerId)) {
+                player.UserId.HasValue && 
+                !reportedPlayers.Contains(playerId)) {
                 
                 Console.WriteLine($"[DEBUG] --- {player.PlayerName} sent...");
                 DisplayDamageReport(playerId);
+
+                // Mark player as reported
+                reportedPlayers.Add(playerId);
             } else {
-                Console.WriteLine($"[DEBUG] --- {player.PlayerName} skipped (already received or invalid).");
+                Console.WriteLine($"[DEBUG] --- {player.PlayerName} skipped (already reported or invalid).");
             }
         }
 
@@ -335,5 +345,7 @@ public class DamageReportModule : IModule {
         Array.Clear(hitboxTaken, 0, hitboxTaken.Length);
         Array.Clear(hitboxTakenDamage, 0, hitboxTakenDamage.Length);
         Array.Clear(killedPlayer, 0, killedPlayer.Length);
+        reportedPlayers.Clear();
+        Console.WriteLine("[DEBUG] Reset reported players.");
     }
 }
