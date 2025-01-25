@@ -17,7 +17,6 @@ public class DemosModule : IModule {
     public string ModuleName => "DemosModule";   
      private OSBase? osbase;
     private ConfigModule? config;
-    private bool isWarmup = true;
 
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
         osbase = inOsbase;
@@ -35,8 +34,6 @@ public class DemosModule : IModule {
     }
 
     private void OnMapEnd() {
-        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Running end of map commands...");
-
         if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
             osbase?.SendCommand("tv_stoprecord");
             osbase?.SendCommand("tv_enable 0");
@@ -45,9 +42,6 @@ public class DemosModule : IModule {
     }
 
     private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-        if (!isWarmup) return HookResult.Continue;
-
-        isWarmup = false;
         if (config != null && config.GetGlobalConfigValue("autorecord", "0") == "1") {
             string date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             Server.ExecuteCommand("tv_enable 1");
@@ -61,8 +55,6 @@ public class DemosModule : IModule {
     }
 
     private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
-        // Add any additional logic for match end event here
-        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Running end of map commands...");
         if (config?.GetGlobalConfigValue("autorecord", "0") == "1") {
             osbase?.SendCommand("tv_stoprecord");
             osbase?.SendCommand("tv_enable 0");
