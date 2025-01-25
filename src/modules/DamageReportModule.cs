@@ -98,11 +98,6 @@ public class DamageReportModule : IModule {
         hitboxTaken[victim, attacker, hitgroup]++;
         hitboxTakenDamage[victim, attacker, hitgroup] += damage;
 
-        // Debug logs
-        Console.WriteLine($"[DEBUG] Damage recorded: Attacker {attacker} -> Victim {victim}, Damage: {damage}, HitGroup: {hitgroup}");
-        Console.WriteLine($"[DEBUG] hitboxGiven[{attacker}, {victim}, {hitgroup}] = {hitboxGiven[attacker, victim, hitgroup]}");
-        Console.WriteLine($"[DEBUG] hitboxTaken[{victim}, {attacker}, {hitgroup}] = {hitboxTaken[victim, attacker, hitgroup]}");
-
         return HookResult.Continue;
     }
 
