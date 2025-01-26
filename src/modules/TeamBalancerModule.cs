@@ -20,7 +20,7 @@ public class TeamBalancerModule : IModule {
     private ConfigModule? config;
     private const int TEAM_T = (int)CsTeam.Terrorist; // TERRORIST team ID
     private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // COUNTER-TERRORIST team ID
-    float delay = 5.0f;
+    //float delay = 5.0f;
 
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
         osbase = inOsbase;

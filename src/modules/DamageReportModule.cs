@@ -16,21 +16,20 @@ public class DamageReportModule : IModule {
     private const int MaxPlayers = 64;
     private const int MaxHitGroups = 10;
 
-    // 2D arrays to track damage and hits between players
-    private int[,] damageGiven = new int[MaxPlayers + 1, MaxPlayers + 1];
-    private int[,] hitsGiven = new int[MaxPlayers + 1, MaxPlayers + 1];
-
     // 3D arrays to track hitbox-specific data
-    private int[,,] hitboxGiven = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
-    private int[,,] hitboxGivenDamage = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
 
-    private int[,] damageTaken = new int[MaxPlayers + 1, MaxPlayers + 1];
-    private int[,] hitsTaken = new int[MaxPlayers + 1, MaxPlayers + 1];
-    private int[,,] hitboxTaken = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
-    private int[,,] hitboxTakenDamage = new int[MaxPlayers + 1, MaxPlayers + 1, MaxHitGroups + 1];
-    private int[,] killedPlayer = new int[MaxPlayers + 1, MaxPlayers + 1]; // Tracks kills between players
+    private Dictionary<int, HashSet<int>> killedPlayer = new();
+    private Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxGivenDamage = new();
+    private Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxTakenDamage = new();
+    private Dictionary<int, Dictionary<int, int>> damageGiven = new Dictionary<int, Dictionary<int, int>>();
+    private Dictionary<int, Dictionary<int, int>> damageTaken = new Dictionary<int, Dictionary<int, int>>();
+    private Dictionary<int, Dictionary<int, int>> hitsGiven = new Dictionary<int, Dictionary<int, int>>();
+    private Dictionary<int, Dictionary<int, int>> hitsTaken = new Dictionary<int, Dictionary<int, int>>();
+    private Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxGiven = new Dictionary<int, Dictionary<int, Dictionary<int, int>>>();
+    private Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxTaken = new Dictionary<int, Dictionary<int, Dictionary<int, int>>>();
 
-    private string[] playerName = new string[MaxPlayers + 1]; // Stores player names
+    private Dictionary<int, string> playerNames = new Dictionary<int, string>();
+
 
     private HashSet<int> reportedPlayers = new HashSet<int>();
 
@@ -47,11 +46,6 @@ public class DamageReportModule : IModule {
     // Module initialization method
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
         osbase = inOsbase; // Set the OSBase reference
-
-        // Initialize player names to "Unknown"
-        for (int i = 0; i <= MaxPlayers; i++) {
-            playerName[i] = "Unknown";
-        }
 
         // Register event handlers for various game events
         osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
@@ -77,56 +71,52 @@ public class DamageReportModule : IModule {
         int damage = eventInfo.DmgHealth;
         int hitgroup = eventInfo.Hitgroup;
 
-        // Check if this is a slap (environmental damage)
+        // Assign environmental damage
         if (attacker == victim && eventInfo.Weapon == "world") {
-            Console.WriteLine($"[DEBUG] Slap detected. Assigning damage to environment.");
-            attacker = ENVIRONMENT; // Assign damage to environment
+            attacker = ENVIRONMENT;
         }
 
-        // Validate hitgroup index
-        if (hitgroup < 0 || hitgroup >= MaxHitGroups) {
-            Console.WriteLine($"[ERROR] Invalid hitgroup: {hitgroup}. Skipping hitgroup update.");
-            return HookResult.Continue;
-        }
+        // Initialize dictionaries for attacker and victim
+        if (!damageGiven.ContainsKey(attacker)) damageGiven[attacker] = new Dictionary<int, int>();
+        if (!damageTaken.ContainsKey(victim)) damageTaken[victim] = new Dictionary<int, int>();
+        if (!hitsGiven.ContainsKey(attacker)) hitsGiven[attacker] = new Dictionary<int, int>();
+        if (!hitsTaken.ContainsKey(victim)) hitsTaken[victim] = new Dictionary<int, int>();
+        if (!hitboxGiven.ContainsKey(attacker)) hitboxGiven[attacker] = new Dictionary<int, Dictionary<int, int>>();
+        if (!hitboxTaken.ContainsKey(victim)) hitboxTaken[victim] = new Dictionary<int, Dictionary<int, int>>();
+        if (!hitboxGiven[attacker].ContainsKey(victim)) hitboxGiven[attacker][victim] = new Dictionary<int, int>();
+        if (!hitboxTaken[victim].ContainsKey(attacker)) hitboxTaken[victim][attacker] = new Dictionary<int, int>();
 
-        // Track damage and hits
-        damageGiven[attacker, victim] += damage;
-        damageTaken[victim, attacker] += damage;
-        hitsGiven[attacker, victim]++;
-        hitsTaken[victim, attacker]++;
-        hitboxGiven[attacker, victim, hitgroup]++;
-        hitboxGivenDamage[attacker, victim, hitgroup] += damage;
-        hitboxTaken[victim, attacker, hitgroup]++;
-        hitboxTakenDamage[victim, attacker, hitgroup] += damage;
+        // Track damage
+        damageGiven[attacker][victim] = damageGiven[attacker].GetValueOrDefault(victim, 0) + damage;
+        damageTaken[victim][attacker] = damageTaken[victim].GetValueOrDefault(attacker, 0) + damage;
+
+        // Track hits
+        hitsGiven[attacker][victim] = hitsGiven[attacker].GetValueOrDefault(victim, 0) + 1;
+        hitsTaken[victim][attacker] = hitsTaken[victim].GetValueOrDefault(attacker, 0) + 1;
+
+        // Track hitbox-specific data
+        hitboxGiven[attacker][victim][hitgroup] = hitboxGiven[attacker][victim].GetValueOrDefault(hitgroup, 0) + 1;
+        hitboxTaken[victim][attacker][hitgroup] = hitboxTaken[victim][attacker].GetValueOrDefault(hitgroup, 0) + 1;
 
         return HookResult.Continue;
     }
 
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        CCSPlayerController? victim = eventInfo.Userid;
-        CCSPlayerController? attacker = eventInfo.Attacker;
         int victimId = eventInfo.Userid?.UserId ?? -1;
         int attackerId = eventInfo.Attacker?.UserId ?? -1;
 
-
-        // Skip if the round has ended or the player was already reported
-        if (osbase == null || victim == null || victimId < 0 || !IsPlayerConnected(victimId)) {
-            return HookResult.Continue;
-        }
-
         if (attackerId >= 0 && victimId >= 0) {
-            killedPlayer[attackerId, victimId] = 1;
+            if (!killedPlayer.ContainsKey(attackerId)) {
+                killedPlayer[attackerId] = new HashSet<int>();
+            }
+            killedPlayer[attackerId].Add(victimId);
         }
 
-        Console.WriteLine($"[DEBUG] Player {victimId} was killed. Scheduling damage report...");
-
-        // Schedule the damage report
-        osbase.AddTimer(delay, () => {
-            Console.WriteLine($"[DEBUG] Sending delayed damage report to player {victimId} ({playerName[victimId]}).");
-            DisplayDamageReport(victim);
-        });
-
+        // Schedule damage report
+        if (eventInfo.Userid != null) {
+            osbase?.AddTimer(delay, () => DisplayDamageReport(eventInfo.Userid));
+        }
         return HookResult.Continue;
     }
     // Event handler for round start
@@ -189,8 +179,11 @@ public class DamageReportModule : IModule {
 
                 if (player.UserId.HasValue) {
                     int playerId = player.UserId.Value;
-                    playerName[playerId] = string.IsNullOrEmpty(player.PlayerName) ? "Bot" : player.PlayerName;
-                    Console.WriteLine($"[DEBUG] Updated player name: ID={playerId}, Name={playerName[playerId]}");
+
+                    // Add or update the player's name in the dictionary
+                    playerNames[playerId] = string.IsNullOrEmpty(player.PlayerName) ? "Bot" : player.PlayerName;
+
+                    Console.WriteLine($"[DEBUG] Updated player name: ID={playerId}, Name={playerNames[playerId]}");
                 } else {
                     Console.WriteLine("[DEBUG] Player does not have a UserId.");
                 }
@@ -202,45 +195,36 @@ public class DamageReportModule : IModule {
 
     // Display damage report for a specific player
     private void DisplayDamageReport(CCSPlayerController player) {
-        if ( player == null || player.UserId == null ) {
-            Console.WriteLine("[ERROR] Invalid player or player ID in DisplayDamageReport.");
-            return;
-        }
+        if (player == null || player.UserId == null) return;
         int playerId = player.UserId.Value;
-        bool hasVictimData = HasVictims(playerId);
-        bool hasAttackerData = HasAttackers(playerId);
 
-        if ( reportedPlayers.Contains(player.UserId.Value) ) {
-            return;
-        }
-
-        // Mark player as reported so we dont report to them again
+        if (reportedPlayers.Contains(playerId)) return;
         reportedPlayers.Add(playerId);
 
-        // Only send the title if there's any data to show
+        bool hasVictimData = damageGiven.ContainsKey(playerId) && damageGiven[playerId].Count > 0;
+        bool hasAttackerData = damageTaken.ContainsKey(playerId) && damageTaken[playerId].Count > 0;
+
         if (hasVictimData || hasAttackerData) {
             player.PrintToChat("===[ Damage Report (hits:damage) ]===");
         }
 
-        // Victims Section
         if (hasVictimData) {
-            player.PrintToChat($"Victims ({TotalHitsGiven(playerId)} hits, {TotalDamageGiven(playerId)} damage):");
-            for (int victim = 0; victim <= MaxPlayers; victim++) {
-                if (IsVictim(playerId, victim)) {
-                    string victimInfo = FetchVictimDamageInfo(playerId, victim);
-                    player.PrintToChat($" - {victimInfo}");
-                }
+            player.PrintToChat($"Victims:");
+            foreach (var victim in damageGiven[playerId]) {
+                string victimName = playerNames.GetValueOrDefault(victim.Key, "Unknown");
+                int hits = hitsGiven[playerId].GetValueOrDefault(victim.Key, 0);
+                int damage = victim.Value;
+                player.PrintToChat($" - {victimName}: {hits} hits, {damage} damage");
             }
         }
 
-        // Attackers Section
         if (hasAttackerData) {
-            player.PrintToChat($"Attackers ({TotalHitsTaken(playerId)} hits, {TotalDamageTaken(playerId)} damage):");
-            for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
-                if (IsVictim(attacker, playerId)) {
-                    string attackerInfo = FetchAttackerDamageInfo(attacker, playerId);
-                    player.PrintToChat($" - {attackerInfo}");
-                }
+            player.PrintToChat($"Attackers:");
+            foreach (var attacker in damageTaken[playerId]) {
+                string attackerName = playerNames.GetValueOrDefault(attacker.Key, "Unknown");
+                int hits = hitsTaken[playerId].GetValueOrDefault(attacker.Key, 0);
+                int damage = attacker.Value;
+                player.PrintToChat($" - {attackerName}: {hits} hits, {damage} damage");
             }
         }
     }
@@ -248,51 +232,82 @@ public class DamageReportModule : IModule {
     // Calculate the total damage a player has given
     private int TotalDamageGiven(int playerId) {
         int total = 0;
-        for (int victim = 0; victim <= MaxPlayers; victim++) {
-            total += damageGiven[playerId, victim];
+
+        // Check if the player has given damage
+        if (damageGiven.ContainsKey(playerId)) {
+            foreach (var victimEntry in damageGiven[playerId]) {
+                total += victimEntry.Value; // Sum the damage given to each victim
+            }
         }
+
         return total;
     }
 
     // Calculate the total hits a player has given
     private int TotalHitsGiven(int playerId) {
         int total = 0;
-        for (int victim = 0; victim <= MaxPlayers; victim++) {
-            total += hitsGiven[playerId, victim];
+
+        // Check if the player has hit other players
+        if (hitsGiven.ContainsKey(playerId)) {
+            foreach (var victimEntry in hitsGiven[playerId]) {
+                total += victimEntry.Value; // Sum the hits given to each victim
+            }
         }
+
         return total;
     }
 
     // Calculate the total damage a player has taken
     private int TotalDamageTaken(int playerId) {
         int total = 0;
-        for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
-            total += damageTaken[playerId, attacker];
+
+        // Check if the player has taken damage
+        if (damageTaken.ContainsKey(playerId)) {
+            foreach (var attackerEntry in damageTaken[playerId]) {
+                total += attackerEntry.Value; // Sum the damage taken from each attacker
+            }
         }
+
         return total;
     }
 
     // Calculate the total hits a player has taken
     private int TotalHitsTaken(int playerId) {
         int total = 0;
-        for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
-            total += hitsTaken[playerId, attacker];
+
+        // Check if the player has been hit
+        if (hitsTaken.ContainsKey(playerId)) {
+            foreach (var attackerEntry in hitsTaken[playerId]) {
+                total += attackerEntry.Value; // Sum the hits taken from each attacker
+            }
         }
+
         return total;
     }
 
     // Fetch detailed damage info for a victim
     private string FetchVictimDamageInfo(int attacker, int victim) {
-        string info = $"{playerName[victim]}";
+        // Start building the info string with the victim's name
+        string info = $"{(playerNames.ContainsKey(victim) ? playerNames[victim] : "Unknown")}";
 
-        if (killedPlayer[attacker, victim] == 1) {
+        // Check if the attacker killed the victim
+        if (killedPlayer.ContainsKey(attacker) && killedPlayer[attacker].Contains(victim)) {
             info += " (Killed)";
         }
 
         info += $": ";
-        for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
-            if (hitboxGiven[attacker, victim, hitGroup] > 0) {
-                info += $"{hitboxName[hitGroup]} {hitboxGiven[attacker, victim, hitGroup]}:{hitboxGivenDamage[attacker, victim, hitGroup]}, ";
+
+        // Loop through hit groups to gather hitbox data
+        if (hitboxGiven.ContainsKey(attacker) && 
+            hitboxGiven[attacker].ContainsKey(victim) &&
+            hitboxGivenDamage.ContainsKey(attacker) && 
+            hitboxGivenDamage[attacker].ContainsKey(victim)) 
+        {
+            for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
+                if (hitboxGiven[attacker][victim].ContainsKey(hitGroup) && 
+                    hitboxGiven[attacker][victim][hitGroup] > 0) {
+                    info += $"{hitboxName[hitGroup]} {hitboxGiven[attacker][victim][hitGroup]}:{hitboxGivenDamage[attacker][victim][hitGroup]}, ";
+                }
             }
         }
 
@@ -301,58 +316,64 @@ public class DamageReportModule : IModule {
     }
 
     // Fetch detailed damage info for an attacker
-    private string FetchAttackerDamageInfo(int attacker, int victim) {
-        string info = $"{playerName[attacker]}";
+private string FetchAttackerDamageInfo(int attacker, int victim) {
+    // Start building the info string with the attacker's name
+    string info = $"{(playerNames.ContainsKey(attacker) ? playerNames[attacker] : "Unknown")}";
 
-        if (killedPlayer[attacker, victim] == 1) {
-            info += " (Killed by)";
-        }
+    // Check if the attacker killed the victim
+    if (killedPlayer.ContainsKey(attacker) && killedPlayer[attacker].Contains(victim)) {
+        info += " (Killed by)";
+    }
 
-        info += $": ";
+    info += $": ";
+
+    // Loop through hit groups to gather hitbox data
+    if (hitboxTaken.ContainsKey(victim) && 
+        hitboxTaken[victim].ContainsKey(attacker) &&
+        hitboxTakenDamage.ContainsKey(victim) && 
+        hitboxTakenDamage[victim].ContainsKey(attacker)) 
+    {
         for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
-            if (hitboxTaken[victim, attacker, hitGroup] > 0) {
-                info += $"{hitboxName[hitGroup]} {hitboxTaken[victim, attacker, hitGroup]}:{hitboxTakenDamage[victim, attacker, hitGroup]}, ";
+            if (hitboxTaken[victim][attacker].ContainsKey(hitGroup) && 
+                hitboxTaken[victim][attacker][hitGroup] > 0) {
+                info += $"{hitboxName[hitGroup]} {hitboxTaken[victim][attacker][hitGroup]}:{hitboxTakenDamage[victim][attacker][hitGroup]}, ";
             }
         }
-
-        // Trim trailing comma and space
-        return info.TrimEnd(',', ' ');
     }
+
+    // Trim trailing comma and space
+    return info.TrimEnd(',', ' ');
+}
 
     // Check if a player has inflicted damage on others
     private bool HasVictims(int playerId) {
-        for (int victim = 0; victim <= MaxPlayers; victim++) {
-            if (damageGiven[playerId, victim] > 0) 
-                return true;
-        }
-        return false;
+        // Check if the player exists in the `damageGiven` dictionary and has inflicted damage on any victim
+        return damageGiven.ContainsKey(playerId) && damageGiven[playerId].Count > 0;
     }
 
     // Check if a player has taken damage from others
     private bool HasAttackers(int playerId) {
-        for (int attacker = 0; attacker <= MaxPlayers; attacker++) {
-            if (damageTaken[playerId, attacker] > 0) 
-                return true;
-        }
-        return false;
+        // Check if the player exists in the `damageTaken` dictionary and has taken damage from any attacker
+        return damageTaken.ContainsKey(playerId) && damageTaken[playerId].Count > 0;
     }
 
     // Check if a player is a victim of another player
     private bool IsVictim(int attacker, int victim) {
-        return damageGiven[attacker, victim] > 0;
+        // Check if the attacker exists in the `damageGiven` dictionary and has inflicted damage on the victim
+        return damageGiven.ContainsKey(attacker) && 
+            damageGiven[attacker].ContainsKey(victim) && 
+            damageGiven[attacker][victim] > 0;
     }
 
     // Helper method to clear all damage-related data
     private void ClearDamageData() {
-        Array.Clear(damageGiven, 0, damageGiven.Length);
-        Array.Clear(damageTaken, 0, damageTaken.Length);
-        Array.Clear(hitsGiven, 0, hitsGiven.Length);
-        Array.Clear(hitsTaken, 0, hitsTaken.Length);
-        Array.Clear(hitboxGiven, 0, hitboxGiven.Length);
-        Array.Clear(hitboxGivenDamage, 0, hitboxGivenDamage.Length);
-        Array.Clear(hitboxTaken, 0, hitboxTaken.Length);
-        Array.Clear(hitboxTakenDamage, 0, hitboxTakenDamage.Length);
-        Array.Clear(killedPlayer, 0, killedPlayer.Length);
+        damageGiven.Clear();
+        damageTaken.Clear();
+        hitsGiven.Clear();
+        hitsTaken.Clear();
+        hitboxGiven.Clear();
+        hitboxTaken.Clear();
+        killedPlayer.Clear();
         reportedPlayers.Clear();
     }
 }
