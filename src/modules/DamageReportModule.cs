@@ -58,7 +58,8 @@ public class DamageReportModule : IModule {
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
         osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-        osbase.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
+        osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
@@ -107,7 +108,7 @@ public class DamageReportModule : IModule {
         int victimId = eventInfo.Userid?.UserId ?? -1;
 
         // Skip if the round has ended or the player was already reported
-        if (osbase == null || victim == null || victimId < 0 || !IsPlayerConnected(victimId) || reportedPlayers.Contains(victimId)) {
+        if (osbase == null || victim == null || victimId < 0 || !IsPlayerConnected(victimId)) {
             return HookResult.Continue;
         }
 
@@ -115,15 +116,8 @@ public class DamageReportModule : IModule {
 
         // Schedule the damage report
         osbase.AddTimer(delay, () => {
-            if (IsPlayerConnected(victimId) && !reportedPlayers.Contains(victimId)) {
-                Console.WriteLine($"[DEBUG] Sending delayed damage report to player {victimId} ({playerName[victimId]}).");
-                DisplayDamageReport(victim);
-
-                // Mark player as reported
-                reportedPlayers.Add(victimId);
-            } else {
-                Console.WriteLine($"[DEBUG] Player {victimId} disconnected or already reported.");
-            }
+            Console.WriteLine($"[DEBUG] Sending delayed damage report to player {victimId} ({playerName[victimId]}).");
+            DisplayDamageReport(victim);
         });
 
         return HookResult.Continue;
@@ -144,8 +138,7 @@ public class DamageReportModule : IModule {
             foreach (var player in playersList) {
                 if (player.IsValid &&
                     !player.IsHLTV &&
-                    player.UserId.HasValue &&
-                    !reportedPlayers.Contains(player.UserId.Value) ) {
+                    player.UserId.HasValue ) {
                     DisplayDamageReport(player);
                 } 
             }
@@ -166,7 +159,7 @@ public class DamageReportModule : IModule {
     }
 
     // Event handler for player connect
-    private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
         UpdatePlayerNames(); // Refresh player names upon connection
         return HookResult.Continue;
     }
@@ -209,6 +202,13 @@ public class DamageReportModule : IModule {
         int playerId = player.UserId.Value;
         bool hasVictimData = HasVictims(playerId);
         bool hasAttackerData = HasAttackers(playerId);
+
+        if ( reportedPlayers.Contains(player.UserId.Value) ) {
+            return;
+        }
+
+        // Mark player as reported so we dont report to them again
+        reportedPlayers.Add(playerId);
 
         // Only send the title if there's any data to show
         if (hasVictimData || hasAttackerData) {
