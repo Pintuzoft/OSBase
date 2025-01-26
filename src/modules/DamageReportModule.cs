@@ -105,11 +105,18 @@ public class DamageReportModule : IModule {
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         CCSPlayerController? victim = eventInfo.Userid;
+        CCSPlayerController? attacker = eventInfo.Attacker;
         int victimId = eventInfo.Userid?.UserId ?? -1;
+        int attackerId = eventInfo.Attacker?.UserId ?? -1;
+
 
         // Skip if the round has ended or the player was already reported
         if (osbase == null || victim == null || victimId < 0 || !IsPlayerConnected(victimId)) {
             return HookResult.Continue;
+        }
+
+        if (attackerId >= 0 && victimId >= 0) {
+            killedPlayer[attackerId, victimId] = 1;
         }
 
         Console.WriteLine($"[DEBUG] Player {victimId} was killed. Scheduling damage report...");
