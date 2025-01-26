@@ -79,11 +79,11 @@ public class TeamBalancerModule : IModule {
                 CCSPlayerController? player = Utilities.GetPlayerFromUserid(p.Id);
                 
                 if (player != null) {
-                    Console.WriteLine($"[DEBUG] Moving player {player.PlayerName} from team {largerTeam} to {smallerTeam}.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Moving player {player.PlayerName} from team {largerTeam} to {smallerTeam}.");
                     player.ChangeTeam((CsTeam)smallerTeam);
 
                 } else {
-                    Console.WriteLine($"[DEBUG] Player with ID {p.Id} not found.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player with ID {p.Id} not found.");
                 }
             }
         }
