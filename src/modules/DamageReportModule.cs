@@ -228,34 +228,51 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
 
     // Update player names by iterating through active players
     private void UpdatePlayerNames() {
+        Console.WriteLine("[UpdatePlayerNames] 0");
+
         try {
             var playersList = Utilities.GetPlayers();
+        Console.WriteLine("[UpdatePlayerNames] 1");
 
             if (playersList == null) {
+        Console.WriteLine("[UpdatePlayerNames] 2");
                 Console.WriteLine("[ERROR] Players list is null in UpdatePlayerNames.");
                 return;
             }
+        Console.WriteLine("[UpdatePlayerNames] 3");
 
             foreach (var player in playersList) {
+        Console.WriteLine("[UpdatePlayerNames] 4");
                 if (player == null) {
+        Console.WriteLine("[UpdatePlayerNames] 5");
                     Console.WriteLine("[DEBUG] Found null player in players list.");
                     continue;
                 }
+        Console.WriteLine("[UpdatePlayerNames] 6");
 
                 if (player.UserId.HasValue) {
+        Console.WriteLine("[UpdatePlayerNames] 7");
                     int playerId = player.UserId.Value;
+        Console.WriteLine("[UpdatePlayerNames] 8");
 
                     // Add or update the player's name in the dictionary
                     playerNames[playerId] = string.IsNullOrEmpty(player.PlayerName) ? "Bot" : player.PlayerName;
+        Console.WriteLine("[UpdatePlayerNames] 9");
 
                     Console.WriteLine($"[DEBUG] Updated player name: ID={playerId}, Name={playerNames[playerId]}");
+        Console.WriteLine("[UpdatePlayerNames] 10");
                 } else {
+        Console.WriteLine("[UpdatePlayerNames] 11");
                     Console.WriteLine("[DEBUG] Player does not have a UserId.");
                 }
+        Console.WriteLine("[UpdatePlayerNames] 12");
             }
+        Console.WriteLine("[UpdatePlayerNames] 13");
         } catch (Exception ex) {
+        Console.WriteLine("[UpdatePlayerNames] 14");
             Console.WriteLine($"[ERROR] Exception in UpdatePlayerNames: {ex.Message}\n{ex.StackTrace}");
         }
+        Console.WriteLine("[UpdatePlayerNames] 15");
     }
 
     // Display damage report for a specific player
