@@ -148,11 +148,11 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         // Schedule damage report
         if (eventInfo.Userid != null) {
         Console.WriteLine("[OnPlayerDeath] 7");
-            osbase?.AddTimer(delay, () => {
+        //    osbase?.AddTimer(delay, () => {
                 Console.WriteLine("[OnPlayerDeath] 8");
                 DisplayDamageReport(eventInfo.Userid);
                 Console.WriteLine("[OnPlayerDeath] 9");
-            });
+        //    });
         };
         Console.WriteLine("[OnPlayerDeath] 10");
         return HookResult.Continue;
@@ -173,7 +173,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         Console.WriteLine("[OnRoundEnd] 0");
 
         // Add a delay to allow all post-round damage to be recorded
-        osbase?.AddTimer(delay, () => {
+        //osbase?.AddTimer(delay, () => {
         Console.WriteLine("[OnRoundEnd] 1");
             var playersList = Utilities.GetPlayers();
         Console.WriteLine("[OnRoundEnd] 2");
@@ -188,7 +188,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         Console.WriteLine("[OnRoundEnd] 5");
             }
         Console.WriteLine("[OnRoundEnd] 6");
-        });
+        //});
 
         Console.WriteLine("[OnRoundEnd] 7");
         return HookResult.Continue;
