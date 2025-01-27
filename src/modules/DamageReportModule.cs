@@ -26,7 +26,6 @@ public class DamageReportModule : IModule {
 
     private Dictionary<int, string> playerNames = new Dictionary<int, string>();
 
-
     private HashSet<int> reportedPlayers = new HashSet<int>();
 
     // Constant to represent environmental kills
@@ -37,7 +36,7 @@ public class DamageReportModule : IModule {
         "Body", "Head", "Chest", "Stomach", "L-Arm", "R-Arm", "L-Leg", "R-Leg", "Neck", "Unknown", "Gear"
     };
 
-    float delay = 1.0f; // Delay in seconds before sending damage reports
+    float delay = 0.0f; // Delay in seconds before sending damage reports
 
     // Module initialization method
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
@@ -149,9 +148,13 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         // Schedule damage report
         if (eventInfo.Userid != null) {
         Console.WriteLine("[OnPlayerDeath] 7");
-            osbase?.AddTimer(delay, () => DisplayDamageReport(eventInfo.Userid));
-        }
-        Console.WriteLine("[OnPlayerDeath] 8");
+            osbase?.AddTimer(delay, () => {
+                Console.WriteLine("[OnPlayerDeath] 8");
+                DisplayDamageReport(eventInfo.Userid);
+                Console.WriteLine("[OnPlayerDeath] 9");
+            });
+        };
+        Console.WriteLine("[OnPlayerDeath] 10");
         return HookResult.Continue;
     }
     // Event handler for round start
@@ -210,6 +213,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
         Console.WriteLine("[OnPlayerConnectFull] 0");
         UpdatePlayerNames(); // Refresh player names upon connection
+        Console.WriteLine("[OnPlayerConnectFull] 1");
         return HookResult.Continue;
     }
 
