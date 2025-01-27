@@ -428,14 +428,23 @@ private string FetchAttackerDamageInfo(int attacker, int victim) {
 
     // Helper method to clear all damage-related data
     private void ClearDamageData() {
+        Console.WriteLine("[ClearDamageData] 0");
         damageGiven.Clear();
+        Console.WriteLine("[ClearDamageData] 1");
         damageTaken.Clear();
+        Console.WriteLine("[ClearDamageData] 2");
         hitsGiven.Clear();
+        Console.WriteLine("[ClearDamageData] 3");
         hitsTaken.Clear();
+        Console.WriteLine("[ClearDamageData] 4");
         hitboxGiven.Clear();
+        Console.WriteLine("[ClearDamageData] 5");
         hitboxTaken.Clear();
+        Console.WriteLine("[ClearDamageData] 6");
         killedPlayer.Clear();
+        Console.WriteLine("[ClearDamageData] 7");
         reportedPlayers.Clear();
+        Console.WriteLine("[ClearDamageData] 8");
     }
     private void OnPlayerDisconnect(int playerId) {
         damageGiven.Remove(playerId);
