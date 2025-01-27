@@ -116,7 +116,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
 }
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-
+        CCSPlayerController? player = eventInfo.Userid;
         int victimId = eventInfo.Userid?.UserId ?? -1;
         int attackerId = eventInfo.Attacker?.UserId ?? -1;
 
@@ -127,17 +127,25 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
             killedPlayer[attackerId].Add(victimId);
         }
 
-        // Schedule damage report
-        if (eventInfo.Userid != null) {
-            osbase?.AddTimer(delay, () => {
-                DisplayDamageReport(eventInfo.Userid);
-            });
-        };
+        // Schedule damage report    
+        if (player != null && player.UserId.HasValue) {
+            scheduleDamageReport(player);
+        }
+
         return HookResult.Continue;
     }
+
+    private void scheduleDamageReport(CCSPlayerController player) {
+        if (player != null && player.UserId.HasValue && ! reportedPlayers.Contains(player.UserId.Value)) {
+            reportedPlayers.Add(player.UserId.Value);
+            osbase?.AddTimer(delay, () => {
+                DisplayDamageReport(player);
+            });
+        }
+    }
+
     // Event handler for round start
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
-
         ClearDamageData(); // Reset all damage data
         UpdatePlayerNames(); // Refresh player names
         return HookResult.Continue;
@@ -152,9 +160,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
             if (player.IsValid &&
                 !player.IsHLTV &&
                 player.UserId.HasValue ) {
-                osbase?.AddTimer(delay, () => {
-                    DisplayDamageReport(player);
-                });
+                scheduleDamageReport(player);
             } 
         }
 
@@ -216,58 +222,46 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         if (player == null || player.UserId == null) return;
         int playerId = player.UserId.Value;
 
-        if (reportedPlayers.Contains(playerId)) return;
-        reportedPlayers.Add(playerId);
-
         bool hasVictimData = damageGiven.ContainsKey(playerId) && damageGiven[playerId].Count > 0;
         bool hasAttackerData = damageTaken.ContainsKey(playerId) && damageTaken[playerId].Count > 0;
 
         if (hasVictimData || hasAttackerData) {
             report.Add($"===[ Damage Report (hits:damage) ]===");
-//            Console.WriteLine($"===[ Damage Report for {playerNames.GetValueOrDefault(playerId, "Unknown")} ]===");
-//            player.PrintToChat("===[ Damage Report (hits:damage) ]===");
         }
 
         if (hasVictimData) {
             report.Add($"Victims:");
             Console.WriteLine($"Victims:");
-//            player.PrintToChat($"Victims:");
             foreach (var victim in damageGiven[playerId]) {
                 string victimName = playerNames.GetValueOrDefault(victim.Key, "Unknown");
                 int hits = hitsGiven[playerId].GetValueOrDefault(victim.Key, 0);
                 int damage = victim.Value;
                 report.Add($" - {victimName}: {hits} hits, {damage} damage");
-//                Console.WriteLine($" - {victimName}: {hits} hits, {damage} damage");
-//                player.PrintToChat($" - {victimName}: {hits} hits, {damage} damage");
             }
         }
 
         if (hasAttackerData) {
             report.Add($"Attackers:");
             Console.WriteLine($"Attackers:");
-//            player.PrintToChat($"Attackers:");
             foreach (var attacker in damageTaken[playerId]) {
                 string attackerName = playerNames.GetValueOrDefault(attacker.Key, "Unknown");
                 int hits = hitsTaken[playerId].GetValueOrDefault(attacker.Key, 0);
                 int damage = attacker.Value;
                 report.Add($" - {attackerName}: {hits} hits, {damage} damage");
-//                Console.WriteLine($" - {attackerName}: {hits} hits, {damage} damage");
-//                player.PrintToChat($" - {attackerName}: {hits} hits, {damage} damage");
             }
         }
         if ( report.Count > 0 ) {
-            osbase?.AddTimer(delay, () => {
-                foreach (var line in report) {
-                    Console.WriteLine(line);
-                    //player.PrintToChat(line);
-                }
-            });
+            foreach (string line in report) {
+                Console.WriteLine(line);
+                // player.PrintToChat(line);
+            }
         }
     }
 
 
     // Helper method to clear all damage-related data
     private void ClearDamageData() {
+        Console.WriteLine("[DEBUG] Clearing damage data...");
         damageGiven.Clear();
         damageTaken.Clear();
         hitsGiven.Clear();
@@ -278,6 +272,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         reportedPlayers.Clear();
     }
     private void OnPlayerDisconnect(int playerId) {
+        Console.WriteLine($"[DEBUG] Player disconnected: ID={playerId}");
         damageGiven.Remove(playerId);
         damageTaken.Remove(playerId);
         hitsGiven.Remove(playerId);
