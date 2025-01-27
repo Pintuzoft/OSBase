@@ -37,7 +37,7 @@ public class DamageReportModule : IModule {
         "Body", "Head", "Chest", "Stomach", "L-Arm", "R-Arm", "L-Leg", "R-Leg", "Neck", "Unknown", "Gear"
     };
 
-    float delay = 3.0f; // Delay in seconds before sending damage reports
+    float delay = 1.0f; // Delay in seconds before sending damage reports
 
     // Module initialization method
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
