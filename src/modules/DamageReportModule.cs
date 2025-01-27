@@ -129,9 +129,9 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
 
         // Schedule damage report
         if (eventInfo.Userid != null) {
-            osbase?.AddTimer(delay, () => {
+//            osbase?.AddTimer(delay, () => {
                 DisplayDamageReport(eventInfo.Userid);
-            });
+//            });
         };
         return HookResult.Continue;
     }
@@ -147,7 +147,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
 
         // Add a delay to allow all post-round damage to be recorded
-        osbase?.AddTimer(delay, () => {
+//        osbase?.AddTimer(delay, () => {
             var playersList = Utilities.GetPlayers();
             foreach (var player in playersList) {
                 if (player.IsValid &&
@@ -156,7 +156,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
                     DisplayDamageReport(player);
                 } 
             }
-        });
+//        });
 
         return HookResult.Continue;
     }
@@ -256,12 +256,12 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
             }
         }
         if ( report.Count > 0 ) {
-//            osbase?.AddTimer(delay, () => {
+            osbase?.AddTimer(delay, () => {
                 foreach (var line in report) {
                     Console.WriteLine(line);
                     //player.PrintToChat(line);
                 }
-//            });
+            });
         }
     }
 
