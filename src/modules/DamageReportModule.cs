@@ -59,78 +59,77 @@ public class DamageReportModule : IModule {
     }
 
     // Event handler for player hurt event
-    private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine("[OnPlayerHurt] 0");
+private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
+    Console.WriteLine("[OnPlayerHurt] 0");
 
-        try {
-            // Validate attacker and victim
-            if (eventInfo.Attacker?.UserId == null || eventInfo.Userid?.UserId == null) {
-        Console.WriteLine("[OnPlayerHurt] 1");
-                Console.WriteLine("[ERROR] Missing attacker or victim in OnPlayerHurt.");
-                return HookResult.Continue;
-            }
-        Console.WriteLine("[OnPlayerHurt] 2");
-
-            int attacker = eventInfo.Attacker.UserId.Value;
-        Console.WriteLine("[OnPlayerHurt] 3");
-            int victim = eventInfo.Userid.UserId.Value;
-        Console.WriteLine("[OnPlayerHurt] 4");
-            int damage = eventInfo.DmgHealth;
-        Console.WriteLine("[OnPlayerHurt] 5");
-            int hitgroup = eventInfo.Hitgroup;
-        Console.WriteLine("[OnPlayerHurt] 6");
-
-            // Assign environmental damage
-            if (attacker == victim && eventInfo.Weapon == "world") {
-        Console.WriteLine("[OnPlayerHurt] 7");
-                attacker = ENVIRONMENT;
-            }
-        Console.WriteLine("[OnPlayerHurt] 8");
-
-            // Initialize dictionaries for attacker and victim
-        Console.WriteLine("[OnPlayerHurt] 9");
-            if (!damageGiven.ContainsKey(attacker)) damageGiven[attacker] = new Dictionary<int, int>();
-        Console.WriteLine("[OnPlayerHurt] 10");
-            if (!damageTaken.ContainsKey(victim)) damageTaken[victim] = new Dictionary<int, int>();
-        Console.WriteLine("[OnPlayerHurt] 11");
-            if (!hitsGiven.ContainsKey(attacker)) hitsGiven[attacker] = new Dictionary<int, int>();
-        Console.WriteLine("[OnPlayerHurt] 12");
-            if (!hitsTaken.ContainsKey(victim)) hitsTaken[victim] = new Dictionary<int, int>();
-        Console.WriteLine("[OnPlayerHurt] 13");
-            if (!hitboxGiven.ContainsKey(attacker)) hitboxGiven[attacker] = new Dictionary<int, Dictionary<int, int>>();
-        Console.WriteLine("[OnPlayerHurt] 14");
-            if (!hitboxTaken.ContainsKey(victim)) hitboxTaken[victim] = new Dictionary<int, Dictionary<int, int>>();
-        Console.WriteLine("[OnPlayerHurt] 15");
-            if (!hitboxGiven[attacker].ContainsKey(victim)) hitboxGiven[attacker][victim] = new Dictionary<int, int>();
-        Console.WriteLine("[OnPlayerHurt] 16");
-            if (!hitboxTaken[victim].ContainsKey(attacker)) hitboxTaken[victim][attacker] = new Dictionary<int, int>();
-        Console.WriteLine("[OnPlayerHurt] 17");
-
-            // Track damage
-            damageGiven[attacker][victim] = damageGiven[attacker].GetValueOrDefault(victim, 0) + damage;
-        Console.WriteLine("[OnPlayerHurt] 18");
-            damageTaken[victim][attacker] = damageTaken[victim].GetValueOrDefault(attacker, 0) + damage;
-        Console.WriteLine("[OnPlayerHurt] 19");
-
-            // Track hits
-            hitsGiven[attacker][victim] = hitsGiven[attacker].GetValueOrDefault(victim, 0) + 1;
-        Console.WriteLine("[OnPlayerHurt] 20");
-            hitsTaken[victim][attacker] = hitsTaken[victim].GetValueOrDefault(attacker, 0) + 1;
-        Console.WriteLine("[OnPlayerHurt] 21");
-
-            // Track hitbox-specific data
-            hitboxGiven[attacker][victim][hitgroup] = hitboxGiven[attacker][victim].GetValueOrDefault(hitgroup, 0) + 1;
-        Console.WriteLine("[OnPlayerHurt] 22");
-            hitboxTaken[victim][attacker][hitgroup] = hitboxTaken[victim][attacker].GetValueOrDefault(hitgroup, 0) + 1;
-        Console.WriteLine("[OnPlayerHurt] 23");
-
-            return HookResult.Continue;
-        } catch (Exception ex) {
-        Console.WriteLine("[OnPlayerHurt] 24");
-            Console.WriteLine($"[ERROR] Exception in OnPlayerHurt: {ex.Message}\n{ex.StackTrace}");
+    try {
+        // Validate attacker and victim
+        if (eventInfo.Attacker == null || eventInfo.Userid == null) {
+            Console.WriteLine("[OnPlayerHurt] 1");
+            Console.WriteLine("[ERROR] Attacker or victim is null in OnPlayerHurt.");
             return HookResult.Continue;
         }
+
+        if (eventInfo.Attacker?.UserId == null && eventInfo.Userid?.UserId == null) {
+            Console.WriteLine("[OnPlayerHurt] 1.5");
+            Console.WriteLine("[ERROR] Both Attacker and Victim UserId are null.");
+            return HookResult.Continue;
+        }
+
+        // Default attacker and victim IDs
+        int attacker = eventInfo.Attacker?.UserId ?? ENVIRONMENT; // Default to ENVIRONMENT if null
+        int victim = eventInfo.Userid?.UserId ?? -1;
+
+        if (victim == -1) {
+            Console.WriteLine("[ERROR] Victim has invalid UserId in OnPlayerHurt.");
+            return HookResult.Continue;
+        }
+
+        Console.WriteLine($"[OnPlayerHurt] Attacker={attacker}, Victim={victim}");
+
+        int damage = eventInfo.DmgHealth;
+        int hitgroup = eventInfo.Hitgroup;
+
+        // Assign environmental damage
+        if (attacker == victim && eventInfo.Weapon == "world") {
+            Console.WriteLine("[OnPlayerHurt] Environmental damage detected.");
+            attacker = ENVIRONMENT;
+        }
+
+        Console.WriteLine("[OnPlayerHurt] Validating data structures.");
+
+        // Initialize dictionaries for attacker and victim
+        if (!damageGiven.ContainsKey(attacker)) damageGiven[attacker] = new Dictionary<int, int>();
+        if (!damageTaken.ContainsKey(victim)) damageTaken[victim] = new Dictionary<int, int>();
+        if (!hitsGiven.ContainsKey(attacker)) hitsGiven[attacker] = new Dictionary<int, int>();
+        if (!hitsTaken.ContainsKey(victim)) hitsTaken[victim] = new Dictionary<int, int>();
+        if (!hitboxGiven.ContainsKey(attacker)) hitboxGiven[attacker] = new Dictionary<int, Dictionary<int, int>>();
+        if (!hitboxTaken.ContainsKey(victim)) hitboxTaken[victim] = new Dictionary<int, Dictionary<int, int>>();
+        if (!hitboxGiven[attacker].ContainsKey(victim)) hitboxGiven[attacker][victim] = new Dictionary<int, int>();
+        if (!hitboxTaken[victim].ContainsKey(attacker)) hitboxTaken[victim][attacker] = new Dictionary<int, int>();
+
+        Console.WriteLine("[OnPlayerHurt] Tracking damage.");
+
+        // Track damage
+        damageGiven[attacker][victim] = damageGiven[attacker].GetValueOrDefault(victim, 0) + damage;
+        damageTaken[victim][attacker] = damageTaken[victim].GetValueOrDefault(attacker, 0) + damage;
+
+        // Track hits
+        hitsGiven[attacker][victim] = hitsGiven[attacker].GetValueOrDefault(victim, 0) + 1;
+        hitsTaken[victim][attacker] = hitsTaken[victim].GetValueOrDefault(attacker, 0) + 1;
+
+        // Track hitbox-specific data
+        hitboxGiven[attacker][victim][hitgroup] = hitboxGiven[attacker][victim].GetValueOrDefault(hitgroup, 0) + 1;
+        hitboxTaken[victim][attacker][hitgroup] = hitboxTaken[victim][attacker].GetValueOrDefault(hitgroup, 0) + 1;
+
+        Console.WriteLine("[OnPlayerHurt] Successfully processed.");
+        return HookResult.Continue;
+    } catch (Exception ex) {
+        Console.WriteLine("[OnPlayerHurt] Exception occurred.");
+        Console.WriteLine($"[ERROR] Exception in OnPlayerHurt: {ex.Message}\n{ex.StackTrace}");
+        return HookResult.Continue;
     }
+}
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         int victimId = eventInfo.Userid?.UserId ?? -1;
