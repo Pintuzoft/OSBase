@@ -139,15 +139,6 @@ public class DamageReportModule : IModule {
         return HookResult.Continue;
     }
 
-    private void scheduleDamageReport(CCSPlayerController player) {
-        if (player != null && player.UserId.HasValue && ! reportedPlayers.Contains(player.UserId.Value)) {
-            reportedPlayers.Add(player.UserId.Value);
-            osbase?.AddTimer(delay, () => {
-                DisplayDamageReport(player);
-            });
-        }
-    }
-
     // Event handler for round start
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
         ClearDamageData(); // Reset all damage data
@@ -217,6 +208,16 @@ public class DamageReportModule : IModule {
             }
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] Exception in UpdatePlayerNames: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+
+    // Schedule a damage report for a specific player
+    private void scheduleDamageReport(CCSPlayerController player) {
+        if (player != null && player.UserId.HasValue && ! reportedPlayers.Contains(player.UserId.Value)) {
+            reportedPlayers.Add(player.UserId.Value);
+            osbase?.AddTimer(delay, () => {
+                DisplayDamageReport(player);
+            });
         }
     }
 
@@ -302,9 +303,9 @@ public class DamageReportModule : IModule {
         // Display the report
         if (report.Count > 0) {
             foreach (string line in report) {
-                Console.WriteLine(line);
+                //Console.WriteLine(line);
                 // Uncomment to send the output to the player's chat
-                // player.PrintToChat(line);
+                player.PrintToChat(line);
             }
         }
     }
