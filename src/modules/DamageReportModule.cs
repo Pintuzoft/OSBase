@@ -229,30 +229,77 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
             report.Add($"===[ Damage Report (hits:damage) ]===");
         }
 
+        // Victim Section
         if (hasVictimData) {
             report.Add($"Victims:");
-            Console.WriteLine($"Victims:");
             foreach (var victim in damageGiven[playerId]) {
                 string victimName = playerNames.GetValueOrDefault(victim.Key, "Unknown");
                 int hits = hitsGiven[playerId].GetValueOrDefault(victim.Key, 0);
                 int damage = victim.Value;
-                report.Add($" - {victimName}: {hits} hits, {damage} damage");
+
+                // Add killed information
+                string killedText = (killedPlayer.ContainsKey(playerId) && killedPlayer[playerId].Contains(victim.Key)) 
+                    ? " (Killed)" 
+                    : "";
+
+                string victimInfo = $" - {victimName}{killedText}: {hits} hits, {damage} damage";
+
+                // Add hit group details
+                if (hitboxGiven.ContainsKey(playerId) && hitboxGiven[playerId].ContainsKey(victim.Key)) {
+                    victimInfo += " [";
+                    foreach (var hitGroup in hitboxGiven[playerId][victim.Key]) {
+                        string hitGroupName = hitboxName[hitGroup.Key];
+                        int hitCount = hitGroup.Value;
+                        int hitDamage = hitboxGivenDamage.GetValueOrDefault(playerId, new Dictionary<int, Dictionary<int, int>>())
+                            .GetValueOrDefault(victim.Key, new Dictionary<int, int>())
+                            .GetValueOrDefault(hitGroup.Key, 0);
+                        victimInfo += $"{hitGroupName} {hitCount}:{hitDamage}, ";
+                    }
+                    victimInfo = victimInfo.TrimEnd(',', ' ') + "]";
+                }
+
+                report.Add(victimInfo);
             }
         }
 
+        // Attacker Section
         if (hasAttackerData) {
             report.Add($"Attackers:");
-            Console.WriteLine($"Attackers:");
             foreach (var attacker in damageTaken[playerId]) {
                 string attackerName = playerNames.GetValueOrDefault(attacker.Key, "Unknown");
                 int hits = hitsTaken[playerId].GetValueOrDefault(attacker.Key, 0);
                 int damage = attacker.Value;
-                report.Add($" - {attackerName}: {hits} hits, {damage} damage");
+
+                // Add killed by information
+                string killedByText = (killedPlayer.ContainsKey(attacker.Key) && killedPlayer[attacker.Key].Contains(playerId)) 
+                    ? " (Killed by)" 
+                    : "";
+
+                string attackerInfo = $" - {attackerName}{killedByText}: {hits} hits, {damage} damage";
+
+                // Add hit group details
+                if (hitboxTaken.ContainsKey(playerId) && hitboxTaken[playerId].ContainsKey(attacker.Key)) {
+                    attackerInfo += " [";
+                    foreach (var hitGroup in hitboxTaken[playerId][attacker.Key]) {
+                        string hitGroupName = hitboxName[hitGroup.Key];
+                        int hitCount = hitGroup.Value;
+                        int hitDamage = hitboxTakenDamage.GetValueOrDefault(playerId, new Dictionary<int, Dictionary<int, int>>())
+                            .GetValueOrDefault(attacker.Key, new Dictionary<int, int>())
+                            .GetValueOrDefault(hitGroup.Key, 0);
+                        attackerInfo += $"{hitGroupName} {hitCount}:{hitDamage}, ";
+                    }
+                    attackerInfo = attackerInfo.TrimEnd(',', ' ') + "]";
+                }
+
+                report.Add(attackerInfo);
             }
         }
-        if ( report.Count > 0 ) {
+
+        // Display the report
+        if (report.Count > 0) {
             foreach (string line in report) {
                 Console.WriteLine(line);
+                // Uncomment to send the output to the player's chat
                 // player.PrintToChat(line);
             }
         }
