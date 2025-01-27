@@ -132,44 +132,66 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
 }
     // Event handler for player death event
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine("[OnPlayerDeath] 0");
+
         int victimId = eventInfo.Userid?.UserId ?? -1;
+        Console.WriteLine("[OnPlayerDeath] 1");
         int attackerId = eventInfo.Attacker?.UserId ?? -1;
+        Console.WriteLine("[OnPlayerDeath] 2");
 
         if (attackerId >= 0 && victimId >= 0) {
+        Console.WriteLine("[OnPlayerDeath] 3");
             if (!killedPlayer.ContainsKey(attackerId)) {
+        Console.WriteLine("[OnPlayerDeath] 4");
                 killedPlayer[attackerId] = new HashSet<int>();
             }
+        Console.WriteLine("[OnPlayerDeath] 5");
             killedPlayer[attackerId].Add(victimId);
         }
+        Console.WriteLine("[OnPlayerDeath] 6");
 
         // Schedule damage report
         if (eventInfo.Userid != null) {
+        Console.WriteLine("[OnPlayerDeath] 7");
             osbase?.AddTimer(delay, () => DisplayDamageReport(eventInfo.Userid));
         }
+        Console.WriteLine("[OnPlayerDeath] 8");
         return HookResult.Continue;
     }
     // Event handler for round start
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine("[OnRoundStart] 0");
+
         ClearDamageData(); // Reset all damage data
+        Console.WriteLine("[OnRoundStart] 1");
         UpdatePlayerNames(); // Refresh player names
+        Console.WriteLine("[OnRoundStart] 2");
         return HookResult.Continue;
     }
 
     // Event handler for round end
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine("[OnRoundEnd] 0");
 
         // Add a delay to allow all post-round damage to be recorded
         osbase?.AddTimer(delay, () => {
+        Console.WriteLine("[OnRoundEnd] 1");
             var playersList = Utilities.GetPlayers();
+        Console.WriteLine("[OnRoundEnd] 2");
             foreach (var player in playersList) {
+        Console.WriteLine("[OnRoundEnd] 3");
                 if (player.IsValid &&
                     !player.IsHLTV &&
                     player.UserId.HasValue ) {
+        Console.WriteLine("[OnRoundEnd] 4");
                     DisplayDamageReport(player);
                 } 
+        Console.WriteLine("[OnRoundEnd] 5");
             }
+        Console.WriteLine("[OnRoundEnd] 6");
         });
 
+        Console.WriteLine("[OnRoundEnd] 7");
         return HookResult.Continue;
     }
 
@@ -184,16 +206,22 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         return false;
     }
     private HookResult OnPlayerDisconnectEvent(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine("[OnPlayerDisconnectEvent] 0");
 
         if (eventInfo.Userid != null) {
+        Console.WriteLine("[OnPlayerDisconnectEvent] 1");
             if (eventInfo.Userid?.UserId != null) {
+        Console.WriteLine("[OnPlayerDisconnectEvent] 2");
                 OnPlayerDisconnect(eventInfo.Userid.UserId.Value);
             }
+        Console.WriteLine("[OnPlayerDisconnectEvent] 3");
         }
+        Console.WriteLine("[OnPlayerDisconnectEvent] 4");
         return HookResult.Continue;
     }
     // Event handler for player connect
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine("[OnPlayerConnectFull] 0");
         UpdatePlayerNames(); // Refresh player names upon connection
         return HookResult.Continue;
     }
@@ -447,14 +475,24 @@ private string FetchAttackerDamageInfo(int attacker, int victim) {
         Console.WriteLine("[ClearDamageData] 8");
     }
     private void OnPlayerDisconnect(int playerId) {
+        Console.WriteLine("[OnPlayerDisconnect] 0");
         damageGiven.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 1");
         damageTaken.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 2");
         hitsGiven.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 3");
         hitsTaken.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 4");
         hitboxGiven.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 5");
         hitboxTaken.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 6");
         killedPlayer.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 7");
         playerNames.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 8");
         reportedPlayers.Remove(playerId);
+        Console.WriteLine("[OnPlayerDisconnect] 9");
     }
 }
