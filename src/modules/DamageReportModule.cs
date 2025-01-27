@@ -12,10 +12,6 @@ public class DamageReportModule : IModule {
     public string ModuleName => "DamageReportModule";
     private OSBase? osbase; // Reference to the main OSBase instance
 
-    // Constants for maximum players and hit groups
-    private const int MaxPlayers = 64;
-    private const int MaxHitGroups = 10;
-
     // 3D arrays to track hitbox-specific data
 
     private Dictionary<int, HashSet<int>> killedPlayer = new();
@@ -195,16 +191,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         return HookResult.Continue;
     }
 
-    // Check if a player is connected
-    private bool IsPlayerConnected(int playerId) {
-        var playersList = Utilities.GetPlayers();
-        foreach (var player in playersList) {
-            if (player.UserId.HasValue && player.UserId.Value == playerId) {
-                return true;
-            }
-        }
-        return false;
-    }
+
     private HookResult OnPlayerDisconnectEvent(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
         Console.WriteLine("[OnPlayerDisconnectEvent] 0");
 
@@ -335,141 +322,6 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         Console.WriteLine("[DisplayDamageReport] 17");
     }
 
-    // Calculate the total damage a player has given
-    private int TotalDamageGiven(int playerId) {
-        int total = 0;
-
-        // Check if the player has given damage
-        if (damageGiven.ContainsKey(playerId)) {
-            foreach (var victimEntry in damageGiven[playerId]) {
-                total += victimEntry.Value; // Sum the damage given to each victim
-            }
-        }
-
-        return total;
-    }
-
-    // Calculate the total hits a player has given
-    private int TotalHitsGiven(int playerId) {
-        int total = 0;
-
-        // Check if the player has hit other players
-        if (hitsGiven.ContainsKey(playerId)) {
-            foreach (var victimEntry in hitsGiven[playerId]) {
-                total += victimEntry.Value; // Sum the hits given to each victim
-            }
-        }
-
-        return total;
-    }
-
-    // Calculate the total damage a player has taken
-    private int TotalDamageTaken(int playerId) {
-        int total = 0;
-
-        // Check if the player has taken damage
-        if (damageTaken.ContainsKey(playerId)) {
-            foreach (var attackerEntry in damageTaken[playerId]) {
-                total += attackerEntry.Value; // Sum the damage taken from each attacker
-            }
-        }
-
-        return total;
-    }
-
-    // Calculate the total hits a player has taken
-    private int TotalHitsTaken(int playerId) {
-        int total = 0;
-
-        // Check if the player has been hit
-        if (hitsTaken.ContainsKey(playerId)) {
-            foreach (var attackerEntry in hitsTaken[playerId]) {
-                total += attackerEntry.Value; // Sum the hits taken from each attacker
-            }
-        }
-
-        return total;
-    }
-
-    // Fetch detailed damage info for a victim
-    private string FetchVictimDamageInfo(int attacker, int victim) {
-        // Start building the info string with the victim's name
-        string info = $"{(playerNames.ContainsKey(victim) ? playerNames[victim] : "Unknown")}";
-
-        // Check if the attacker killed the victim
-        if (killedPlayer.ContainsKey(attacker) && killedPlayer[attacker].Contains(victim)) {
-            info += " (Killed)";
-        }
-
-        info += $": ";
-
-        // Loop through hit groups to gather hitbox data
-        if (hitboxGiven.ContainsKey(attacker) && 
-            hitboxGiven[attacker].ContainsKey(victim) &&
-            hitboxGivenDamage.ContainsKey(attacker) && 
-            hitboxGivenDamage[attacker].ContainsKey(victim)) 
-        {
-            for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
-                if (hitboxGiven[attacker][victim].ContainsKey(hitGroup) && 
-                    hitboxGiven[attacker][victim][hitGroup] > 0) {
-                    info += $"{hitboxName[hitGroup]} {hitboxGiven[attacker][victim][hitGroup]}:{hitboxGivenDamage[attacker][victim][hitGroup]}, ";
-                }
-            }
-        }
-
-        // Trim trailing comma and space
-        return info.TrimEnd(',', ' ');
-    }
-
-    // Fetch detailed damage info for an attacker
-private string FetchAttackerDamageInfo(int attacker, int victim) {
-    // Start building the info string with the attacker's name
-    string info = $"{(playerNames.ContainsKey(attacker) ? playerNames[attacker] : "Unknown")}";
-
-    // Check if the attacker killed the victim
-    if (killedPlayer.ContainsKey(attacker) && killedPlayer[attacker].Contains(victim)) {
-        info += " (Killed by)";
-    }
-
-    info += $": ";
-
-    // Loop through hit groups to gather hitbox data
-    if (hitboxTaken.ContainsKey(victim) && 
-        hitboxTaken[victim].ContainsKey(attacker) &&
-        hitboxTakenDamage.ContainsKey(victim) && 
-        hitboxTakenDamage[victim].ContainsKey(attacker)) 
-    {
-        for (int hitGroup = 0; hitGroup < MaxHitGroups; hitGroup++) {
-            if (hitboxTaken[victim][attacker].ContainsKey(hitGroup) && 
-                hitboxTaken[victim][attacker][hitGroup] > 0) {
-                info += $"{hitboxName[hitGroup]} {hitboxTaken[victim][attacker][hitGroup]}:{hitboxTakenDamage[victim][attacker][hitGroup]}, ";
-            }
-        }
-    }
-
-    // Trim trailing comma and space
-    return info.TrimEnd(',', ' ');
-}
-
-    // Check if a player has inflicted damage on others
-    private bool HasVictims(int playerId) {
-        // Check if the player exists in the `damageGiven` dictionary and has inflicted damage on any victim
-        return damageGiven.ContainsKey(playerId) && damageGiven[playerId].Count > 0;
-    }
-
-    // Check if a player has taken damage from others
-    private bool HasAttackers(int playerId) {
-        // Check if the player exists in the `damageTaken` dictionary and has taken damage from any attacker
-        return damageTaken.ContainsKey(playerId) && damageTaken[playerId].Count > 0;
-    }
-
-    // Check if a player is a victim of another player
-    private bool IsVictim(int attacker, int victim) {
-        // Check if the attacker exists in the `damageGiven` dictionary and has inflicted damage on the victim
-        return damageGiven.ContainsKey(attacker) && 
-            damageGiven[attacker].ContainsKey(victim) && 
-            damageGiven[attacker][victim] > 0;
-    }
 
     // Helper method to clear all damage-related data
     private void ClearDamageData() {
