@@ -36,7 +36,7 @@ public class DamageReportModule : IModule {
         "Body", "Head", "Chest", "Stomach", "L-Arm", "R-Arm", "L-Leg", "R-Leg", "Neck", "Unknown", "Gear"
     };
 
-    float delay = 0.0f; // Delay in seconds before sending damage reports
+    float delay = 3.0f; // Delay in seconds before sending damage reports
 
     // Module initialization method
     public void Load(OSBase inOsbase, ConfigModule inConfig) {
@@ -129,9 +129,9 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
 
         // Schedule damage report
         if (eventInfo.Userid != null) {
-//            osbase?.AddTimer(delay, () => {
+            osbase?.AddTimer(delay, () => {
                 DisplayDamageReport(eventInfo.Userid);
-//            });
+            });
         };
         return HookResult.Continue;
     }
@@ -147,16 +147,16 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
 
         // Add a delay to allow all post-round damage to be recorded
-//        osbase?.AddTimer(delay, () => {
-            var playersList = Utilities.GetPlayers();
-            foreach (var player in playersList) {
-                if (player.IsValid &&
-                    !player.IsHLTV &&
-                    player.UserId.HasValue ) {
+        var playersList = Utilities.GetPlayers();
+        foreach (var player in playersList) {
+            if (player.IsValid &&
+                !player.IsHLTV &&
+                player.UserId.HasValue ) {
+                osbase?.AddTimer(delay, () => {
                     DisplayDamageReport(player);
-                } 
-            }
-//        });
+                });
+            } 
+        }
 
         return HookResult.Continue;
     }
@@ -223,7 +223,7 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
         bool hasAttackerData = damageTaken.ContainsKey(playerId) && damageTaken[playerId].Count > 0;
 
         if (hasVictimData || hasAttackerData) {
-            report.Add($"===[ Damage Report for {playerNames.GetValueOrDefault(playerId, "Unknown")} ]===");
+            report.Add($"===[ Damage Report (hits:damage) ]===");
 //            Console.WriteLine($"===[ Damage Report for {playerNames.GetValueOrDefault(playerId, "Unknown")} ]===");
 //            player.PrintToChat("===[ Damage Report (hits:damage) ]===");
         }
