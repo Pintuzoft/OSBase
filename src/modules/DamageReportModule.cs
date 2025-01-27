@@ -53,54 +53,80 @@ public class DamageReportModule : IModule {
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
         osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
         osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-
+        osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
     // Event handler for player hurt event
     private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine("[OnPlayerHurt] 0");
+
         try {
             // Validate attacker and victim
             if (eventInfo.Attacker?.UserId == null || eventInfo.Userid?.UserId == null) {
+        Console.WriteLine("[OnPlayerHurt] 1");
                 Console.WriteLine("[ERROR] Missing attacker or victim in OnPlayerHurt.");
                 return HookResult.Continue;
             }
+        Console.WriteLine("[OnPlayerHurt] 2");
 
             int attacker = eventInfo.Attacker.UserId.Value;
+        Console.WriteLine("[OnPlayerHurt] 3");
             int victim = eventInfo.Userid.UserId.Value;
+        Console.WriteLine("[OnPlayerHurt] 4");
             int damage = eventInfo.DmgHealth;
+        Console.WriteLine("[OnPlayerHurt] 5");
             int hitgroup = eventInfo.Hitgroup;
+        Console.WriteLine("[OnPlayerHurt] 6");
 
             // Assign environmental damage
             if (attacker == victim && eventInfo.Weapon == "world") {
+        Console.WriteLine("[OnPlayerHurt] 7");
                 attacker = ENVIRONMENT;
             }
+        Console.WriteLine("[OnPlayerHurt] 8");
 
             // Initialize dictionaries for attacker and victim
+        Console.WriteLine("[OnPlayerHurt] 9");
             if (!damageGiven.ContainsKey(attacker)) damageGiven[attacker] = new Dictionary<int, int>();
+        Console.WriteLine("[OnPlayerHurt] 10");
             if (!damageTaken.ContainsKey(victim)) damageTaken[victim] = new Dictionary<int, int>();
+        Console.WriteLine("[OnPlayerHurt] 11");
             if (!hitsGiven.ContainsKey(attacker)) hitsGiven[attacker] = new Dictionary<int, int>();
+        Console.WriteLine("[OnPlayerHurt] 12");
             if (!hitsTaken.ContainsKey(victim)) hitsTaken[victim] = new Dictionary<int, int>();
+        Console.WriteLine("[OnPlayerHurt] 13");
             if (!hitboxGiven.ContainsKey(attacker)) hitboxGiven[attacker] = new Dictionary<int, Dictionary<int, int>>();
+        Console.WriteLine("[OnPlayerHurt] 14");
             if (!hitboxTaken.ContainsKey(victim)) hitboxTaken[victim] = new Dictionary<int, Dictionary<int, int>>();
+        Console.WriteLine("[OnPlayerHurt] 15");
             if (!hitboxGiven[attacker].ContainsKey(victim)) hitboxGiven[attacker][victim] = new Dictionary<int, int>();
+        Console.WriteLine("[OnPlayerHurt] 16");
             if (!hitboxTaken[victim].ContainsKey(attacker)) hitboxTaken[victim][attacker] = new Dictionary<int, int>();
+        Console.WriteLine("[OnPlayerHurt] 17");
 
             // Track damage
             damageGiven[attacker][victim] = damageGiven[attacker].GetValueOrDefault(victim, 0) + damage;
+        Console.WriteLine("[OnPlayerHurt] 18");
             damageTaken[victim][attacker] = damageTaken[victim].GetValueOrDefault(attacker, 0) + damage;
+        Console.WriteLine("[OnPlayerHurt] 19");
 
             // Track hits
             hitsGiven[attacker][victim] = hitsGiven[attacker].GetValueOrDefault(victim, 0) + 1;
+        Console.WriteLine("[OnPlayerHurt] 20");
             hitsTaken[victim][attacker] = hitsTaken[victim].GetValueOrDefault(attacker, 0) + 1;
+        Console.WriteLine("[OnPlayerHurt] 21");
 
             // Track hitbox-specific data
             hitboxGiven[attacker][victim][hitgroup] = hitboxGiven[attacker][victim].GetValueOrDefault(hitgroup, 0) + 1;
+        Console.WriteLine("[OnPlayerHurt] 22");
             hitboxTaken[victim][attacker][hitgroup] = hitboxTaken[victim][attacker].GetValueOrDefault(hitgroup, 0) + 1;
+        Console.WriteLine("[OnPlayerHurt] 23");
 
             return HookResult.Continue;
         } catch (Exception ex) {
+        Console.WriteLine("[OnPlayerHurt] 24");
             Console.WriteLine($"[ERROR] Exception in OnPlayerHurt: {ex.Message}\n{ex.StackTrace}");
             return HookResult.Continue;
         }
@@ -158,7 +184,15 @@ public class DamageReportModule : IModule {
         }
         return false;
     }
+    private HookResult OnPlayerDisconnectEvent(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
 
+        if (eventInfo.Userid != null) {
+            if (eventInfo.Userid?.UserId != null) {
+                OnPlayerDisconnect(eventInfo.Userid.UserId.Value);
+            }
+        }
+        return HookResult.Continue;
+    }
     // Event handler for player connect
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
         UpdatePlayerNames(); // Refresh player names upon connection
@@ -379,5 +413,16 @@ private string FetchAttackerDamageInfo(int attacker, int victim) {
         hitboxTaken.Clear();
         killedPlayer.Clear();
         reportedPlayers.Clear();
+    }
+    private void OnPlayerDisconnect(int playerId) {
+        damageGiven.Remove(playerId);
+        damageTaken.Remove(playerId);
+        hitsGiven.Remove(playerId);
+        hitsTaken.Remove(playerId);
+        hitboxGiven.Remove(playerId);
+        hitboxTaken.Remove(playerId);
+        killedPlayer.Remove(playerId);
+        playerNames.Remove(playerId);
+        reportedPlayers.Remove(playerId);
     }
 }
