@@ -108,6 +108,7 @@ public class DamageReportModule : IModule {
             hitboxGiven[attacker][victim][hitgroup] = hitboxGiven[attacker][victim].GetValueOrDefault(hitgroup, 0) + 1;
             hitboxTaken[victim][attacker][hitgroup] = hitboxTaken[victim][attacker].GetValueOrDefault(hitgroup, 0) + 1;
 
+            // Correctly accumulate hitbox damage
             hitboxGivenDamage[attacker][victim][hitgroup] = hitboxGivenDamage[attacker][victim].GetValueOrDefault(hitgroup, 0) + damage;
             hitboxTakenDamage[victim][attacker][hitgroup] = hitboxTakenDamage[victim][attacker].GetValueOrDefault(hitgroup, 0) + damage;
 
@@ -249,16 +250,16 @@ public class DamageReportModule : IModule {
 
                 // Add hit group details
                 if (hitboxGiven.ContainsKey(playerId) && hitboxGiven[playerId].ContainsKey(victim.Key)) {
-                    victimInfo += " [";
+                    List<string> hitGroupDetails = new List<string>();
                     foreach (var hitGroup in hitboxGiven[playerId][victim.Key]) {
                         string hitGroupName = hitboxName[hitGroup.Key];
                         int hitCount = hitGroup.Value;
-                        int hitDamage = hitboxGivenDamage.GetValueOrDefault(playerId, new Dictionary<int, Dictionary<int, int>>())
-                            .GetValueOrDefault(victim.Key, new Dictionary<int, int>())
-                            .GetValueOrDefault(hitGroup.Key, 0);
-                        victimInfo += $"{hitGroupName} {hitCount}:{hitDamage}, ";
+                        int hitDamage = hitboxGivenDamage[playerId][victim.Key].GetValueOrDefault(hitGroup.Key, 0);
+                        hitGroupDetails.Add($"{hitGroupName} {hitCount}:{hitDamage}");
                     }
-                    victimInfo = victimInfo.TrimEnd(',', ' ') + "]";
+                    if (hitGroupDetails.Count > 0) {
+                        victimInfo += $" [{string.Join(", ", hitGroupDetails)}]";
+                    }
                 }
 
                 report.Add(victimInfo);
@@ -282,16 +283,16 @@ public class DamageReportModule : IModule {
 
                 // Add hit group details
                 if (hitboxTaken.ContainsKey(playerId) && hitboxTaken[playerId].ContainsKey(attacker.Key)) {
-                    attackerInfo += " [";
+                    List<string> hitGroupDetails = new List<string>();
                     foreach (var hitGroup in hitboxTaken[playerId][attacker.Key]) {
                         string hitGroupName = hitboxName[hitGroup.Key];
                         int hitCount = hitGroup.Value;
-                        int hitDamage = hitboxTakenDamage.GetValueOrDefault(playerId, new Dictionary<int, Dictionary<int, int>>())
-                            .GetValueOrDefault(attacker.Key, new Dictionary<int, int>())
-                            .GetValueOrDefault(hitGroup.Key, 0);
-                        attackerInfo += $"{hitGroupName} {hitCount}:{hitDamage}, ";
+                        int hitDamage = hitboxTakenDamage[playerId][attacker.Key].GetValueOrDefault(hitGroup.Key, 0);
+                        hitGroupDetails.Add($"{hitGroupName} {hitCount}:{hitDamage}");
                     }
-                    attackerInfo = attackerInfo.TrimEnd(',', ' ') + "]";
+                    if (hitGroupDetails.Count > 0) {
+                        attackerInfo += $" [{string.Join(", ", hitGroupDetails)}]";
+                    }
                 }
 
                 report.Add(attackerInfo);
