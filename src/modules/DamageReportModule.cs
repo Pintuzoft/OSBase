@@ -232,38 +232,57 @@ private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEve
 
     // Display damage report for a specific player
     private void DisplayDamageReport(CCSPlayerController player) {
+        Console.WriteLine("[DisplayDamageReport] 0");
+
         if (player == null || player.UserId == null) return;
+        Console.WriteLine("[DisplayDamageReport] 1");
         int playerId = player.UserId.Value;
+        Console.WriteLine("[DisplayDamageReport] 2");
 
         if (reportedPlayers.Contains(playerId)) return;
+        Console.WriteLine("[DisplayDamageReport] 3");
         reportedPlayers.Add(playerId);
+        Console.WriteLine("[DisplayDamageReport] 4");
 
         bool hasVictimData = damageGiven.ContainsKey(playerId) && damageGiven[playerId].Count > 0;
+        Console.WriteLine("[DisplayDamageReport] 5");
         bool hasAttackerData = damageTaken.ContainsKey(playerId) && damageTaken[playerId].Count > 0;
+        Console.WriteLine("[DisplayDamageReport] 6");
 
         if (hasVictimData || hasAttackerData) {
+        Console.WriteLine("[DisplayDamageReport] 7");
             player.PrintToChat("===[ Damage Report (hits:damage) ]===");
         }
+        Console.WriteLine("[DisplayDamageReport] 8");
 
         if (hasVictimData) {
+        Console.WriteLine("[DisplayDamageReport] 9");
             player.PrintToChat($"Victims:");
+        Console.WriteLine("[DisplayDamageReport] 10");
             foreach (var victim in damageGiven[playerId]) {
+        Console.WriteLine("[DisplayDamageReport] 11");
                 string victimName = playerNames.GetValueOrDefault(victim.Key, "Unknown");
                 int hits = hitsGiven[playerId].GetValueOrDefault(victim.Key, 0);
                 int damage = victim.Value;
                 player.PrintToChat($" - {victimName}: {hits} hits, {damage} damage");
             }
+        Console.WriteLine("[DisplayDamageReport] 12");
         }
 
+        Console.WriteLine("[DisplayDamageReport] 13");
         if (hasAttackerData) {
+        Console.WriteLine("[DisplayDamageReport] 14");
             player.PrintToChat($"Attackers:");
             foreach (var attacker in damageTaken[playerId]) {
+        Console.WriteLine("[DisplayDamageReport] 15");
                 string attackerName = playerNames.GetValueOrDefault(attacker.Key, "Unknown");
                 int hits = hitsTaken[playerId].GetValueOrDefault(attacker.Key, 0);
                 int damage = attacker.Value;
                 player.PrintToChat($" - {attackerName}: {hits} hits, {damage} damage");
             }
+        Console.WriteLine("[DisplayDamageReport] 16");
         }
+        Console.WriteLine("[DisplayDamageReport] 17");
     }
 
     // Calculate the total damage a player has given
