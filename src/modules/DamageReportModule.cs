@@ -242,35 +242,28 @@ public class DamageReportModule : IModule {
                 int hits = hitsGiven[playerId].GetValueOrDefault(victim.Key, 0);
                 int damage = victim.Value;
 
-                // Add killed information
                 string killedText = (killedPlayer.ContainsKey(playerId) && killedPlayer[playerId].Contains(victim.Key)) 
                     ? " (Killed)" 
                     : "";
 
-                string victimInfo = $" - {victimName}{killedText}: {hits} hits, {damage} damage";
-
-                // Add hit group details
-                int hitgroupDamageTotal = 0;
+                int calculatedHitboxDamage = 0;
+                string hitGroupInfo = "";
                 if (hitboxGiven.ContainsKey(playerId) && hitboxGiven[playerId].ContainsKey(victim.Key)) {
-                    victimInfo += " [";
+                    hitGroupInfo += " [";
                     foreach (var hitGroup in hitboxGiven[playerId][victim.Key]) {
-                        string hitGroupName = hitboxName[hitGroup.Key];
-                        int hitCount = hitGroup.Value;
-                        int hitDamage = hitboxGivenDamage.GetValueOrDefault(playerId, new Dictionary<int, Dictionary<int, int>>())
-                            .GetValueOrDefault(victim.Key, new Dictionary<int, int>())
-                            .GetValueOrDefault(hitGroup.Key, 0);
-                        hitgroupDamageTotal += hitDamage;
-                        victimInfo += $"{hitGroupName} {hitCount}:{hitDamage}, ";
+                        int hitGroupDamage = hitboxGivenDamage[playerId][victim.Key].GetValueOrDefault(hitGroup.Key, 0);
+                        calculatedHitboxDamage += hitGroupDamage;
+                        hitGroupInfo += $"{hitboxName[hitGroup.Key]} {hitGroup.Value}:{hitGroupDamage}, ";
                     }
-                    victimInfo = victimInfo.TrimEnd(',', ' ') + "]";
+                    hitGroupInfo = hitGroupInfo.TrimEnd(',', ' ') + "]";
                 }
 
-                // Validate damage consistency
-                if (damage != hitgroupDamageTotal) {
-                    victimInfo += $" [Inconsistent: {damage} != {hitgroupDamageTotal}]";
+                // Check for inconsistencies
+                if (damage != calculatedHitboxDamage) {
+                    hitGroupInfo += $" [Inconsistent: {damage} != {calculatedHitboxDamage}]";
                 }
 
-                report.Add(victimInfo);
+                report.Add($" - {victimName}{killedText}: {hits} hits, {damage} damage{hitGroupInfo}");
             }
         }
 
@@ -282,44 +275,36 @@ public class DamageReportModule : IModule {
                 int hits = hitsTaken[playerId].GetValueOrDefault(attacker.Key, 0);
                 int damage = attacker.Value;
 
-                // Add killed by information
                 string killedByText = (killedPlayer.ContainsKey(attacker.Key) && killedPlayer[attacker.Key].Contains(playerId)) 
                     ? " (Killed by)" 
                     : "";
 
-                string attackerInfo = $" - {attackerName}{killedByText}: {hits} hits, {damage} damage";
-
-                // Add hit group details
-                int hitgroupDamageTotal = 0;
+                int calculatedHitboxDamage = 0;
+                string hitGroupInfo = "";
                 if (hitboxTaken.ContainsKey(playerId) && hitboxTaken[playerId].ContainsKey(attacker.Key)) {
-                    attackerInfo += " [";
+                    hitGroupInfo += " [";
                     foreach (var hitGroup in hitboxTaken[playerId][attacker.Key]) {
-                        string hitGroupName = hitboxName[hitGroup.Key];
-                        int hitCount = hitGroup.Value;
-                        int hitDamage = hitboxTakenDamage.GetValueOrDefault(playerId, new Dictionary<int, Dictionary<int, int>>())
-                            .GetValueOrDefault(attacker.Key, new Dictionary<int, int>())
-                            .GetValueOrDefault(hitGroup.Key, 0);
-                        hitgroupDamageTotal += hitDamage;
-                        attackerInfo += $"{hitGroupName} {hitCount}:{hitDamage}, ";
+                        int hitGroupDamage = hitboxTakenDamage[playerId][attacker.Key].GetValueOrDefault(hitGroup.Key, 0);
+                        calculatedHitboxDamage += hitGroupDamage;
+                        hitGroupInfo += $"{hitboxName[hitGroup.Key]} {hitGroup.Value}:{hitGroupDamage}, ";
                     }
-                    attackerInfo = attackerInfo.TrimEnd(',', ' ') + "]";
+                    hitGroupInfo = hitGroupInfo.TrimEnd(',', ' ') + "]";
                 }
 
-                // Validate damage consistency
-                if (damage != hitgroupDamageTotal) {
-                    attackerInfo += $" [Inconsistent: {damage} != {hitgroupDamageTotal}]";
+                // Check for inconsistencies
+                if (damage != calculatedHitboxDamage) {
+                    hitGroupInfo += $" [Inconsistent: {damage} != {calculatedHitboxDamage}]";
                 }
 
-                report.Add(attackerInfo);
+                report.Add($" - {attackerName}{killedByText}: {hits} hits, {damage} damage{hitGroupInfo}");
             }
         }
 
-        // Display the report
         if (report.Count > 0) {
             foreach (string line in report) {
                 Console.WriteLine(line);
-                // Uncomment to send the output to the player's chat
-                player.PrintToChat(line);
+                // Uncomment to send to chat
+                // player.PrintToChat(line);
             }
         }
     }
