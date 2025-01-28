@@ -250,17 +250,24 @@ public class DamageReportModule : IModule {
                 string victimInfo = $" - {victimName}{killedText}: {hits} hits, {damage} damage";
 
                 // Add hit group details
+                int hitgroupDamageTotal = 0;
                 if (hitboxGiven.ContainsKey(playerId) && hitboxGiven[playerId].ContainsKey(victim.Key)) {
-                    List<string> hitGroupDetails = new List<string>();
+                    victimInfo += " [";
                     foreach (var hitGroup in hitboxGiven[playerId][victim.Key]) {
                         string hitGroupName = hitboxName[hitGroup.Key];
                         int hitCount = hitGroup.Value;
-                        int hitDamage = hitboxGivenDamage[playerId][victim.Key].GetValueOrDefault(hitGroup.Key, 0);
-                        hitGroupDetails.Add($"{hitGroupName} {hitCount}:{hitDamage}");
+                        int hitDamage = hitboxGivenDamage.GetValueOrDefault(playerId, new Dictionary<int, Dictionary<int, int>>())
+                            .GetValueOrDefault(victim.Key, new Dictionary<int, int>())
+                            .GetValueOrDefault(hitGroup.Key, 0);
+                        hitgroupDamageTotal += hitDamage;
+                        victimInfo += $"{hitGroupName} {hitCount}:{hitDamage}, ";
                     }
-                    if (hitGroupDetails.Count > 0) {
-                        victimInfo += $" [{string.Join(", ", hitGroupDetails)}]";
-                    }
+                    victimInfo = victimInfo.TrimEnd(',', ' ') + "]";
+                }
+
+                // Validate damage consistency
+                if (damage != hitgroupDamageTotal) {
+                    victimInfo += $" [Inconsistent: {damage} != {hitgroupDamageTotal}]";
                 }
 
                 report.Add(victimInfo);
@@ -283,17 +290,24 @@ public class DamageReportModule : IModule {
                 string attackerInfo = $" - {attackerName}{killedByText}: {hits} hits, {damage} damage";
 
                 // Add hit group details
+                int hitgroupDamageTotal = 0;
                 if (hitboxTaken.ContainsKey(playerId) && hitboxTaken[playerId].ContainsKey(attacker.Key)) {
-                    List<string> hitGroupDetails = new List<string>();
+                    attackerInfo += " [";
                     foreach (var hitGroup in hitboxTaken[playerId][attacker.Key]) {
                         string hitGroupName = hitboxName[hitGroup.Key];
                         int hitCount = hitGroup.Value;
-                        int hitDamage = hitboxTakenDamage[playerId][attacker.Key].GetValueOrDefault(hitGroup.Key, 0);
-                        hitGroupDetails.Add($"{hitGroupName} {hitCount}:{hitDamage}");
+                        int hitDamage = hitboxTakenDamage.GetValueOrDefault(playerId, new Dictionary<int, Dictionary<int, int>>())
+                            .GetValueOrDefault(attacker.Key, new Dictionary<int, int>())
+                            .GetValueOrDefault(hitGroup.Key, 0);
+                        hitgroupDamageTotal += hitDamage;
+                        attackerInfo += $"{hitGroupName} {hitCount}:{hitDamage}, ";
                     }
-                    if (hitGroupDetails.Count > 0) {
-                        attackerInfo += $" [{string.Join(", ", hitGroupDetails)}]";
-                    }
+                    attackerInfo = attackerInfo.TrimEnd(',', ' ') + "]";
+                }
+
+                // Validate damage consistency
+                if (damage != hitgroupDamageTotal) {
+                    attackerInfo += $" [Inconsistent: {damage} != {hitgroupDamageTotal}]";
                 }
 
                 report.Add(attackerInfo);
@@ -303,7 +317,7 @@ public class DamageReportModule : IModule {
         // Display the report
         if (report.Count > 0) {
             foreach (string line in report) {
-                //Console.WriteLine(line);
+                Console.WriteLine(line);
                 // Uncomment to send the output to the player's chat
                 player.PrintToChat(line);
             }
