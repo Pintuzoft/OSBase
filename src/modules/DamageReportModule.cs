@@ -313,14 +313,62 @@ public class DamageReportModule : IModule {
     // Helper method to clear all damage-related data
     private void ClearDamageData() {
         Console.WriteLine("[DEBUG] Clearing damage data...");
+        
+        Console.WriteLine($"[DEBUG] Clearing {damageGiven.Count} damageGiven entries.");
         damageGiven.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing {damageTaken.Count} damageTaken entries.");
         damageTaken.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing {hitsGiven.Count} hitsGiven entries.");
         hitsGiven.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing {hitsTaken.Count} hitsTaken entries.");
         hitsTaken.Clear();
-        hitboxGiven.Clear();
-        hitboxTaken.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing {killedPlayer.Count} killedPlayer entries.");
         killedPlayer.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing {reportedPlayers.Count} reportedPlayers entries.");
         reportedPlayers.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing nested hitboxGiven data.");
+        foreach (var attacker in hitboxGiven.Keys) {
+            foreach (var victim in hitboxGiven[attacker].Keys) {
+                hitboxGiven[attacker][victim].Clear();
+            }
+            hitboxGiven[attacker].Clear();
+        }
+        hitboxGiven.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing nested hitboxTaken data.");
+        foreach (var victim in hitboxTaken.Keys) {
+            foreach (var attacker in hitboxTaken[victim].Keys) {
+                hitboxTaken[victim][attacker].Clear();
+            }
+            hitboxTaken[victim].Clear();
+        }
+        hitboxTaken.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing nested hitboxGivenDamage data.");
+        foreach (var attacker in hitboxGivenDamage.Keys) {
+            foreach (var victim in hitboxGivenDamage[attacker].Keys) {
+                hitboxGivenDamage[attacker][victim].Clear();
+            }
+            hitboxGivenDamage[attacker].Clear();
+        }
+        hitboxGivenDamage.Clear();
+
+        Console.WriteLine($"[DEBUG] Clearing nested hitboxTakenDamage data.");
+        foreach (var victim in hitboxTakenDamage.Keys) {
+            foreach (var attacker in hitboxTakenDamage[victim].Keys) {
+                hitboxTakenDamage[victim][attacker].Clear();
+            }
+            hitboxTakenDamage[victim].Clear();
+        }
+        hitboxTakenDamage.Clear();
+
+        Console.WriteLine("[DEBUG] Damage data cleared.");
     }
     private void OnPlayerDisconnect(int playerId) {
         Console.WriteLine($"[DEBUG] Player disconnected: ID={playerId}");
