@@ -302,9 +302,9 @@ public class DamageReportModule : IModule {
 
         if (report.Count > 0) {
             foreach (string line in report) {
-                Console.WriteLine(line);
+                //Console.WriteLine(line);
                 // Uncomment to send to chat
-                // player.PrintToChat(line);
+                player.PrintToChat(line);
             }
         }
     }
