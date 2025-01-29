@@ -71,10 +71,14 @@ public class TeamBalancer : IModule {
         int tCount = playerTeams.Count(t => t == TEAM_T);
         int ctCount = playerTeams.Count(t => t == TEAM_CT);
 
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount}");
+
         // Check if one team is 2+ players larger than the other
         if (Math.Abs(tCount - ctCount) >= 2) {
             int largerTeam = tCount > ctCount ? TEAM_T : TEAM_CT;
             int smallerTeam = tCount > ctCount ? TEAM_CT : TEAM_T;
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Balancing teams: larger team: {largerTeam}, smaller team: {smallerTeam}");
 
             // Get players on the larger team, sorted by score (ascending)
             var playersToMove = playerIds
@@ -84,17 +88,21 @@ public class TeamBalancer : IModule {
                 .Take(tCount - ctCount - 1) // Adjust to even out the teams
                 .ToList();
 
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMove.Count} players to move.");
+
             // Mark players to switch teams on the next round
             foreach (var p in playersToMove) {
                 CCSPlayerController? player = Utilities.GetPlayerFromUserid(p.Id);
                 
                 if (player != null) {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Marking player {player.PlayerName} to switch teams on next round.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Marking player {player.PlayerName} ({p.Id}) to switch teams on next round.");
                     player.SwitchTeamsOnNextRoundReset = true;  // This will switch them to the other team at the start of the next round
                 } else {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player with ID {p.Id} not found.");
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Player with ID {p.Id} not found.");
                 }
             }
+        } else {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - No team balancing needed.");
         }
         return HookResult.Continue;
     }
