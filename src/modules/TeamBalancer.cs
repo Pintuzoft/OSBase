@@ -52,12 +52,9 @@ public class TeamBalancer : IModule {
         }
 
         var entities = Utilities.GetAllEntities();
-        if (entities != null) {
-            this.bombsites = entities.Count(e => e.Entity != null && e.Entity.DesignerName == "func_bomb_target");
-        } else {
-            this.bombsites = 0;
+        foreach (var entity in entities) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Found entity: {entity.DesignerName}");
         }
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Found {this.bombsites} bombsites.");
     }
 
     private void loadEventHandlers() {
