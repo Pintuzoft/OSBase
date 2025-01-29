@@ -84,14 +84,13 @@ public class TeamBalancer : IModule {
                 .Take(tCount - ctCount - 1) // Adjust to even out the teams
                 .ToList();
 
-            // Move players to the smaller team
+            // Mark players to switch teams on the next round
             foreach (var p in playersToMove) {
                 CCSPlayerController? player = Utilities.GetPlayerFromUserid(p.Id);
                 
                 if (player != null) {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Moving player {player.PlayerName} from team {largerTeam} to {smallerTeam}.");
-                    player.ChangeTeam((CsTeam)smallerTeam);
-
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Marking player {player.PlayerName} to switch teams on next round.");
+                    player.SwitchTeamsOnNextRoundReset = true;  // This will switch them to the other team at the start of the next round
                 } else {
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player with ID {p.Id} not found.");
                 }
@@ -99,7 +98,6 @@ public class TeamBalancer : IModule {
         }
         return HookResult.Continue;
     }
-        
 
 
 }
