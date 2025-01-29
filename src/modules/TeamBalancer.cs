@@ -56,14 +56,17 @@ public class TeamBalancer : IModule {
         List<int> playerScores = new List<int>();
         List<int> playerTeams = new List<int>();
 
+        // Track if Pintuz (you) is in the players list
+        bool isPintuzFound = false;
+
         // Gather data for all connected players
         foreach (var player in playersList) {
-            if (player.IsValid && !player.IsBot && player.Connected == PlayerConnectedState.PlayerConnected) {
+            if (player.IsValid && player.Connected == PlayerConnectedState.PlayerConnected) {
                 if (player.UserId.HasValue) {
                     playerIds.Add(player.UserId.Value);
+                    playerScores.Add(player.Score); // Assuming `Score` is the player's score
+                    playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the player's team
                 }
-                playerScores.Add(player.Score); // Assuming `Score` is the player's score
-                playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the player's team
             }
         }
 
@@ -77,10 +80,14 @@ public class TeamBalancer : IModule {
             }
         }
 
+        // If Pintuz (you) is not found, log it
+        if (!isPintuzFound) {
+            Console.WriteLine("[ERROR] OSBase[{ModuleName}] - Pintuz (You) not found in the players list.");
+        }
+
         // Count players on each team
         int tCount = playerTeams.Count(t => t == TEAM_T);
         int ctCount = playerTeams.Count(t => t == TEAM_CT);
-
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount}");
 
         // Check if one team is 2+ players larger than the other
@@ -95,7 +102,7 @@ public class TeamBalancer : IModule {
                 .Select((id, index) => new { Id = id, Score = playerScores[index], Team = playerTeams[index] })
                 .Where(p => p.Team == largerTeam)
                 .OrderBy(p => p.Score)
-                .Take(tCount - ctCount - 1) // Adjust to even out the teams
+                .Take(Math.Abs(tCount - ctCount) - 1) // Adjust to even out the teams
                 .ToList();
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMove.Count} players to move.");
