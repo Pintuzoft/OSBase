@@ -67,6 +67,16 @@ public class TeamBalancer : IModule {
             }
         }
 
+        // Add bots to the count and log their team data
+        foreach (var player in playersList) {
+            if (player.IsBot && player.Connected == PlayerConnectedState.PlayerConnected) {
+                playerIds.Add(player.UserId.Value);
+                playerScores.Add(player.Score); // Assuming `Score` is the bot's score
+                playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the bot's team
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bot {player.PlayerName} is on team {player.TeamNum}.");
+            }
+        }
+
         // Count players on each team
         int tCount = playerTeams.Count(t => t == TEAM_T);
         int ctCount = playerTeams.Count(t => t == TEAM_CT);
@@ -106,6 +116,5 @@ public class TeamBalancer : IModule {
         }
         return HookResult.Continue;
     }
-
 
 }
