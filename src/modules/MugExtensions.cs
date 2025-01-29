@@ -27,7 +27,7 @@ namespace OSBase.Modules {
             player.InGameMoneyServices.Account = finalAmount;
 
             // Log the change
-            Console.WriteLine($"[DEBUG] MugModuleExtensions[AddMoney]: {player.PlayerName} now has {finalAmount} money.");
+            Console.WriteLine($"[DEBUG] OSBase[MugModuleExtensions] [AddMoney]: {player.PlayerName} now has {finalAmount} money.");
         }
 
         // Method to remove money (forwards to AddMoney with a negative value)

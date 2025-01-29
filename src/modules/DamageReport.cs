@@ -47,10 +47,10 @@ public class DamageReport : IModule {
         config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
         if (osbase == null) {
-            Console.WriteLine($"[ERROR] OSBase is null. {ModuleName} failed to load.");
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
             return;
         } else if (config == null) {
-            Console.WriteLine($"[ERROR] ConfigModule is null. {ModuleName} failed to load.");
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
             return;
         }
 
@@ -58,7 +58,7 @@ public class DamageReport : IModule {
             loadEventHandlers();
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         } else {
-            Console.WriteLine($"[DEBUG] {ModuleName} is disabled in the global configuration.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
         }
     }
 
@@ -76,12 +76,12 @@ public class DamageReport : IModule {
     private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
         try {
             if (eventInfo.Attacker == null || eventInfo.Userid == null) {
-                Console.WriteLine("[ERROR] Attacker or victim is null in OnPlayerHurt.");
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Attacker or victim is null in OnPlayerHurt.");
                 return HookResult.Continue;
             }
 
             if (eventInfo.Attacker?.UserId == null && eventInfo.Userid?.UserId == null) {
-                Console.WriteLine("[ERROR] Both Attacker and Victim UserId are null.");
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Both Attacker and Victim UserId are null.");
                 return HookResult.Continue;
             }
 
@@ -89,7 +89,7 @@ public class DamageReport : IModule {
             int victim = eventInfo.Userid?.UserId ?? -1;
 
             if (victim == -1) {
-                Console.WriteLine("[ERROR] Victim has invalid UserId in OnPlayerHurt.");
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Victim has invalid UserId in OnPlayerHurt.");
                 return HookResult.Continue;
             }
 
@@ -133,7 +133,7 @@ public class DamageReport : IModule {
 
             return HookResult.Continue;
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] Exception in OnPlayerHurt: {ex.Message}\n{ex.StackTrace}");
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in OnPlayerHurt: {ex.Message}\n{ex.StackTrace}");
             return HookResult.Continue;
         }
     }
@@ -204,13 +204,13 @@ public class DamageReport : IModule {
             var playersList = Utilities.GetPlayers();
 
             if (playersList == null) {
-                Console.WriteLine("[ERROR] Players list is null in UpdatePlayerNames.");
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Players list is null in UpdatePlayerNames.");
                 return;
             }
 
             foreach (var player in playersList) {
                 if (player == null) {
-                    Console.WriteLine("[DEBUG] Found null player in players list.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Found null player in players list.");
                     continue;
                 }
 
@@ -220,13 +220,13 @@ public class DamageReport : IModule {
                     // Add or update the player's name in the dictionary
                     playerNames[playerId] = string.IsNullOrEmpty(player.PlayerName) ? "Bot" : player.PlayerName;
 
-                    Console.WriteLine($"[DEBUG] Updated player name: ID={playerId}, Name={playerNames[playerId]}");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Updated player name: ID={playerId}, Name={playerNames[playerId]}");
                 } else {
-                    Console.WriteLine("[DEBUG] Player does not have a UserId.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Player does not have a UserId.");
                 }
             }
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] Exception in UpdatePlayerNames: {ex.Message}\n{ex.StackTrace}");
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in UpdatePlayerNames: {ex.Message}\n{ex.StackTrace}");
         }
     }
 
@@ -330,28 +330,14 @@ public class DamageReport : IModule {
 
 
     // Helper method to clear all damage-related data
-    private void ClearDamageData() {
-        Console.WriteLine("[DEBUG] Clearing damage data...");
-        
-        Console.WriteLine($"[DEBUG] Clearing {damageGiven.Count} damageGiven entries.");
+    private void ClearDamageData() {        
         damageGiven.Clear();
-
-        Console.WriteLine($"[DEBUG] Clearing {damageTaken.Count} damageTaken entries.");
         damageTaken.Clear();
-
-        Console.WriteLine($"[DEBUG] Clearing {hitsGiven.Count} hitsGiven entries.");
         hitsGiven.Clear();
-
-        Console.WriteLine($"[DEBUG] Clearing {hitsTaken.Count} hitsTaken entries.");
         hitsTaken.Clear();
-
-        Console.WriteLine($"[DEBUG] Clearing {killedPlayer.Count} killedPlayer entries.");
         killedPlayer.Clear();
-
-        Console.WriteLine($"[DEBUG] Clearing {reportedPlayers.Count} reportedPlayers entries.");
         reportedPlayers.Clear();
 
-        Console.WriteLine($"[DEBUG] Clearing nested hitboxGiven data.");
         foreach (var attacker in hitboxGiven.Keys) {
             foreach (var victim in hitboxGiven[attacker].Keys) {
                 hitboxGiven[attacker][victim].Clear();
@@ -360,7 +346,6 @@ public class DamageReport : IModule {
         }
         hitboxGiven.Clear();
 
-        Console.WriteLine($"[DEBUG] Clearing nested hitboxTaken data.");
         foreach (var victim in hitboxTaken.Keys) {
             foreach (var attacker in hitboxTaken[victim].Keys) {
                 hitboxTaken[victim][attacker].Clear();
@@ -369,7 +354,6 @@ public class DamageReport : IModule {
         }
         hitboxTaken.Clear();
 
-        Console.WriteLine($"[DEBUG] Clearing nested hitboxGivenDamage data.");
         foreach (var attacker in hitboxGivenDamage.Keys) {
             foreach (var victim in hitboxGivenDamage[attacker].Keys) {
                 hitboxGivenDamage[attacker][victim].Clear();
@@ -378,7 +362,6 @@ public class DamageReport : IModule {
         }
         hitboxGivenDamage.Clear();
 
-        Console.WriteLine($"[DEBUG] Clearing nested hitboxTakenDamage data.");
         foreach (var victim in hitboxTakenDamage.Keys) {
             foreach (var attacker in hitboxTakenDamage[victim].Keys) {
                 hitboxTakenDamage[victim][attacker].Clear();
@@ -387,10 +370,10 @@ public class DamageReport : IModule {
         }
         hitboxTakenDamage.Clear();
 
-        Console.WriteLine("[DEBUG] Damage data cleared.");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Damage data cleared.");
     }
     private void OnPlayerDisconnect(int playerId) {
-        Console.WriteLine($"[DEBUG] Player disconnected: ID={playerId}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Player disconnected: ID={playerId}");
         damageGiven.Remove(playerId);
         damageTaken.Remove(playerId);
         hitsGiven.Remove(playerId);

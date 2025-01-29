@@ -28,10 +28,10 @@ public class Welcome : IModule {
         config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
         if (osbase == null) {
-            Console.WriteLine($"[ERROR] OSBase is null. {ModuleName} failed to load.");
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
             return;
         } else if (config == null) {
-            Console.WriteLine($"[ERROR] ConfigModule is null. {ModuleName} failed to load.");
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
             return;
         }
 
@@ -40,7 +40,7 @@ public class Welcome : IModule {
             loadEventHandlers();
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         } else {
-            Console.WriteLine($"[DEBUG] {ModuleName} is disabled in the global configuration.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
         }
     }
 
@@ -56,7 +56,7 @@ public class Welcome : IModule {
 
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
         if (config == null) {
-            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Config module is null, skipping welcome message.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Config module is null, skipping welcome message.");
             return HookResult.Continue;
         }
         
