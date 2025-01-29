@@ -66,7 +66,23 @@ public class TeamBalancer : IModule {
                     playerIds.Add(player.UserId.Value);
                     playerScores.Add(player.Score); // Assuming `Score` is the player's score
                     playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the player's team
+
                 }
+            }
+        }
+
+        // If Pintuz is not found in the players list, check again after a slight delay
+        if (!isPintuzFound) {
+            Console.WriteLine("[ERROR] OSBase[{ModuleName}] - Pintuz (You) not found in the players list, checking player states...");
+
+            // Explicitly add yourself to the list
+            var pintuz = playersList.FirstOrDefault(p => p.PlayerName == "Pintuz");
+            if (pintuz != null) {
+                isPintuzFound = true;
+                playerIds.Add(pintuz.UserId.Value);
+                playerScores.Add(pintuz.Score); // Assuming `Score` is the player's score
+                playerTeams.Add(pintuz.TeamNum); // Assuming `TeamNum` is the player's team
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Manually added Pintuz (You) to the team list.");
             }
         }
 
@@ -78,11 +94,6 @@ public class TeamBalancer : IModule {
                 playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the bot's team
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bot {player.PlayerName} is on team {player.TeamNum}.");
             }
-        }
-
-        // If Pintuz (you) is not found, log it
-        if (!isPintuzFound) {
-            Console.WriteLine("[ERROR] OSBase[{ModuleName}] - Pintuz (You) not found in the players list.");
         }
 
         // Count players on each team
