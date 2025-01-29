@@ -7,13 +7,13 @@ using CounterStrikeSharp.API.Modules.Events;
 namespace OSBase.Modules;
 
 // Defines the Damage Report Module
-public class DamageReportModule : IModule {
+public class DamageReport : IModule {
     // Module name property
-    public string ModuleName => "DamageReportModule";
+    public string ModuleName => "damagereport";
     private OSBase? osbase; // Reference to the main OSBase instance
+    private Config? config; // Reference to the ConfigModule instance
 
     // 3D arrays to track hitbox-specific data
-
     private Dictionary<int, HashSet<int>> killedPlayer = new();
     private Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxGivenDamage = new();
     private Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxTakenDamage = new();
@@ -39,18 +39,37 @@ public class DamageReportModule : IModule {
     float delay = 3.0f; // Delay in seconds before sending damage reports
 
     // Module initialization method
-    public void Load(OSBase inOsbase, ConfigModule inConfig) {
+    public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase; // Set the OSBase reference
+        config = inConfig; // Set the ConfigModule reference
 
-        // Register event handlers for various game events
+        // Register required global config values
+        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
+
+        if (osbase == null) {
+            Console.WriteLine($"[ERROR] OSBase is null. {ModuleName} failed to load.");
+            return;
+        } else if (config == null) {
+            Console.WriteLine($"[ERROR] ConfigModule is null. {ModuleName} failed to load.");
+            return;
+        }
+
+        if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
+            loadEventHandlers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+        } else {
+            Console.WriteLine($"[DEBUG] {ModuleName} is disabled in the global configuration.");
+        }
+    }
+
+    private void loadEventHandlers ( ) {
+        if (osbase == null) return;
         osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
         osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
         osbase.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
         osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
     // Event handler for player hurt event

@@ -13,28 +13,45 @@ namespace OSBase.Modules;
 
 using System.IO;
 
-public class WelcomeModule : IModule {
-    public string ModuleName => "WelcomeModule";   
+public class Welcome : IModule {
+    public string ModuleName => "welcome";   
     private OSBase? osbase;
-    private ConfigModule? config;
+    private Config? config;
 
     float delay = 5.0f;
 
-    public void Load(OSBase inOsbase, ConfigModule inConfig) {
+    public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
 
         // Register required global config values
-        config.RegisterGlobalConfigValue("welcome_msg", "1");
+        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
-        // Create custom config files
+        if (osbase == null) {
+            Console.WriteLine($"[ERROR] OSBase is null. {ModuleName} failed to load.");
+            return;
+        } else if (config == null) {
+            Console.WriteLine($"[ERROR] ConfigModule is null. {ModuleName} failed to load.");
+            return;
+        }
+
+        if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
+            createCustomConfigs();
+            loadEventHandlers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+        } else {
+            Console.WriteLine($"[DEBUG] {ModuleName} is disabled in the global configuration.");
+        }
+    }
+
+    private void createCustomConfigs() {
+        if (config == null) return;
         config.CreateCustomConfig("welcome.cfg", "// Welcome message\n// Example: Welcome to the server!\n");
+    }
 
-        // Register event handlers and listeners
+    private void loadEventHandlers() {
+        if(osbase == null) return;
         osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
-
     }
 
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
@@ -43,15 +60,6 @@ public class WelcomeModule : IModule {
             return HookResult.Continue;
         }
         
-        // Check if welcome messages are enabled
-        string welcomeMsgEnabled = config.GetGlobalConfigValue("welcome_msg", "0");
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Welcome messages enabled: {welcomeMsgEnabled}");
-
-        if (welcomeMsgEnabled != "1") {
-            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Welcome messages are disabled, skipping.");
-            return HookResult.Continue;
-        }
-
         // Get the player's UserId
         var playerId = eventInfo.Userid;
         
@@ -81,7 +89,6 @@ public class WelcomeModule : IModule {
         } else {
             Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: osbase is null, cannot send message.");
         }
-
         return HookResult.Continue;
     }
 

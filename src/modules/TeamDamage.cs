@@ -12,32 +12,45 @@ namespace OSBase.Modules;
 
 using System.IO;
 
-public class TeamDamageModule : IModule {
-    public string ModuleName => "TeamDamageModule";    
+public class TeamDamage : IModule {
+    public string ModuleName => "teamdamage";    
     private OSBase? osbase;
-    private ConfigModule? config;
+    private Config? config;
 
-    public void Load(OSBase inOsbase, ConfigModule inConfig) {
+    public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
 
         // Register required global config values
-        config.RegisterGlobalConfigValue("teamdamage_slaps", "1");
+        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
-        // Register event handlers and listeners
+        if (osbase == null) {
+            Console.WriteLine($"[ERROR] OSBase is null. {ModuleName} failed to load.");
+            return;
+        } else if (config == null) {
+            Console.WriteLine($"[ERROR] ConfigModule is null. {ModuleName} failed to load.");
+            return;
+        }
+
+        if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
+            loadEventHandlers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+        } else {
+            Console.WriteLine($"[DEBUG] {ModuleName} is disabled in the global configuration.");
+        }
+    }
+
+    private void loadEventHandlers() {
+        if(osbase == null) return;
         osbase.RegisterEventHandler<EventPlayerHurt>(onPlayerHurt);
         osbase.RegisterEventHandler<EventPlayerDeath>(onPlayerDeath);
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
     /* PLAYER HURT */
     private HookResult onPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
-        if (config?.GetGlobalConfigValue("teamdamage_slaps", "0") != "1") {
+        if (eventInfo.DmgHealth == 0) 
             return HookResult.Continue;
-        } else if (eventInfo.DmgHealth == 0) {
-            return HookResult.Continue;
-        }
+        
 
         var attacker = eventInfo.Attacker;
         var victim = eventInfo.Userid;
@@ -57,11 +70,9 @@ public class TeamDamageModule : IModule {
 
     /* PLAYER DEATH */  
     private HookResult onPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        if (config?.GetGlobalConfigValue("teamdamage_slaps", "0") != "1") {
+        if (eventInfo.DmgHealth == 0) 
             return HookResult.Continue;
-        } else if (eventInfo.DmgHealth == 0) {
-            return HookResult.Continue;
-        }
+        
 
         var attacker = eventInfo.Attacker;
         var victim = eventInfo.Userid;

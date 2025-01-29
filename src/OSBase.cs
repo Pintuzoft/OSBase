@@ -16,18 +16,18 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.134";
+    public override string ModuleVersion => "0.0.135";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
     public string currentMap = "";
-    private ConfigModule? config;
+    private Config? config;
     private readonly List<IModule> loadedModules = new();
     public override void Load(bool hotReload) {
         Console.WriteLine("[INFO] OSBase: plugin is loading...");
 
         // Load the configuration module
-        config = new ConfigModule(this);
+        config = new Config(this);
 
         if ( config == null ) {
             Console.WriteLine("[ERROR] OSBase: Failed to load configuration module.");
@@ -48,7 +48,7 @@ public class OSBase : BasePlugin {
             try {
                 var module = (IModule)Activator.CreateInstance(moduleType)!;
                 module.Load(this, config!);
-                Console.WriteLine($"[INFO] Loaded module: {module.ModuleName}");
+                //Console.WriteLine($"[INFO] Loaded module: {module.ModuleName}");
             } catch (Exception ex) {
                 Console.WriteLine($"[ERROR] Failed to load module: {moduleType.Name}. Exception: {ex.Message}");
             }

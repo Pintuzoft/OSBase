@@ -10,7 +10,7 @@ using System.Diagnostics.Tracing;
 using System.Reflection;
 
 namespace OSBase.Modules {
-    public static class MugModuleExtensions {
+    public static class MugExtensions {
         private const int MinMoney = 0;
         private const int MaxMoney = 16000;
 

@@ -14,33 +14,43 @@ namespace OSBase.Modules;
 using System.IO;
 using CounterStrikeSharp.API.Modules.Utils;
 
-public class TeamBalancerModule : IModule {
-    public string ModuleName => "TeamBalancerModule";   
+public class TeamBalancer : IModule {
+    public string ModuleName => "teambalancer";   
     private OSBase? osbase;
-    private ConfigModule? config;
+    private Config? config;
     private const int TEAM_T = (int)CsTeam.Terrorist; // TERRORIST team ID
     private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // COUNTER-TERRORIST team ID
     //float delay = 5.0f;
 
-    public void Load(OSBase inOsbase, ConfigModule inConfig) {
+    public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
 
         // Register required global config values
-        config.RegisterGlobalConfigValue("teambalancer_enable", "1");
+        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
-        // Register event handlers and listeners
+        if (osbase == null) {
+            Console.WriteLine($"[ERROR] OSBase is null. {ModuleName} failed to load.");
+            return;
+        } else if (config == null) {
+            Console.WriteLine($"[ERROR] ConfigModule is null. {ModuleName} failed to load.");
+            return;
+        }
+
+        if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
+            loadEventHandlers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+        } else {
+            Console.WriteLine($"[DEBUG] {ModuleName} is disabled in the global configuration.");
+        }
+    }
+
+    private void loadEventHandlers() {
+        if(osbase == null) return;
         osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-        
-        if (config == null || config.GetGlobalConfigValue("teambalancer_enable") != "1") {
-            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Team balancer is disabled or not enabled, skipping.");
-            return HookResult.Continue;
-        }
         var playersList = Utilities.GetPlayers();
         List<int> playerIds = new List<int>();
         List<int> playerScores = new List<int>();
@@ -87,8 +97,6 @@ public class TeamBalancerModule : IModule {
                 }
             }
         }
-
-
         return HookResult.Continue;
     }
         

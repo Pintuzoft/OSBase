@@ -12,14 +12,14 @@ using System.Reflection;
 
 namespace OSBase.Modules;
 
-public class ConfigModule {
-    public string ModuleName = "ConfigModule";
+public class Config {
+    public string ModuleName = "config";
     private readonly OSBase osbase;
     private readonly string configDirectory;
     private readonly string globalConfigPath;
     private readonly Dictionary<string, string> globalConfig = new();
 
-    public ConfigModule(OSBase osbase) {
+    public Config(OSBase osbase) {
         this.osbase = osbase;
 
         // Define configuration directory and global config path

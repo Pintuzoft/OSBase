@@ -13,29 +13,48 @@ namespace OSBase.Modules;
 
 using System.IO;
 
-public class MapEventsModule : IModule {
-    public string ModuleName => "MapEventsModule";   
+public class MapEvents : IModule {
+    public string ModuleName => "mapevents";   
      private OSBase? osbase;
-    private ConfigModule? config;
+    private Config? config;
     private bool isWarmup = true;
 
-    public void Load(OSBase inOsbase, ConfigModule inConfig) {
+    public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
 
-        // Create custom config files
+        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
+
+        if (osbase == null) {
+            Console.WriteLine($"[ERROR] OSBase is null. {ModuleName} failed to load.");
+            return;
+        } else if (config == null) {
+            Console.WriteLine($"[ERROR] ConfigModule is null. {ModuleName} failed to load.");
+            return;
+        }
+
+        if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
+            createCustomConfigs();
+            loadEventHandlers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+        } else {
+            Console.WriteLine($"[DEBUG] {ModuleName} is disabled in the global configuration.");
+        }
+    }
+
+    private void createCustomConfigs() {
+        if (config == null) return;
         config.CreateCustomConfig("mapstart.cfg", "// Commands for map start\n");
         config.CreateCustomConfig("mapend.cfg", "// Commands for map end\n");
         config.CreateCustomConfig("warmupstart.cfg", "// Commands for warmup start\nsv_gravity 200\n");
         config.CreateCustomConfig("warmupend.cfg", "// Commands for warmup end\nsv_gravity 800\n");
-
-        // Register event handlers and listeners
+    }
+    private void loadEventHandlers() {
+        if(osbase == null) return; 
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
         osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
     private void OnMapStart(string mapName) {

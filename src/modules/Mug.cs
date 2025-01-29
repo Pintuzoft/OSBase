@@ -13,30 +13,41 @@ namespace OSBase.Modules;
 
 using System.IO;
 
-public class MugModule : IModule {
-    public string ModuleName => "MugModule";
+public class Mug : IModule {
+    public string ModuleName => "mug";
     private OSBase? osbase;
-    private ConfigModule? config;
+    private Config? config;
 
-    public void Load(OSBase inOsbase, ConfigModule inConfig) {
+    public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
 
         // Register required global config values
-        config.RegisterGlobalConfigValue("mug_enabled", "1");
+        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
-        // Register the player hurt event handler
+        if (osbase == null) {
+            Console.WriteLine($"[ERROR] OSBase is null. {ModuleName} failed to load.");
+            return;
+        } else if (config == null) {
+            Console.WriteLine($"[ERROR] ConfigModule is null. {ModuleName} failed to load.");
+            return;
+        }
+
+        if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
+            loadEventHandlers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+        } else {
+            Console.WriteLine($"[DEBUG] {ModuleName} is disabled in the global configuration.");
+        }
+    }
+
+    private void loadEventHandlers() {
+        if(osbase == null) return;
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-
-        Console.WriteLine("[INFO] MugModule loaded successfully!");
     }
 
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         if ( config == null || osbase == null ) 
-            return HookResult.Continue;
-
-        // Check if the mugging functionality is enabled
-        if ( config.GetGlobalConfigValue("mug_enabled", "0") != "1" ) 
             return HookResult.Continue;
 
         var attacker = eventInfo.Attacker;
