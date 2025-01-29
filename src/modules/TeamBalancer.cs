@@ -51,8 +51,7 @@ public class TeamBalancer : IModule {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
         }
 
-        var bombEntities = Utilities.FindAllEntitiesByDesignerName<CC4>("func_bomb_target").ToList();
-        this.bombsites = bombEntities.Count;
+        this.bombsites = Utilities.FindAllEntitiesByDesignerName<CC4>("func_bomb_target").ToArray().Length; 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Found {bombsites} bombsites.");
     }
 
