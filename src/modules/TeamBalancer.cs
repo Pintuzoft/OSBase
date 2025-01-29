@@ -9,9 +9,14 @@ using CounterStrikeSharp.API.Modules.Events;
 using System.Diagnostics.Tracing;
 using System.Reflection;
 
+
 namespace OSBase.Modules;
 
+using System.Data;
 using System.IO;
+using System.Reflection.Metadata;
+using System.Xml;
+using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Modules.Utils;
 
 public class TeamBalancer : IModule {
@@ -21,6 +26,8 @@ public class TeamBalancer : IModule {
     private const int TEAM_T = (int)CsTeam.Terrorist; // TERRORIST team ID
     private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // COUNTER-TERRORIST team ID
     //float delay = 5.0f;
+
+    private int bombsites;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -43,6 +50,14 @@ public class TeamBalancer : IModule {
         } else {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
         }
+
+        var entities = Utilities.GetAllEntities();
+        if (entities != null) {
+            this.bombsites = entities.Count(e => e.Entity != null && e.Entity.DesignerName == "func_bomb_target");
+        } else {
+            this.bombsites = 0;
+        }
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Found {this.bombsites} bombsites.");
     }
 
     private void loadEventHandlers() {
@@ -56,9 +71,6 @@ public class TeamBalancer : IModule {
         List<int> playerScores = new List<int>();
         List<int> playerTeams = new List<int>();
 
-        // Track if Pintuz (you) is in the players list
-        bool isPintuzFound = false;
-
         // Gather data for all connected players
         foreach (var player in playersList) {
             if (player.IsValid && player.Connected == PlayerConnectedState.PlayerConnected) {
@@ -66,25 +78,10 @@ public class TeamBalancer : IModule {
                     playerIds.Add(player.UserId.Value);
                     playerScores.Add(player.Score); // Assuming `Score` is the player's score
                     playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the player's team
-
                 }
             }
         }
 
-        // If Pintuz is not found in the players list, check again after a slight delay
-        if (!isPintuzFound) {
-            Console.WriteLine("[ERROR] OSBase[{ModuleName}] - Pintuz (You) not found in the players list, checking player states...");
-
-            // Explicitly add yourself to the list
-            var pintuz = playersList.FirstOrDefault(p => p.PlayerName == "Pintuz");
-            if (pintuz != null) {
-                isPintuzFound = true;
-                playerIds.Add(pintuz.UserId.Value);
-                playerScores.Add(pintuz.Score); // Assuming `Score` is the player's score
-                playerTeams.Add(pintuz.TeamNum); // Assuming `TeamNum` is the player's team
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Manually added Pintuz (You) to the team list.");
-            }
-        }
 
         // Add bots to the count and log their team data
         foreach (var player in playersList) {
