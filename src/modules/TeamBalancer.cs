@@ -121,35 +121,31 @@ public class TeamBalancer : IModule {
         // Count players on each team
         int tCount = playerTeams.Count(t => t == TEAM_T);  // TEAM_T is for TERRORIST team
         int ctCount = playerTeams.Count(t => t == TEAM_CT); // TEAM_CT is for COUNTER-TERRORIST team
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount} (bombsites:{bombsites})");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount}");
 
         // Calculate imbalance (absolute difference between teams)
         int imbalance = Math.Abs(tCount - ctCount);
-
-        // Determine how many players to move based on bombsite configuration
         int playersToMove = 0;
 
-        // For bombsites = 2, CT should have 1 more player than T
+        // Determine how many players to move based on bombsite configuration
         if (bombsites == 2) {
             if (tCount > ctCount) {
                 playersToMove = tCount - ctCount - 1; // Move enough players from T to CT to balance
                 Console.WriteLine("[DEBUG] OSBase[{ModuleName}] - Bombsites = 2, CT should have 1 more player than T.");
             }
-        }
-        // For bombsites = 1 or 0, T should have 1 more player than CT
-        else if (bombsites == 1 || bombsites == 0) {
+        } else if (bombsites == 1 || bombsites == 0) {
             if (ctCount > tCount) {
                 playersToMove = ctCount - tCount - 1; // Move enough players from CT to T to balance
                 Console.WriteLine("[DEBUG] OSBase[{ModuleName}] - Bombsites = 1 or 0, T should have 1 more player than CT.");
             }
         }
 
-        // Ensure we don't move more than necessary
-        if (imbalance > 0) {
-            // Adjust the number of players to move based on imbalance
+        // Only move players if there is a true imbalance
+        if (imbalance > 0 && playersToMove > 0) {
+            // Ensure we don't move more than necessary
             playersToMove = Math.Min(playersToMove, imbalance);  // Limit the number of players to the imbalance
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Moving {playersToMove} players to balance the teams.");
-            
+
             // Select players from the larger team (T or CT) based on the imbalance
             var playersToMoveList = playerIds
                 .Select((id, index) => new { Id = id, Score = playerScores[index], Team = playerTeams[index] })
