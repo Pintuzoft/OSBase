@@ -142,7 +142,7 @@ public class TeamBalancer : IModule {
         }
 
         // If there are players to move, execute the move
-        if (playersToMove > 0) {
+        if (playersToMove != 0) {
             // Select players from the larger team (T or CT) based on the imbalance
             var playersToMoveList = playerIds
                 .Select((id, index) => new { Id = id, Score = playerScores[index], Team = playerTeams[index] })
