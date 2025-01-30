@@ -102,18 +102,13 @@ public class TeamBalancer : IModule {
         List<int> playerScores = new List<int>();
         List<int> playerTeams = new List<int>();
 
-        // Gather data for all connected players
+        // Gather data for all connected players (including bots)
         foreach (var player in playersList) {
             if (player.Connected == PlayerConnectedState.PlayerConnected) {
                 if (player.UserId.HasValue) {
                     playerIds.Add(player.UserId.Value);
                     playerScores.Add(player.Score); // Assuming `Score` is the player's score
                     playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the player's team
-
-                    // Log bot-specific data
-                    if (player.IsBot) {
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bot {player.PlayerName} is on team {player.TeamNum}.");
-                    }
                 }
             }
         }
@@ -123,19 +118,14 @@ public class TeamBalancer : IModule {
         int ctCount = playerTeams.Count(t => t == TEAM_CT);
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount}");
 
-        // Get the number of bombsites for the current map
-        int bombsiteCount = bombsites;  // This variable should be updated from the OnMapStart method
-
-        // Calculate the player balance adjustment based on bombsites
+        // Get the team balance adjustment based on bombsites
         int balanceAdjustment = 0;
 
         // Set the balance based on bombsite count
-        if (bombsiteCount == 2) {
-            // CT should have 1 more player than T
-            balanceAdjustment = 1;
-        } else if (bombsiteCount == 1 || bombsiteCount == 0) {
-            // T should have 1 more player than CT
-            balanceAdjustment = -1;
+        if (bombsites == 2) {
+            balanceAdjustment = 1; // CT should have 1 more player than T
+        } else if (bombsites == 1 || bombsites == 0) {
+            balanceAdjustment = -1; // T should have 1 more player than CT
         }
 
         // Check if the team imbalance is significant enough to move players
@@ -143,7 +133,7 @@ public class TeamBalancer : IModule {
             int largerTeam = tCount > ctCount ? TEAM_T : TEAM_CT;
             int smallerTeam = tCount > ctCount ? TEAM_CT : TEAM_T;
 
-            // Determine which team needs players based on the balance adjustment
+            // Determine the direction to move players based on bombsite count
             if ((largerTeam == TEAM_T && balanceAdjustment == -1) || (largerTeam == TEAM_CT && balanceAdjustment == 1)) {
                 // Get players on the larger team, sorted by score (ascending)
                 var playersToMove = playerIds
