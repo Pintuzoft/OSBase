@@ -119,8 +119,8 @@ public class TeamBalancer : IModule {
         }
 
         // Count players on each team
-        int tCount = playerTeams.Count(t => t == TEAM_T);
-        int ctCount = playerTeams.Count(t => t == TEAM_CT);
+        int tCount = playerTeams.Count(t => t == TEAM_T);  // TEAM_T is for TERRORIST team
+        int ctCount = playerTeams.Count(t => t == TEAM_CT); // TEAM_CT is for COUNTER-TERRORIST team
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount}");
 
         // Get the team balance adjustment based on bombsites
@@ -135,28 +135,29 @@ public class TeamBalancer : IModule {
             Console.WriteLine("[DEBUG] OSBase[{ModuleName}] - Bombsites = 1 or 0, T should have 1 more player than CT.");
         }
 
-        // Check if the team imbalance is significant enough to move players
-        if (Math.Abs(tCount - ctCount) >= 2) {
-            int largerTeam = tCount > ctCount ? TEAM_T : TEAM_CT;
-            int smallerTeam = tCount > ctCount ? TEAM_CT : TEAM_T;
+        // Calculate how many players to move
+        int imbalance = Math.Abs(tCount - ctCount);
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Corrected imbalance detected: Larger team is {largerTeam}, smaller team is {smallerTeam}.");
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Imbalance size: {Math.Abs(tCount - ctCount)} players.");
+        // If imbalance is 2 or more, we need to move players
+        if (imbalance >= 2) {
+            // If T team is larger, move bots from T to CT
+            if (tCount > ctCount) {
+                int playersToMove = tCount - ctCount - 1; // CT should have 1 more than T
 
-            // Now adjust the teams based on the bombsites
-            if ((largerTeam == TEAM_T && balanceAdjustment == -1) || (largerTeam == TEAM_CT && balanceAdjustment == 1)) {
-                // Get players on the larger team, sorted by score (ascending)
-                var playersToMove = playerIds
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team is larger, moving {playersToMove} player(s) from T to CT.");
+
+                // Get players on the T team, sorted by score (ascending), and move the lowest-scoring bots first
+                var playersToMoveList = playerIds
                     .Select((id, index) => new { Id = id, Score = playerScores[index], Team = playerTeams[index] })
-                    .Where(p => p.Team == largerTeam)
-                    .OrderBy(p => p.Score)
-                    .Take(Math.Abs(tCount - ctCount) - 1) // Adjust to even out the teams
+                    .Where(p => p.Team == TEAM_T) // Select only players from the T team
+                    .OrderBy(p => p.Score)  // Sort by score (ascending) to move the lowest-scoring bots
+                    .Take(playersToMove)  // Take the number of players to move
                     .ToList();
 
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMove.Count} players to move to balance the teams.");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMoveList.Count} players to move to balance the teams.");
 
                 // Log details about players selected for movement
-                foreach (var p in playersToMove) {
+                foreach (var p in playersToMoveList) {
                     CCSPlayerController? player = Utilities.GetPlayerFromUserid(p.Id);
 
                     if (player != null) {
