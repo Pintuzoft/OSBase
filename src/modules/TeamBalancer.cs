@@ -123,7 +123,10 @@ public class TeamBalancer : IModule {
         int ctCount = playerTeams.Count(t => t == TEAM_CT); // TEAM_CT is for COUNTER-TERRORIST team
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount}");
 
-        // Determine balance adjustment based on bombsite configuration
+        // Calculate imbalance (absolute difference between teams)
+        int imbalance = Math.Abs(tCount - ctCount);
+
+        // Determine how many players to move based on bombsite configuration
         int playersToMove = 0;
 
         // For bombsites = 2, CT should have 1 more player than T
@@ -141,14 +144,14 @@ public class TeamBalancer : IModule {
             }
         }
 
-        // If there are players to move, execute the move
-        if (playersToMove > 0) {
+        // If there is any imbalance, execute the player move
+        if (playersToMove > 0 || imbalance > 0) {
             // Select players from the larger team (T or CT) based on the imbalance
             var playersToMoveList = playerIds
                 .Select((id, index) => new { Id = id, Score = playerScores[index], Team = playerTeams[index] })
                 .Where(p => p.Team == (tCount > ctCount ? TEAM_T : TEAM_CT))  // Select the larger team
                 .OrderBy(p => p.Score)  // Sort by score (ascending) to move the lowest-scoring bots first
-                .Take(playersToMove)  // Only move the required number of players
+                .Take(playersToMove > 0 ? playersToMove : imbalance)  // Move the number of players needed to balance
                 .ToList();
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMoveList.Count} players to move to balance the teams.");
