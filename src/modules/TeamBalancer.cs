@@ -25,9 +25,12 @@ public class TeamBalancer : IModule {
     private Config? config;
     private const int TEAM_T = (int)CsTeam.Terrorist; // TERRORIST team ID
     private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // COUNTER-TERRORIST team ID
-    //float delay = 5.0f;
+    private Dictionary<string, int> mapBombsites = new Dictionary<string, int>();
+    private string mapConfigFile = "teambalancer_mapinfo.cfg";
 
-    private int bombsites;
+    private int bombsites = 2;
+
+    //float delay = 5.0f;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -50,11 +53,47 @@ public class TeamBalancer : IModule {
         } else {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
         }
+
+        // Load map info
+        LoadMapInfo();
+
     }
 
     private void loadEventHandlers() {
         if(osbase == null) return;
         osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
+        osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+    }
+
+    private void LoadMapInfo() {
+        config?.CreateCustomConfig($"{mapConfigFile}", "// Map info\nde_dust2 2\n");
+
+        List<string> maps = config?.FetchCustomConfig($"{mapConfigFile}") ?? new List<string>();
+
+        foreach (var line in maps) {
+            string trimmedLine = line.Trim();
+            if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//")) continue;
+
+            var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 2) {
+                mapBombsites[parts[0]] = int.Parse(parts[1]);
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Loaded map info: {parts[0]} = {parts[1]}");
+            }
+        }
+    }
+
+    private void OnMapStart(string mapName) {
+        if (mapBombsites.ContainsKey(mapName)) {
+            bombsites = mapBombsites[mapName];
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Bombsites: {bombsites}");
+        } else {
+            bombsites = 2;
+            if ( mapName.Contains("cs_") ) {
+                bombsites = 1;
+            }
+            config?.AddCustomConfigLine($"{mapConfigFile}", $"{mapName} {bombsites}");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Default bombsites: {bombsites}");
+        }
     }
 
     private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
@@ -65,23 +104,17 @@ public class TeamBalancer : IModule {
 
         // Gather data for all connected players
         foreach (var player in playersList) {
-            if (player.IsValid && player.Connected == PlayerConnectedState.PlayerConnected) {
+            if (player.Connected == PlayerConnectedState.PlayerConnected) {
                 if (player.UserId.HasValue) {
                     playerIds.Add(player.UserId.Value);
                     playerScores.Add(player.Score); // Assuming `Score` is the player's score
                     playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the player's team
+
+                    // Log bot-specific data
+                    if (player.IsBot) {
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bot {player.PlayerName} is on team {player.TeamNum}.");
+                    }
                 }
-            }
-        }
-
-
-        // Add bots to the count and log their team data
-        foreach (var player in playersList) {
-            if (player.IsBot && player.Connected == PlayerConnectedState.PlayerConnected) {
-                playerIds.Add(player.UserId.Value);
-                playerScores.Add(player.Score); // Assuming `Score` is the bot's score
-                playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the bot's team
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bot {player.PlayerName} is on team {player.TeamNum}.");
             }
         }
 
@@ -90,32 +123,48 @@ public class TeamBalancer : IModule {
         int ctCount = playerTeams.Count(t => t == TEAM_CT);
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount}");
 
-        // Check if one team is 2+ players larger than the other
+        // Get the number of bombsites for the current map
+        int bombsiteCount = bombsites;  // This variable should be updated from the OnMapStart method
+
+        // Calculate the player balance adjustment based on bombsites
+        int balanceAdjustment = 0;
+
+        // Set the balance based on bombsite count
+        if (bombsiteCount == 2) {
+            // CT should have 1 more player than T
+            balanceAdjustment = 1;
+        } else if (bombsiteCount == 1 || bombsiteCount == 0) {
+            // T should have 1 more player than CT
+            balanceAdjustment = -1;
+        }
+
+        // Check if the team imbalance is significant enough to move players
         if (Math.Abs(tCount - ctCount) >= 2) {
             int largerTeam = tCount > ctCount ? TEAM_T : TEAM_CT;
             int smallerTeam = tCount > ctCount ? TEAM_CT : TEAM_T;
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Balancing teams: larger team: {largerTeam}, smaller team: {smallerTeam}");
+            // Determine which team needs players based on the balance adjustment
+            if ((largerTeam == TEAM_T && balanceAdjustment == -1) || (largerTeam == TEAM_CT && balanceAdjustment == 1)) {
+                // Get players on the larger team, sorted by score (ascending)
+                var playersToMove = playerIds
+                    .Select((id, index) => new { Id = id, Score = playerScores[index], Team = playerTeams[index] })
+                    .Where(p => p.Team == largerTeam)
+                    .OrderBy(p => p.Score)
+                    .Take(Math.Abs(tCount - ctCount) - 1) // Adjust to even out the teams
+                    .ToList();
 
-            // Get players on the larger team, sorted by score (ascending)
-            var playersToMove = playerIds
-                .Select((id, index) => new { Id = id, Score = playerScores[index], Team = playerTeams[index] })
-                .Where(p => p.Team == largerTeam)
-                .OrderBy(p => p.Score)
-                .Take(Math.Abs(tCount - ctCount) - 1) // Adjust to even out the teams
-                .ToList();
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMove.Count} players to move.");
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMove.Count} players to move.");
+                // Mark players to switch teams on the next round
+                foreach (var p in playersToMove) {
+                    CCSPlayerController? player = Utilities.GetPlayerFromUserid(p.Id);
 
-            // Mark players to switch teams on the next round
-            foreach (var p in playersToMove) {
-                CCSPlayerController? player = Utilities.GetPlayerFromUserid(p.Id);
-                
-                if (player != null) {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Marking player {player.PlayerName} ({p.Id}) to switch teams on next round.");
-                    player.SwitchTeamsOnNextRoundReset = true;  // This will switch them to the other team at the start of the next round
-                } else {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Player with ID {p.Id} not found.");
+                    if (player != null) {
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Marking player {player.PlayerName} ({p.Id}) to switch teams on next round.");
+                        player.SwitchTeamsOnNextRoundReset = true;  // This will switch them to the other team at the start of the next round
+                    } else {
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Player with ID {p.Id} not found.");
+                    }
                 }
             }
         } else {

@@ -100,7 +100,6 @@ public class Config {
             Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Custom configuration file already exists: {filePath}");
         }
     }
-
     public void ExecuteCustomConfig(string fileName) {
         string filePath = Path.Combine(configDirectory, fileName);
 
@@ -133,5 +132,15 @@ public class Config {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Custom configuration file not found: {filePath}");
         }
         return lines;
+    }
+    public void AddCustomConfigLine(string fileName, string line) {
+        string filePath = Path.Combine(configDirectory, fileName);
+
+        if (File.Exists(filePath)) {
+            File.AppendAllText(filePath, line + "\n");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Added line to custom configuration file: {fileName}: {line}");
+        } else {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Custom configuration file not found: {filePath}");
+        }
     }
 }
