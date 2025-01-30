@@ -49,13 +49,11 @@ public class TeamBalancer : IModule {
 
         if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
             loadEventHandlers();
+            LoadMapInfo();
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         } else {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
         }
-
-        // Load map info
-        LoadMapInfo();
 
     }
 
