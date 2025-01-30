@@ -138,10 +138,11 @@ public class TeamBalancer : IModule {
             int largerTeam = tCount > ctCount ? TEAM_T : TEAM_CT;
             int smallerTeam = tCount > ctCount ? TEAM_CT : TEAM_T;
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Large imbalance detected, larger team: {largerTeam}, smaller team: {smallerTeam}.");
+            // Log which teams are larger and smaller
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Imbalance detected: Larger team is team {largerTeam}, smaller team is team {smallerTeam}.");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Imbalance size: {Math.Abs(tCount - ctCount)} players.");
 
-            // Determine the direction to move players based on bombsite count
+            // Now adjust the teams based on the bombsites
             if ((largerTeam == TEAM_T && balanceAdjustment == -1) || (largerTeam == TEAM_CT && balanceAdjustment == 1)) {
                 // Get players on the larger team, sorted by score (ascending)
                 var playersToMove = playerIds
