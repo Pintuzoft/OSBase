@@ -125,6 +125,8 @@ public class TeamBalancer : IModule {
 
         // Calculate imbalance (absolute difference between teams)
         int imbalance = Math.Abs(tCount - ctCount);
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Calculated imbalance: {imbalance}");
+
         int playersToMove = 0;
 
         // Determine how many players to move based on bombsite configuration
@@ -139,6 +141,8 @@ public class TeamBalancer : IModule {
                 Console.WriteLine("[DEBUG] OSBase[{ModuleName}] - Bombsites = 1 or 0, T should have 1 more player than CT.");
             }
         }
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Players to move: {playersToMove}");
 
         // Only move players if there is a true imbalance
         if (imbalance > 0 && playersToMove > 0) {
