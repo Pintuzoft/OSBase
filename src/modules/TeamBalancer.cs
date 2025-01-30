@@ -103,12 +103,15 @@ public class TeamBalancer : IModule {
         List<int> playerTeams = new List<int>();
 
         // Gather data for all connected players (including bots)
+        Console.WriteLine("[DEBUG] OSBase[{ModuleName}] - Gathering player data...");
         foreach (var player in playersList) {
             if (player.Connected == PlayerConnectedState.PlayerConnected) {
                 if (player.UserId.HasValue) {
                     playerIds.Add(player.UserId.Value);
                     playerScores.Add(player.Score); // Assuming `Score` is the player's score
                     playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the player's team
+
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {player.PlayerName} ({player.UserId.Value}) is on team {player.TeamNum}.");
                 }
             }
         }
@@ -124,14 +127,19 @@ public class TeamBalancer : IModule {
         // Set the balance based on bombsite count
         if (bombsites == 2) {
             balanceAdjustment = 1; // CT should have 1 more player than T
+            Console.WriteLine("[DEBUG] OSBase[{ModuleName}] - Bombsites = 2, CT should have 1 more player than T.");
         } else if (bombsites == 1 || bombsites == 0) {
             balanceAdjustment = -1; // T should have 1 more player than CT
+            Console.WriteLine("[DEBUG] OSBase[{ModuleName}] - Bombsites = 1 or 0, T should have 1 more player than CT.");
         }
 
         // Check if the team imbalance is significant enough to move players
         if (Math.Abs(tCount - ctCount) >= 2) {
             int largerTeam = tCount > ctCount ? TEAM_T : TEAM_CT;
             int smallerTeam = tCount > ctCount ? TEAM_CT : TEAM_T;
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Large imbalance detected, larger team: {largerTeam}, smaller team: {smallerTeam}.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Imbalance size: {Math.Abs(tCount - ctCount)} players.");
 
             // Determine the direction to move players based on bombsite count
             if ((largerTeam == TEAM_T && balanceAdjustment == -1) || (largerTeam == TEAM_CT && balanceAdjustment == 1)) {
@@ -143,14 +151,14 @@ public class TeamBalancer : IModule {
                     .Take(Math.Abs(tCount - ctCount) - 1) // Adjust to even out the teams
                     .ToList();
 
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMove.Count} players to move.");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMove.Count} players to move to balance the teams.");
 
-                // Mark players to switch teams on the next round
+                // Log details about players selected for movement
                 foreach (var p in playersToMove) {
                     CCSPlayerController? player = Utilities.GetPlayerFromUserid(p.Id);
 
                     if (player != null) {
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Marking player {player.PlayerName} ({p.Id}) to switch teams on next round.");
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Moving player {player.PlayerName} ({p.Id}) from team {player.TeamNum} to the other team.");
                         player.SwitchTeamsOnNextRoundReset = true;  // This will switch them to the other team at the start of the next round
                     } else {
                         Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Player with ID {p.Id} not found.");
@@ -158,7 +166,7 @@ public class TeamBalancer : IModule {
                 }
             }
         } else {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - No team balancing needed.");
+            Console.WriteLine("[DEBUG] OSBase[{ModuleName}] - No team balancing needed. Teams are sufficiently balanced.");
         }
         return HookResult.Continue;
     }
