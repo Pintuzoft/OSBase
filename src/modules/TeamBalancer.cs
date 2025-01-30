@@ -121,7 +121,7 @@ public class TeamBalancer : IModule {
         // Count players on each team
         int tCount = playerTeams.Count(t => t == TEAM_T);  // TEAM_T is for TERRORIST team
         int ctCount = playerTeams.Count(t => t == TEAM_CT); // TEAM_CT is for COUNTER-TERRORIST team
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T team size: {tCount}, CT team size: {ctCount} (bombsites:{bombsites})");
 
         // Calculate imbalance (absolute difference between teams)
         int imbalance = Math.Abs(tCount - ctCount);
@@ -144,14 +144,18 @@ public class TeamBalancer : IModule {
             }
         }
 
-        // If there is any imbalance, execute the player move
-        if (playersToMove > 0 || imbalance > 0) {
+        // Ensure we don't move more than necessary
+        if (imbalance > 0) {
+            // Adjust the number of players to move based on imbalance
+            playersToMove = Math.Min(playersToMove, imbalance);  // Limit the number of players to the imbalance
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Moving {playersToMove} players to balance the teams.");
+            
             // Select players from the larger team (T or CT) based on the imbalance
             var playersToMoveList = playerIds
                 .Select((id, index) => new { Id = id, Score = playerScores[index], Team = playerTeams[index] })
                 .Where(p => p.Team == (tCount > ctCount ? TEAM_T : TEAM_CT))  // Select the larger team
                 .OrderBy(p => p.Score)  // Sort by score (ascending) to move the lowest-scoring bots first
-                .Take(playersToMove > 0 ? playersToMove : imbalance)  // Move the number of players needed to balance
+                .Take(playersToMove)  // Only move the required number of players
                 .ToList();
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToMoveList.Count} players to move to balance the teams.");
