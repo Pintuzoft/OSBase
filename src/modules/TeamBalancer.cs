@@ -111,7 +111,9 @@ public class TeamBalancer : IModule {
                     playerScores.Add(player.Score); // Assuming `Score` is the player's score
                     playerTeams.Add(player.TeamNum); // Assuming `TeamNum` is the player's team
 
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {player.PlayerName} ({player.UserId.Value}) is on team {player.TeamNum}.");
+                    // Log the actual team number for debugging
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {player.PlayerName} ({player.UserId.Value}) is on team {player.TeamNum}. " +
+                                    $"Expected TEAM_T: {TEAM_T}, TEAM_CT: {TEAM_CT}");
                 }
             }
         }
@@ -138,8 +140,7 @@ public class TeamBalancer : IModule {
             int largerTeam = tCount > ctCount ? TEAM_T : TEAM_CT;
             int smallerTeam = tCount > ctCount ? TEAM_CT : TEAM_T;
 
-            // Log which teams are larger and smaller
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Imbalance detected: Larger team is team {largerTeam}, smaller team is team {smallerTeam}.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Corrected imbalance detected: Larger team is {largerTeam}, smaller team is {smallerTeam}.");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Imbalance size: {Math.Abs(tCount - ctCount)} players.");
 
             // Now adjust the teams based on the bombsites
