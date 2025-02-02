@@ -61,6 +61,7 @@ namespace OSBase.Modules {
                 osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
                 osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
                 osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+                osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Event handlers registered successfully.");
             } catch(Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Failed to register event handlers: {ex.Message}");
@@ -120,6 +121,13 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
+        private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {            
+            Console.WriteLine("[DEBUG] OSBase[teambalancer] - OnStartHalftime triggered.");
+            // Reset win streak counters at halftime.
+            winStreakT = 0;
+            winStreakCT = 0;
+            return HookResult.Continue;
+        }
         // Also balance on warmup end.
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine("[DEBUG] OSBase[teambalancer] - OnWarmupEnd triggered.");
