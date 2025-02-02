@@ -32,7 +32,7 @@ namespace OSBase.Modules {
         private int winStreakCT = 0;
 
         // Delay in milliseconds before running the entire balancing routine.
-        private const float delay = 1.0f;
+        private const float delay = 0.0f;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
@@ -147,9 +147,9 @@ namespace OSBase.Modules {
 
         /// Delays the balancing routine by BalanceDelayMs, then schedules BalanceTeams() to run on the main thread.
         private void delayedBalanceTeams() {
-            osbase?.AddTimer(delay, () => {
+            //osbase?.AddTimer(delay, () => {
                 BalanceTeams();
-            });
+            //});
         }
 
         private void BalanceTeams() {
