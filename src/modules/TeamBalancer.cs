@@ -32,7 +32,7 @@ namespace OSBase.Modules {
         private int winStreakCT = 0;
 
         // Delay in milliseconds before running the entire balancing routine.
-        private const int BalanceDelayMs = 5000;
+        private const float delay = 3.0f;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
@@ -126,14 +126,14 @@ namespace OSBase.Modules {
             }
             Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Win streaks updated: T: {winStreakT}, CT: {winStreakCT}");
 
-            DelayedBalanceTeams();
+            delayedBalanceTeams();
             return HookResult.Continue;
         }
 
         // OnWarmupEnd delays the balancing routine.
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine("[DEBUG] OSBase[teambalancer] - OnWarmupEnd triggered.");
-            DelayedBalanceTeams();
+            delayedBalanceTeams();
             return HookResult.Continue;
         }
 
@@ -145,13 +145,11 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        /// <summary>
         /// Delays the balancing routine by BalanceDelayMs, then schedules BalanceTeams() to run on the main thread.
-        /// </summary>
-        private async void DelayedBalanceTeams() {
-            await Task.Delay(BalanceDelayMs);
-            // Post the call to BalanceTeams() to the main thread using the captured SynchronizationContext.
-            mainContext?.Post(_ => BalanceTeams(), null);
+        private void delayedBalanceTeams() {
+            osbase?.AddTimer(delay, () => {
+                BalanceTeams();
+            });
         }
 
         private void BalanceTeams() {
