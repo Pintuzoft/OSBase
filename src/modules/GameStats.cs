@@ -12,6 +12,7 @@ namespace OSBase.Modules {
         public string ModuleName => "gamestats";
         private OSBase? osbase;
         private Config? config;
+        private bool isWarmup = false;
 
         // Store player stats keyed by user id.
         private Dictionary<int, PlayerStats> playerStats = new Dictionary<int, PlayerStats>();
@@ -28,10 +29,12 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
             osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+            osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
 
         private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
+            if(isWarmup) return HookResult.Continue;
             if (eventInfo.Attacker != null && eventInfo.Attacker.UserId.HasValue) {
                 int attackerId = eventInfo.Attacker.UserId.Value;
                 if (!playerStats.ContainsKey(attackerId)) {
@@ -44,6 +47,7 @@ namespace OSBase.Modules {
 
         // Update stats when a player dies.
         private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+            if(isWarmup) return HookResult.Continue;
             if (eventInfo.Attacker != null && eventInfo.Attacker.UserId.HasValue) {
                 int attackerId = eventInfo.Attacker.UserId.Value;
                 if (!playerStats.ContainsKey(attackerId)) {
@@ -71,6 +75,7 @@ namespace OSBase.Modules {
 
         // Print current stats at the end of a round.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+            if(isWarmup) return HookResult.Continue;
             Console.WriteLine("[DEBUG] OSBase[gamedata] - Round ended. Current player stats:");
             foreach (var entry in playerStats) {
                 Console.WriteLine($"[DEBUG] OSBase[gamedata] - Player ID {entry.Key}: {entry.Value}");
@@ -80,12 +85,18 @@ namespace OSBase.Modules {
 
         // Reset stats at the start of a new map.
          private void OnMapStart(string mapName) {
+            this.isWarmup = true;
             playerStats.Clear();
             foreach (var player in Utilities.GetPlayers()) {
                 if (player != null && player.UserId.HasValue) {
                     playerStats[player.UserId.Value] = new PlayerStats();
                 }
             }            
+        }
+
+        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+            isWarmup = false;
+            return HookResult.Continue;
         }
 
         // Public method to access a player's stats.
@@ -95,6 +106,7 @@ namespace OSBase.Modules {
             }
             return new PlayerStats(); // Return an empty stats object if none exists.
         }
+
     }
 
     // Data container for game statistics.
