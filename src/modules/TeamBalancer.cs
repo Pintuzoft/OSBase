@@ -35,7 +35,7 @@ namespace OSBase.Modules {
             if (osbase == null) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
                 return;
-            } 
+            }
             if (config == null) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
                 return;
@@ -140,11 +140,11 @@ namespace OSBase.Modules {
                 return;
             }
 
-            // --- DEBUG: Print player list with scores ---
-            Console.WriteLine("[DEBUG] OSBase[teambalancer] - Player list with scores:");
+            // --- DEBUG: Print player list with kill counts ---
+            Console.WriteLine("[DEBUG] OSBase[teambalancer] - Player list with kill counts:");
             foreach (var p in connectedPlayers) {
                 string teamName = (p.TeamNum == TEAM_T ? "Terrorists" : (p.TeamNum == TEAM_CT ? "CT" : p.TeamNum.ToString()));
-                Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, Score: {p.Score}");
+                Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, KillCount: {p.KillCount}");
             }
             // ----------------------------------------------------------
 
@@ -164,7 +164,7 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Total: {totalPlayers}, T: {tCount} (ideal: {idealT}), CT: {ctCount} (ideal: {idealCT})");
 
             if (!isTeamsBalanced) {
-                // Count balancing: move low-score players from the team that is over the ideal count.
+                // Count balancing: move low kill-count players from the team that is over the ideal count.
                 int playersToMove = 0;
                 bool moveFromT = false;
                 if (tCount > idealT) {
@@ -179,8 +179,8 @@ namespace OSBase.Modules {
 
                 var playersToSwitch = connectedPlayers
                     .Where(p => moveFromT ? p.TeamNum == TEAM_T : p.TeamNum == TEAM_CT)
-                    .Select(p => new { Id = p.UserId!.Value, Score = p.Score, Name = p.PlayerName })
-                    .OrderBy(p => p.Score) // lowest score first
+                    .Select(p => new { Id = p.UserId!.Value, KillCount = p.KillCount, Name = p.PlayerName })
+                    .OrderBy(p => p.KillCount) // lowest kill count first
                     .Take(playersToMove)
                     .ToList();
 
@@ -196,7 +196,7 @@ namespace OSBase.Modules {
                         Console.WriteLine($"[ERROR] OSBase[teambalancer] - Could not find player with ID {candidate.Id}.");
                     }
                 }
-                // Since teams have been rebalanced, reset win streak counters.
+                // Reset win streak counters since teams have been rebalanced.
                 winStreakT = 0;
                 winStreakCT = 0;
                 return;
@@ -209,14 +209,14 @@ namespace OSBase.Modules {
                     int losingTeam = winningTeam == TEAM_T ? TEAM_CT : TEAM_T;
                     Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Skill balancing: Winning team ({(winningTeam == TEAM_T ? "Terrorists" : "CT")}) has a win streak.");
 
-                    // Order players by score.
+                    // Order players by kill count.
                     var winningTeamPlayers = connectedPlayers
                         .Where(p => p.TeamNum == winningTeam)
-                        .OrderByDescending(p => p.Score) // best first
+                        .OrderByDescending(p => p.KillCount) // best (highest kill count) first
                         .ToList();
                     var losingTeamPlayers = connectedPlayers
                         .Where(p => p.TeamNum == losingTeam)
-                        .OrderBy(p => p.Score) // worst first
+                        .OrderBy(p => p.KillCount) // worst (lowest kill count) first
                         .ToList();
 
                     // Ensure there are at least two players on the winning side and one on the losing.
