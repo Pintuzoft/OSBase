@@ -1,0 +1,53 @@
+﻿using System;
+using System.IO;
+using CounterStrikeSharp.API;
+using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Cvars;
+using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Modules.Events;
+using System.Diagnostics.Tracing;
+using System.Linq;
+using System.Collections.Generic;
+using System.Reflection;
+using OSBase.Modules;
+using CounterStrikeSharp.API.Modules.Menu;
+
+
+namespace OSBase {
+    internal class OSMenuAPI : IMenuApi {
+        public IMenu GetMenu(string menuName, Action<CCSPlayerController> onOpen, Action<CCSPlayerController> onClose) {
+            // Implementation here
+            throw new NotImplementedException();
+        }
+
+        public IMenu NewMenu(string menuName, Action<CCSPlayerController> onOpen) {
+            // Implementation here
+            throw new NotImplementedException();
+        }
+
+        public IMenu GetMenuForcetype(string menuName, MenuType menuType, Action<CCSPlayerController> onOpen, Action<CCSPlayerController> onClose) {
+            // Implementation here
+            throw new NotImplementedException();
+        }
+
+        public IMenu NewMenuForcetype(string menuName, MenuType menuType, Action<CCSPlayerController> onOpen) {
+            // Implementation here
+            throw new NotImplementedException();
+        }
+
+        public void CloseMenu(CCSPlayerController playerController) {
+            // Implementation here
+        }
+
+        public MenuType GetMenuType(CCSPlayerController playerController) {
+            // Implementation here
+            return default(MenuType);
+        }
+
+        public bool HasOpenedMenu(CCSPlayerController playerController) {
+            // Implementation here
+            return false;
+        }
+    }
+}
