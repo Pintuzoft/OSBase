@@ -52,7 +52,7 @@ namespace OSBase.Modules {
             if(osbase == null) return;
             try {
                 osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-                osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);  // New warmup end handler
+                osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);  // Warmup end handler added
                 osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Event handlers registered successfully.");
             } catch(Exception ex) {
@@ -106,12 +106,15 @@ namespace OSBase.Modules {
 
         private void BalanceTeams() {
             var playersList = Utilities.GetPlayers();
+            // Filter out non-connected players, missing user IDs, and HLTV/demorecorder clients.
             var connectedPlayers = playersList
-                .Where(player => player.Connected == PlayerConnectedState.PlayerConnected && player.UserId.HasValue)
+                .Where(player => player.Connected == PlayerConnectedState.PlayerConnected 
+                        && player.UserId.HasValue 
+                        && !player.IsHLTV)
                 .ToList();
 
             int totalPlayers = connectedPlayers.Count;
-            Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Connected players count: {totalPlayers}");
+            Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Connected players count (excluding HLTV): {totalPlayers}");
             if (totalPlayers == 0) {
                 Console.WriteLine("[DEBUG] OSBase[teambalancer] - No connected players found.");
                 return;
@@ -122,11 +125,11 @@ namespace OSBase.Modules {
 
             int idealCT, idealT;
             if (bombsites >= 2) {
-                // Maps with 2+ bombsites: CT gets the extra player
+                // Maps with 2+ bombsites: CT gets the extra player on odd counts.
                 idealCT = totalPlayers / 2 + totalPlayers % 2;
                 idealT  = totalPlayers / 2;
             } else {
-                // Maps with 0-1 bombsites: T gets the extra player
+                // Maps with 0-1 bombsites: T gets the extra player on odd counts.
                 idealT  = totalPlayers / 2 + totalPlayers % 2;
                 idealCT = totalPlayers / 2;
             }
