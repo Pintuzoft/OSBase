@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks; // For async/await and Task.Delay
+using System.Threading;     // For SynchronizationContext
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
@@ -16,6 +17,8 @@ namespace OSBase.Modules {
         private Config? config;
         // Reference to the GameStats module.
         private GameStats? gameStats;
+        // Capture the main thread's SynchronizationContext.
+        private SynchronizationContext? mainContext;
 
         private const int TEAM_T = (int)CsTeam.Terrorist;      // Expected value: 2
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // Expected value: 3
@@ -29,11 +32,14 @@ namespace OSBase.Modules {
         private int winStreakCT = 0;
 
         // Delay in milliseconds before running the entire balancing routine.
-        private const int BalanceDelayMs = 3000;
+        private const int BalanceDelayMs = 5000;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
             this.config = inConfig;
+            // Capture the SynchronizationContext on the main thread.
+            mainContext = SynchronizationContext.Current;
+
             config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
             // Retrieve the GameStats module.
@@ -60,14 +66,14 @@ namespace OSBase.Modules {
         }
 
         private void loadEventHandlers() {
-            if (osbase == null) return;
+            if(osbase == null) return;
             try {
                 osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
                 osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
                 osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
                 osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Event handlers registered successfully.");
-            } catch (Exception ex) {
+            } catch(Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Failed to register event handlers: {ex.Message}");
             }
         }
@@ -139,15 +145,18 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        // Delays the balancing routine by BalanceDelayMs before calling BalanceTeams.
+        /// <summary>
+        /// Delays the balancing routine by BalanceDelayMs, then schedules BalanceTeams() to run on the main thread.
+        /// </summary>
         private async void DelayedBalanceTeams() {
             await Task.Delay(BalanceDelayMs);
-            BalanceTeams();
+            // Post the call to BalanceTeams() to the main thread using the captured SynchronizationContext.
+            mainContext?.Post(_ => BalanceTeams(), null);
         }
 
         private void BalanceTeams() {
             var playersList = Utilities.GetPlayers();
-            // Filter out non-connected players, missing UserId, and HLTV/demorecorder clients.
+            // Filter out non-connected players, those missing UserId, and HLTV/demorecorder clients.
             var connectedPlayers = playersList
                 .Where(player => player.Connected == PlayerConnectedState.PlayerConnected
                         && player.UserId.HasValue
@@ -217,7 +226,6 @@ namespace OSBase.Modules {
                         int targetTeam = moveFromT ? TEAM_CT : TEAM_T;
                         string moveDirection = moveFromT ? "T->CT" : "CT->T";
                         Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Switching player '{candidate.Name}' (ID: {candidate.Id}) from {(moveFromT ? "Terrorists" : "CT")} to {(moveFromT ? "CT" : "Terrorists")} immediately.");
-                        // Cast targetTeam to CsTeam before switching.
                         player.SwitchTeam((CsTeam)targetTeam);
                         Server.PrintToChatAll($"[TeamBalancer]: Moved player {candidate.Name}: {moveDirection}");
                     } else {
@@ -250,7 +258,6 @@ namespace OSBase.Modules {
                         var playerFromLosing = losingTeamPlayers[0];
 
                         Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Skill balancing swap scheduled: Switching second best '{playerFromWinning.PlayerName}' (ID: {playerFromWinning.UserId}) with worst '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}) immediately.");
-                        // Immediately switch teams with casts.
                         playerFromWinning.SwitchTeam((CsTeam)losingTeam);
                         playerFromLosing.SwitchTeam((CsTeam)winningTeam);
                         string winningTeamName = winningTeam == TEAM_T ? "Terrorists" : "CT";
