@@ -1,12 +1,8 @@
 using System;
-using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.Cvars;
-using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Modules.Utils;
@@ -17,8 +13,12 @@ namespace OSBase.Modules {
         public string ModuleName => "teambalancer";   
         private OSBase? osbase;
         private Config? config;
+        // Reference to the gameStats module.
+        private GameStats? gameStats;
+
         private const int TEAM_T = (int)CsTeam.Terrorist;      // Expected value: 2
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // Expected value: 3
+
         private Dictionary<string, int> mapBombsites = new Dictionary<string, int>();
         private string mapConfigFile = "teambalancer_mapinfo.cfg";
         private int bombsites = 2;
@@ -28,9 +28,12 @@ namespace OSBase.Modules {
         private int winStreakCT = 0;
 
         public void Load(OSBase inOsbase, Config inConfig) {
-            osbase = inOsbase;
-            config = inConfig;
+            this.osbase = inOsbase;
+            this.config = inConfig;
             config.RegisterGlobalConfigValue($"{ModuleName}", "1");
+
+            // Retrieve the gamedata module.
+            gameStats = osbase.GetGameStats();
 
             if (osbase == null) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
@@ -140,11 +143,12 @@ namespace OSBase.Modules {
                 return;
             }
 
-            // --- DEBUG: Print player list with kill counts ---
-            Console.WriteLine("[DEBUG] OSBase[teambalancer] - Player list with kill counts:");
+            // --- DEBUG: Print player list with kill counts from GameData ---
+            Console.WriteLine("[DEBUG] OSBase[teambalancer] - Player list with kill counts from GameData:");
             foreach (var p in connectedPlayers) {
+                int damage = gameStats!.GetPlayerStats(p.UserId!.Value).Damage;
                 string teamName = (p.TeamNum == TEAM_T ? "Terrorists" : (p.TeamNum == TEAM_CT ? "CT" : p.TeamNum.ToString()));
-                Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, KillCount: {p.KillCount}");
+                Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, Damage: {damage}");
             }
             // ----------------------------------------------------------
 
@@ -179,7 +183,11 @@ namespace OSBase.Modules {
 
                 var playersToSwitch = connectedPlayers
                     .Where(p => moveFromT ? p.TeamNum == TEAM_T : p.TeamNum == TEAM_CT)
-                    .Select(p => new { Id = p.UserId!.Value, KillCount = p.KillCount, Name = p.PlayerName })
+                    .Select(p => new { 
+                        Id = p.UserId!.Value, 
+                        KillCount = gameStats?.GetPlayerStats(p.UserId.Value).Kills, 
+                        Name = p.PlayerName 
+                    })
                     .OrderBy(p => p.KillCount) // lowest kill count first
                     .Take(playersToMove)
                     .ToList();
@@ -209,14 +217,14 @@ namespace OSBase.Modules {
                     int losingTeam = winningTeam == TEAM_T ? TEAM_CT : TEAM_T;
                     Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Skill balancing: Winning team ({(winningTeam == TEAM_T ? "Terrorists" : "CT")}) has a win streak.");
 
-                    // Order players by kill count.
+                    // Order players by kill count using GameData.
                     var winningTeamPlayers = connectedPlayers
                         .Where(p => p.TeamNum == winningTeam)
-                        .OrderByDescending(p => p.KillCount) // best (highest kill count) first
+                        .OrderByDescending(p => gameStats?.GetPlayerStats(p.UserId!.Value).Damage) // best (highest kill count) first
                         .ToList();
                     var losingTeamPlayers = connectedPlayers
                         .Where(p => p.TeamNum == losingTeam)
-                        .OrderBy(p => p.KillCount) // worst (lowest kill count) first
+                        .OrderBy(p => gameStats?.GetPlayerStats(p.UserId!.Value).Damage) // worst (lowest kill count) first
                         .ToList();
 
                     // Ensure there are at least two players on the winning side and one on the losing.

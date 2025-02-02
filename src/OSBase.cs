@@ -16,18 +16,20 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.169";
+    public override string ModuleVersion => "0.0.170";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
     public string currentMap = "";
     private Config? config;
+    private GameStats? gameStats;
     private readonly List<IModule> loadedModules = new();
     public override void Load(bool hotReload) {
         Console.WriteLine("[INFO] OSBase: plugin is loading...");
 
         // Load the configuration module
         config = new Config(this);
+        gameStats = new GameStats(this, config);
 
         if ( config == null ) {
             Console.WriteLine("[ERROR] OSBase: Failed to load configuration module.");
@@ -63,6 +65,10 @@ public class OSBase : BasePlugin {
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase: Failed to send: {command}, Exception: {ex.Message}");
         }
+    }
+
+    public GameStats? GetGameStats() {
+        return gameStats;
     }
 
 }
