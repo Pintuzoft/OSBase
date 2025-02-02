@@ -17,8 +17,8 @@ namespace OSBase.Modules {
         public string ModuleName => "teambalancer";   
         private OSBase? osbase;
         private Config? config;
-        private const int TEAM_T = (int)CsTeam.Terrorist;      // Expected to be 2
-        private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // Expected to be 3
+        private const int TEAM_T = (int)CsTeam.Terrorist;      // Expected value: 2
+        private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // Expected value: 3
         private Dictionary<string, int> mapBombsites = new Dictionary<string, int>();
         private string mapConfigFile = "teambalancer_mapinfo.cfg";
         private int bombsites = 2;
@@ -140,6 +140,14 @@ namespace OSBase.Modules {
                 return;
             }
 
+            // --- DEBUG: Print player list with scores ---
+            Console.WriteLine("[DEBUG] OSBase[teambalancer] - Player list with scores:");
+            foreach (var p in connectedPlayers) {
+                string teamName = (p.TeamNum == TEAM_T ? "Terrorists" : (p.TeamNum == TEAM_CT ? "CT" : p.TeamNum.ToString()));
+                Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, Score: {p.Score}");
+            }
+            // ----------------------------------------------------------
+
             int tCount = connectedPlayers.Count(p => p.TeamNum == TEAM_T);
             int ctCount = connectedPlayers.Count(p => p.TeamNum == TEAM_CT);
 
@@ -204,11 +212,11 @@ namespace OSBase.Modules {
                     // Order players by score.
                     var winningTeamPlayers = connectedPlayers
                         .Where(p => p.TeamNum == winningTeam)
-                        .OrderByDescending(p => p.Score)
+                        .OrderByDescending(p => p.Score) // best first
                         .ToList();
                     var losingTeamPlayers = connectedPlayers
                         .Where(p => p.TeamNum == losingTeam)
-                        .OrderBy(p => p.Score)
+                        .OrderBy(p => p.Score) // worst first
                         .ToList();
 
                     // Ensure there are at least two players on the winning side and one on the losing.
@@ -218,7 +226,7 @@ namespace OSBase.Modules {
                         var playerFromLosing = losingTeamPlayers[0];
 
                         Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Skill balancing swap: Switching second best '{playerFromWinning.PlayerName}' (ID: {playerFromWinning.UserId}) " +
-                                          $"with lowest '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}).");
+                                          $"with worst '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}).");
 
                         playerFromWinning.SwitchTeamsOnNextRoundReset = true;
                         playerFromLosing.SwitchTeamsOnNextRoundReset = true;
