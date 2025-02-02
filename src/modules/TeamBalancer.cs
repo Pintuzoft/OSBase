@@ -215,7 +215,7 @@ namespace OSBase.Modules {
                     if (winningTeamPlayers.Count >= 2 && losingTeamPlayers.Count >= 1) {
                         // Swap the second best from the winning team with the worst from the losing team.
                         var playerFromWinning = winningTeamPlayers[1];
-                        var playerFromLosing = losingTeamPlayers[losingTeamPlayers.Count - 1];
+                        var playerFromLosing = losingTeamPlayers[0];
 
                         Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Skill balancing swap: Switching second best '{playerFromWinning.PlayerName}' (ID: {playerFromWinning.UserId}) " +
                                           $"with lowest '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}).");
