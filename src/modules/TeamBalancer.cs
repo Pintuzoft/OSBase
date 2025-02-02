@@ -32,7 +32,7 @@ namespace OSBase.Modules {
         private int winStreakCT = 0;
 
         // Delay in milliseconds before running the entire balancing routine.
-        private const float delay = 3.0f;
+        private const float delay = 1.0f;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
