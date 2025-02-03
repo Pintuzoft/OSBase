@@ -15,7 +15,7 @@ using System.IO;
 
 public class Demos : IModule {
     public string ModuleName => "demos";   
-     private OSBase? osbase;
+    private OSBase? osbase;
     private Config? config;
 
     public void Load(OSBase inOsbase, Config inConfig) {

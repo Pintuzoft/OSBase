@@ -11,6 +11,7 @@ namespace OSBase.Modules {
 
     public class TeamBalancer : IModule {
         public string ModuleName => "teambalancer";   
+        public string ModuleNameNice => "TeamBalancer";
         private OSBase? osbase;
         private Config? config;
         // Reference to the GameStats module.
@@ -70,7 +71,7 @@ namespace OSBase.Modules {
             if(osbase == null) return;
             try {
                 osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-                osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+                //osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
                 osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
                 osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
                 osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
@@ -113,7 +114,7 @@ namespace OSBase.Modules {
 
         // OnRoundEnd updates win streak counters then calls BalanceTeams immediately.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine("[DEBUG] OSBase[teambalancer] - OnRoundEnd triggered.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundEnd triggered.");
             int winner = eventInfo.Winner;
             if (winner == TEAM_T) { 
                 winStreakT++; 
@@ -125,21 +126,21 @@ namespace OSBase.Modules {
                 winStreakT = 0;
                 winStreakCT = 0;
             }
-            Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Win streaks updated: T: {winStreakT}, CT: {winStreakCT}");
-            BalanceTeams();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Win streaks updated: T: {winStreakT}, CT: {winStreakCT}");
+            //BalanceTeams();
             return HookResult.Continue;
         }
 
         // OnWarmupEnd calls BalanceTeams.
-        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine("[DEBUG] OSBase[teambalancer] - OnWarmupEnd triggered.");
-            BalanceTeams();
-            return HookResult.Continue;
-        }
+        //private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+        //    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
+        //    BalanceTeams();
+        //    return HookResult.Continue;
+        //}
 
         // OnStartHalftime resets win streak counters.
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine("[DEBUG] OSBase[teambalancer] - OnStartHalftime triggered.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnStartHalftime triggered.");
             winStreakT = 0;
             winStreakCT = 0;
             return HookResult.Continue;
@@ -147,8 +148,8 @@ namespace OSBase.Modules {
 
         // OnRoundStart clears the immunity set.
         private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine("[DEBUG] OSBase[teambalancer] - OnRoundStart triggered. Clearing immunity.");
-            immunePlayers.Clear();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundStart triggered. Balancing teams.");
+            BalanceTeams();
             return HookResult.Continue;
         }
 
@@ -163,17 +164,17 @@ namespace OSBase.Modules {
                 .ToList();
 
             int totalPlayers = connectedPlayers.Count;
-            Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Connected players count (excluding HLTV): {totalPlayers}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Connected players count (excluding HLTV): {totalPlayers}");
             if (totalPlayers == 0) {
-                Console.WriteLine("[DEBUG] OSBase[teambalancer] - No connected players found.");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - No connected players found.");
                 return;
             }
 
-            Console.WriteLine("[DEBUG] OSBase[teambalancer] - Player list with kill counts from GameStats:");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player list with kill counts from GameStats:");
             foreach (var p in connectedPlayers) {
                 int kills = gameStats!.GetPlayerStats(p.UserId!.Value).Kills;
-                string teamName = (p.TeamNum == TEAM_T ? "Terrorists" : (p.TeamNum == TEAM_CT ? "CT" : p.TeamNum.ToString()));
-                Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, KillCount: {kills}");
+                string teamName = (p.TeamNum == TEAM_T ? "T" : (p.TeamNum == TEAM_CT ? "CT" : p.TeamNum.ToString()));
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, KillCount: {kills}");
             }
 
             int tCount = connectedPlayers.Count(p => p.TeamNum == TEAM_T);
@@ -188,20 +189,20 @@ namespace OSBase.Modules {
                 idealCT = totalPlayers / 2;
             }
             bool isTeamsBalanced = (tCount == idealT && ctCount == idealCT);
-            Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Total: {totalPlayers}, T: {tCount} (ideal: {idealT}), CT: {ctCount} (ideal: {idealCT})");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Total: {totalPlayers}, T: {tCount} (ideal: {idealT}), CT: {ctCount} (ideal: {idealCT})");
 
-            if (!isTeamsBalanced) {
+            if ( ! isTeamsBalanced ) {
                 // Count balancing: move low kill-count players from the team that is over the ideal count.
                 int playersToMove = 0;
                 bool moveFromT = false;
                 if (tCount > idealT) {
                     playersToMove = tCount - idealT;
                     moveFromT = true;
-                    Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Bombsites = {bombsites}: Moving {playersToMove} player(s) from Terrorists to CT.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bombsites = {bombsites}: Moving {playersToMove} player(s) from T to CT.");
                 } else if (ctCount > idealCT) {
                     playersToMove = ctCount - idealCT;
                     moveFromT = false;
-                    Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Bombsites = {bombsites}: Moving {playersToMove} player(s) from CT to Terrorists.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bombsites = {bombsites}: Moving {playersToMove} player(s) from CT to T.");
                 }
 
                 var playersToSwitch = connectedPlayers
@@ -215,30 +216,31 @@ namespace OSBase.Modules {
                     .Take(playersToMove)
                     .ToList();
 
-                Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Selected {playersToSwitch.Count} candidate(s) for count balancing.");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToSwitch.Count} candidate(s) for count balancing.");
                 foreach (var candidate in playersToSwitch) {
                     var player = Utilities.GetPlayerFromUserid(candidate.Id);
                     if (player != null) {
                         int targetTeam = moveFromT ? TEAM_CT : TEAM_T;
                         string moveDirection = moveFromT ? "T->CT" : "CT->T";
-                        Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Switching player '{candidate.Name}' (ID: {candidate.Id}) from {(moveFromT ? "Terrorists" : "CT")} to {(moveFromT ? "CT" : "Terrorists")} immediately.");
-                        player.SwitchTeam((CsTeam)targetTeam);
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Switching player '{candidate.Name}' (ID: {candidate.Id}) from {(moveFromT ? "T" : "CT")} to {(moveFromT ? "CT" : "T")} immediately.");
+                        player.ChangeTeam((CsTeam)targetTeam);
+                        //player.SwitchTeam((CsTeam)targetTeam);
                         immunePlayers.Add(player.UserId!.Value);
-                        Server.PrintToChatAll($"[TeamBalancer]: Moved player {candidate.Name}: {moveDirection}");
+                        Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Moved player {candidate.Name}: {moveDirection}");
                     } else {
-                        Console.WriteLine($"[ERROR] OSBase[teambalancer] - Could not find player with ID {candidate.Id}.");
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Could not find player with ID {candidate.Id}.");
                     }
                 }
                 winStreakT = 0;
                 winStreakCT = 0;
                 return;
             } else {
-                Console.WriteLine("[DEBUG] OSBase[teambalancer] - Teams are balanced by size.");
+                Console.WriteLine("$[DEBUG] OSBase[{ModuleName}] - Teams are balanced by size.");
                 // Skill balancing: only perform if win streak conditions are met.
                 if (totalPlayers >= 4 && (winStreakT >= 3 || winStreakCT >= 3)) {
                     int winningTeam = winStreakT >= 3 ? TEAM_T : TEAM_CT;
                     int losingTeam = winningTeam == TEAM_T ? TEAM_CT : TEAM_T;
-                    Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Skill balancing: Winning team ({(winningTeam == TEAM_T ? "Terrorists" : "CT")}) has a win streak.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing: Winning team ({(winningTeam == TEAM_T ? "T" : "CT")}) has a win streak.");
 
                     // Filter out players that are immune.
                     var winningTeamCandidates = connectedPlayers
@@ -255,24 +257,28 @@ namespace OSBase.Modules {
                         var playerFromWinning = winningTeamCandidates[1]; // Second best from winning team.
                         var playerFromLosing = losingTeamCandidates[0];     // Worst from losing team.
                         
-                        Console.WriteLine($"[DEBUG] OSBase[teambalancer] - Skill balancing swap scheduled: Switching second best '{playerFromWinning.PlayerName}' (ID: {playerFromWinning.UserId}) with worst '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}) immediately.");
-                        playerFromWinning.SwitchTeam((CsTeam)losingTeam);
-                        playerFromLosing.SwitchTeam((CsTeam)winningTeam);
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing swap scheduled: Switching second best '{playerFromWinning.PlayerName}' (ID: {playerFromWinning.UserId}) with worst '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}) immediately.");
+                        //playerFromWinning.SwitchTeam((CsTeam)losingTeam);
+                        //playerFromLosing.SwitchTeam((CsTeam)winningTeam);
+                        playerFromWinning.ChangeTeam((CsTeam)losingTeam);
+                        playerFromLosing.ChangeTeam((CsTeam)winningTeam);
                         // Add these players to immunity so they won't be swapped again soon.
                         immunePlayers.Clear();
                         immunePlayers.Add(playerFromWinning.UserId!.Value);
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - {playerFromWinning.PlayerName} is now immune.");
                         immunePlayers.Add(playerFromLosing.UserId!.Value);
-                        string winningTeamName = winningTeam == TEAM_T ? "Terrorists" : "CT";
-                        string losingTeamName = losingTeam == TEAM_T ? "Terrorists" : "CT";
-                        Server.PrintToChatAll($"[TeamBalancer]: Swapped players [{winningTeamName}] {playerFromWinning.PlayerName} <-> [{losingTeamName}] {playerFromLosing.PlayerName}");
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - {playerFromLosing.PlayerName} is now immune.");
+                        string winningTeamName = winningTeam == TEAM_T ? "T" : "CT";
+                        string losingTeamName = losingTeam == TEAM_T ? "T" : "CT";
+                        Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Swapped players [{winningTeamName}] {playerFromWinning.PlayerName} <-> [{losingTeamName}] {playerFromLosing.PlayerName}");
                         winStreakT = 0;
                         winStreakCT = 0;
                     } else {
-                        Console.WriteLine("[DEBUG] OSBase[teambalancer] - Not enough non-immune players available for a skill balancing swap. Resetting immunity.");
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Not enough non-immune players available for a skill balancing swap. Resetting immunity.");
                         immunePlayers.Clear();
                     }
                 } else {
-                    Console.WriteLine("[DEBUG] OSBase[teambalancer] - Skill balancing conditions not met.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing conditions not met.");
                 }
             }
         }
