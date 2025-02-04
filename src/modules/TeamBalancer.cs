@@ -133,6 +133,7 @@ namespace OSBase.Modules {
                         if ( p.PlayerName == "Pintuz" ) {
                             CsTeam to = p.TeamNum == TEAM_T ? CsTeam.CounterTerrorist : CsTeam.Terrorist;
                             p.SwitchTeam(to);
+                            p.PrintToCenter($"NOTE!! YOU HAVE BEEN MOVED TO {(p.TeamNum == TEAM_T ? "T" : "CT")}!");
                         }
                  
                     }
