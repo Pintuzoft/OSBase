@@ -19,7 +19,6 @@ namespace OSBase.Modules {
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
 
-
         // A hilariously named collection for dead betters
         private Dictionary<int, Bet> betters = new Dictionary<int, Bet>();
 

@@ -32,9 +32,8 @@ namespace OSBase.Modules {
         // Win streak counters (updated on round end)
         private int winStreakT = 0;
         private int winStreakCT = 0;
-
-        // (Delay was removed as per your latest version.)
-        // private const float delay = 0.0f;
+       
+        private const float delay = 2.0f;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
@@ -71,10 +70,10 @@ namespace OSBase.Modules {
             if(osbase == null) return;
             try {
                 osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-                //osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+                osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
                 osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
                 osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
-                osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
+                //osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Event handlers registered successfully.");
             } catch(Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Failed to register event handlers: {ex.Message}");
@@ -127,16 +126,21 @@ namespace OSBase.Modules {
                 winStreakCT = 0;
             }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Win streaks updated: T: {winStreakT}, CT: {winStreakCT}");
+            osbase?.AddTimer(delay, () => {
+                BalanceTeams();
+            });
             //BalanceTeams();
             return HookResult.Continue;
         }
 
         // OnWarmupEnd calls BalanceTeams.
-        //private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-        //    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
-        //    BalanceTeams();
-        //    return HookResult.Continue;
-        //}
+        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
+            osbase?.AddTimer(delay, () => {
+                BalanceTeams();
+            });    
+            return HookResult.Continue;
+        }
 
         // OnStartHalftime resets win streak counters.
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
@@ -147,11 +151,12 @@ namespace OSBase.Modules {
         }
 
         // OnRoundStart clears the immunity set.
-        private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundStart triggered. Balancing teams.");
-            BalanceTeams();
-            return HookResult.Continue;
-        }
+//        private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+//            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundStart triggered. Balancing teams.");
+//            osbase.AddTimer(delay, BalanceTeams);
+//            BalanceTeams();
+//            return HookResult.Continue;
+//        }
 
         private void BalanceTeams() {
             // This method must run on the main thread.
@@ -223,8 +228,7 @@ namespace OSBase.Modules {
                         int targetTeam = moveFromT ? TEAM_CT : TEAM_T;
                         string moveDirection = moveFromT ? "T->CT" : "CT->T";
                         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Switching player '{candidate.Name}' (ID: {candidate.Id}) from {(moveFromT ? "T" : "CT")} to {(moveFromT ? "CT" : "T")} immediately.");
-                        player.ChangeTeam((CsTeam)targetTeam);
-                        //player.SwitchTeam((CsTeam)targetTeam);
+                        player.SwitchTeam((CsTeam)targetTeam);
                         immunePlayers.Add(player.UserId!.Value);
                         Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Moved player {candidate.Name}: {moveDirection}");
                     } else {
@@ -237,7 +241,7 @@ namespace OSBase.Modules {
             } else {
                 Console.WriteLine("$[DEBUG] OSBase[{ModuleName}] - Teams are balanced by size.");
                 // Skill balancing: only perform if win streak conditions are met.
-                if (totalPlayers >= 4 && (winStreakT >= 3 || winStreakCT >= 3)) {
+                if (totalPlayers >= 4 && totalPlayers <= 12 && (winStreakT >= 3 || winStreakCT >= 3)) {
                     int winningTeam = winStreakT >= 3 ? TEAM_T : TEAM_CT;
                     int losingTeam = winningTeam == TEAM_T ? TEAM_CT : TEAM_T;
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing: Winning team ({(winningTeam == TEAM_T ? "T" : "CT")}) has a win streak.");
