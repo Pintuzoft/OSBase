@@ -126,22 +126,25 @@ namespace OSBase.Modules {
                 winStreakCT = 0;
             }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Win streaks updated: T: {winStreakT}, CT: {winStreakCT}");
-            osbase?.AddTimer(delay, () => {
-                var playerList = Utilities.GetPlayers();
-                foreach (var p in playerList) {
-                    if (p.UserId.HasValue) {
-                        if ( p.PlayerName == "Pintuz" ) {
-                            CsTeam to = p.TeamNum == TEAM_T ? CsTeam.CounterTerrorist : CsTeam.Terrorist;
-                            p.SwitchTeam(to);
-                            p.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(p.TeamNum == TEAM_T ? "T" : "CT")}!!");
-                        }
-                 
-                    }
-                }
+//            osbase?.AddTimer(delay, () => {
+//                var playerList = Utilities.GetPlayers();
+//                foreach (var p in playerList) {
+//                    if (p.UserId.HasValue) {
+//                        if ( p.PlayerName == "Pintuz" ) {
+//                            CsTeam to = p.TeamNum == TEAM_T ? CsTeam.CounterTerrorist : CsTeam.Terrorist;
+//                            p.SwitchTeam(to);
+//                            p.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(p.TeamNum == TEAM_T ? "T" : "CT")}!!");
+//                        }
+//                 
+//                    }
+//                }
 
                 //BalanceTeams();
-            });
+//            });
             //BalanceTeams();
+            osbase?.AddTimer(delay, () => {
+                BalanceTeams();
+            });    
             return HookResult.Continue;
         }
 
@@ -171,7 +174,6 @@ namespace OSBase.Modules {
 //        }
 
         private void BalanceTeams() {
-            return;
             // This method must run on the main thread.
             var playersList = Utilities.GetPlayers();
             // Filter out non-connected players, missing UserId, and HLTV/demorecorder clients.
@@ -242,6 +244,7 @@ namespace OSBase.Modules {
                         string moveDirection = moveFromT ? "T->CT" : "CT->T";
                         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Switching player '{candidate.Name}' (ID: {candidate.Id}) from {(moveFromT ? "T" : "CT")} to {(moveFromT ? "CT" : "T")} immediately.");
                         player.SwitchTeam((CsTeam)targetTeam);
+                        player.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(player.TeamNum == TEAM_T ? "T" : "CT")}!!");
                         immunePlayers.Add(player.UserId!.Value);
                         Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Moved player {candidate.Name}: {moveDirection}");
                     } else {
@@ -277,8 +280,10 @@ namespace OSBase.Modules {
                         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing swap scheduled: Switching second best '{playerFromWinning.PlayerName}' (ID: {playerFromWinning.UserId}) with worst '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}) immediately.");
                         //playerFromWinning.SwitchTeam((CsTeam)losingTeam);
                         //playerFromLosing.SwitchTeam((CsTeam)winningTeam);
-                        playerFromWinning.ChangeTeam((CsTeam)losingTeam);
+                        playerFromWinning.SwitchTeam((CsTeam)losingTeam);
+                        playerFromWinning.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(playerFromWinning.TeamNum == TEAM_T ? "T" : "CT")}!!");
                         playerFromLosing.ChangeTeam((CsTeam)winningTeam);
+                        playerFromLosing.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(playerFromLosing.TeamNum == TEAM_T ? "T" : "CT")}!!");
                         // Add these players to immunity so they won't be swapped again soon.
                         immunePlayers.Clear();
                         immunePlayers.Add(playerFromWinning.UserId!.Value);
