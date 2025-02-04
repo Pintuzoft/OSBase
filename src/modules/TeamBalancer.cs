@@ -127,7 +127,18 @@ namespace OSBase.Modules {
             }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Win streaks updated: T: {winStreakT}, CT: {winStreakCT}");
             osbase?.AddTimer(delay, () => {
-                BalanceTeams();
+                var playerList = Utilities.GetPlayers();
+                foreach (var p in playerList) {
+                    if (p.UserId.HasValue) {
+                        if ( p.PlayerName == "Pintuz" ) {
+                            CsTeam to = p.TeamNum == TEAM_T ? CsTeam.CounterTerrorist : CsTeam.Terrorist;
+                            p.SwitchTeam(to);
+                        }
+                 
+                    }
+                }
+
+                //BalanceTeams();
             });
             //BalanceTeams();
             return HookResult.Continue;
@@ -159,6 +170,7 @@ namespace OSBase.Modules {
 //        }
 
         private void BalanceTeams() {
+            return;
             // This method must run on the main thread.
             var playersList = Utilities.GetPlayers();
             // Filter out non-connected players, missing UserId, and HLTV/demorecorder clients.
