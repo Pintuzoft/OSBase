@@ -33,7 +33,7 @@ namespace OSBase.Modules {
         private int winStreakT = 0;
         private int winStreakCT = 0;
        
-        private const float delay = 5.0f;
+        private const float delay = 7.0f;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
