@@ -36,6 +36,8 @@ namespace OSBase.Modules {
         private const float delay = 6.5f;
         private const float warmupDelay = 5.0f;
 
+        private bool warmup = false;
+
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
             this.config = inConfig;
@@ -132,6 +134,7 @@ namespace OSBase.Modules {
                 winStreakCT = 0;
             }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Win streaks updated: T: {winStreakT}, CT: {winStreakCT}");
+            warmup = false;
             osbase?.AddTimer(delay, () => {
                 BalanceTeams();
             });    
@@ -141,9 +144,10 @@ namespace OSBase.Modules {
         // OnWarmupEnd calls BalanceTeams.
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
+            warmup = true;
             osbase?.AddTimer(warmupDelay, () => {
                 BalanceTeams();
-            });    
+            });
             return HookResult.Continue;
         }
 
@@ -227,7 +231,12 @@ namespace OSBase.Modules {
                         int targetTeam = moveFromT ? TEAM_CT : TEAM_T;
                         string moveDirection = moveFromT ? "T->CT" : "CT->T";
                         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Switching player '{candidate.Name}' (ID: {candidate.Id}) from {(moveFromT ? "T" : "CT")} to {(moveFromT ? "CT" : "T")} immediately.");
-                        player.SwitchTeam((CsTeam)targetTeam);
+                        
+                        if ( warmup ) {
+                            player.ChangeTeam((CsTeam)targetTeam);
+                        } else {
+                            player.SwitchTeam((CsTeam)targetTeam);
+                        }
                         player.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(player.TeamNum == TEAM_T ? "T" : "CT")}!!");
                         immunePlayers.Add(player.UserId!.Value);
                         Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Moved player {candidate.Name}: {moveDirection}");
@@ -264,23 +273,32 @@ namespace OSBase.Modules {
                         
                         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing swap scheduled: Switching second best '{playerFromWinning.PlayerName}' (ID: {playerFromWinning.UserId}) with worst '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}) immediately.");
 
-                        playerFromWinning.SwitchTeam((CsTeam)losingTeam);
+                        if ( warmup ) {
+                            playerFromWinning.ChangeTeam((CsTeam)losingTeam);
+                            playerFromLosing.ChangeTeam((CsTeam)winningTeam);
+                        } else {
+                            playerFromWinning.SwitchTeam((CsTeam)losingTeam);
+                            playerFromLosing.SwitchTeam((CsTeam)winningTeam);
+                        }
                         playerFromWinning.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(playerFromWinning.TeamNum == TEAM_T ? "T" : "CT")}!!");
-                        playerFromLosing.ChangeTeam((CsTeam)winningTeam);
                         playerFromLosing.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(playerFromLosing.TeamNum == TEAM_T ? "T" : "CT")}!!");
 
                         // Add these players to immunity so they won't be swapped again soon.
                         immunePlayers.Clear();
-                        immunePlayers.Add(playerFromWinning.UserId!.Value);
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - {playerFromWinning.PlayerName} is now immune.");
-                        immunePlayers.Add(playerFromLosing.UserId!.Value);
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - {playerFromLosing.PlayerName} is now immune.");
-                        string winningTeamName = winningTeam == TEAM_T ? "T" : "CT";
-                        string losingTeamName = losingTeam == TEAM_T ? "T" : "CT";
-                        Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Swapped players [{winningTeamName}] {playerFromWinning.PlayerName} <-> [{losingTeamName}] {playerFromLosing.PlayerName}");
+                        if ( ! warmup ) {
+                            immunePlayers.Add(playerFromWinning.UserId!.Value);
+                            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - {playerFromWinning.PlayerName} is now immune.");
+                            immunePlayers.Add(playerFromLosing.UserId!.Value);
+                            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - {playerFromLosing.PlayerName} is now immune.");
+                            string winningTeamName = winningTeam == TEAM_T ? "T" : "CT";
+                            string losingTeamName = losingTeam == TEAM_T ? "T" : "CT";
+                            Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Swapped players [{winningTeamName}] {playerFromWinning.PlayerName} <-> [{losingTeamName}] {playerFromLosing.PlayerName}");
+                        } else {
+                            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Immunity not set during warmup.");
+                        }
                         winStreakT = 0;
                         winStreakCT = 0;
-                        
+
                     } else {
                         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Not enough non-immune players available for a skill balancing swap. Resetting immunity.");
                         immunePlayers.Clear();
