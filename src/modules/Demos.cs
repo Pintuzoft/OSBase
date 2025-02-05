@@ -55,10 +55,14 @@ public class Demos : IModule {
         EVENT HANDLERS
     */
 
-
-    [ConsoleCommand("Changelevel", "This is an example command description")]
     [ConsoleCommand("changelevel", "This is an example command description")]
     public void OnCommand(CCSPlayerController? player, CommandInfo command) {
+        Console.Write($@"
+Arg Count: {command.ArgCount}
+Arg String: {command.ArgString}
+Command String: {command.GetCommandString}
+First Argument: {command.ArgByIndex(0)}
+Second Argument: {command.ArgByIndex(1)}");
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Changelevel detected.");
         runMapEnd();
     }
