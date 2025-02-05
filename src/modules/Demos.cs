@@ -64,30 +64,30 @@ public class Demos : IModule {
     }
 
     private void OnMapEnd() {
-        Console.WriteLine("[DEBUG] OSBase[{ModuleName}] Map has ended.");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has ended.");
         runMapEnd();
     }
 
     private HookResult OnMapTransition(EventMapTransition eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine("[DEBUG] OSBase[{ModuleName}] Map has transitioned.");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has transitioned.");
         runMapEnd();
         return HookResult.Continue;
     }
 
     private HookResult OnMapShutdown(EventMapShutdown eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine("[DEBUG] OSBase[{ModuleName}] Map has shutdown.");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has shutdown.");
         runMapEnd();
         return HookResult.Continue;
     }
 
     private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine("[DEBUG] OSBase[{ModuleName}] Warmup has ended.");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Warmup has ended.");
         runWarmupEnd(); 
         return HookResult.Continue;
     }
 
     private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine("[DEBUG] OSBase[{ModuleName}] Match has ended.");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Match has ended.");
         runMapEnd();
         return HookResult.Continue;
     }
