@@ -12,6 +12,7 @@ using System.Reflection;
 namespace OSBase.Modules;
 
 using System.IO;
+using CounterStrikeSharp.API.Core.Commands;
 
 public class Demos : IModule {
     public string ModuleName => "demos";   
@@ -47,12 +48,19 @@ public class Demos : IModule {
         osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
         osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
         osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
-        osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);
+        osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);        
     }
 
     /*
         EVENT HANDLERS
     */
+
+
+    [ConsoleCommand("changelevel", "This is an example command description")]
+    public void OnCommand(CCSPlayerController? player, CommandInfo command) {
+        Console.WriteLine("[DEBUG] OSBase[{ModuleName}] Changelevel detected.");
+        runMapEnd();
+    }
 
     private void OnMapEnd() {
         Console.WriteLine("[DEBUG] OSBase[{ModuleName}] Map has ended.");
@@ -82,6 +90,7 @@ public class Demos : IModule {
         runMapEnd();
         return HookResult.Continue;
     }
+
 
 
     /*
