@@ -56,9 +56,10 @@ public class Demos : IModule {
     */
 
 
+    [ConsoleCommand("Changelevel", "This is an example command description")]
     [ConsoleCommand("changelevel", "This is an example command description")]
     public void OnCommand(CCSPlayerController? player, CommandInfo command) {
-        Console.WriteLine("[DEBUG] OSBase[{ModuleName}] Changelevel detected.");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Changelevel detected.");
         runMapEnd();
     }
 
