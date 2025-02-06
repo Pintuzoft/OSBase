@@ -38,6 +38,9 @@ namespace OSBase.Modules {
 
         private bool warmup = false;
 
+        private int minPlayers = 4;
+        private int maxPlayers = 16;
+
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
             this.config = inConfig;
@@ -251,7 +254,7 @@ namespace OSBase.Modules {
             } else {
                 Console.WriteLine("$[DEBUG] OSBase[{ModuleName}] - Teams are balanced by size.");
                 // Skill balancing: only perform if win streak conditions are met.
-                if (totalPlayers >= 4 && totalPlayers <= 12 && (winStreakT >= 3 || winStreakCT >= 3)) {
+                if (totalPlayers >= minPlayers && totalPlayers <= maxPlayers && (winStreakT >= 3 || winStreakCT >= 3)) {
                     int winningTeam = winStreakT >= 3 ? TEAM_T : TEAM_CT;
                     int losingTeam = winningTeam == TEAM_T ? TEAM_CT : TEAM_T;
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing: Winning team ({(winningTeam == TEAM_T ? "T" : "CT")}) has a win streak.");
