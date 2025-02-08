@@ -50,6 +50,7 @@ namespace OSBase.Modules {
             if (config.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
                 loadEventHandlers();
                 osbase.AddCommand("bet", "bet", handleBetCommand);
+                osbase.RegisterEventHandler<EventPlayerChat>(OnPlayerChat);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
             } else {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
@@ -66,9 +67,18 @@ namespace OSBase.Modules {
             osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
         }
 
+        private HookResult OnPlayerChat(EventPlayerChat eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine("[DEBUG] TeamBets: OnPlayerChat");
+
+            return HookResult.Continue;
+        }
+
         // Command format: bet <t/ct> <amount|all>
         private void handleBetCommand(CCSPlayerController? player, CommandInfo? commandInfo) {
-            player.PrintToChat("[TeamBets]: WooHoo! you are here!!");
+            Console.WriteLine("[DEBUG] TeamBets: handleBetCommand");
+            if (player != null) {
+                player.PrintToChat("[TeamBets]: WooHoo! you are here!!");
+            }
 
             // Check if the player is valid and has an InGameMoneyServices instance
             if ( player == null || 
