@@ -68,6 +68,7 @@ namespace OSBase.Modules {
 
         // Command format: bet <t/ct> <amount|all>
         private void handleBetCommand(CCSPlayerController? player, CommandInfo? commandInfo) {
+            player.PrintToChat("[TeamBets]: WooHoo! you are here!!");
 
             // Check if the player is valid and has an InGameMoneyServices instance
             if ( player == null || 
