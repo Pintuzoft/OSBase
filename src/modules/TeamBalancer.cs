@@ -29,10 +29,6 @@ namespace OSBase.Modules {
         private string mapConfigFile = "teambalancer_mapinfo.cfg";
         private int bombsites = 2;
 
-        // Win streak counters (updated on round end)
-        private int winStreakT = 0;
-        private int winStreakCT = 0;
-       
         private const float delay = 6.5f;
         private const float warmupDelay = 5.0f;
 
@@ -79,7 +75,6 @@ namespace OSBase.Modules {
                 osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
                 osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
                 osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-                osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Event handlers registered successfully.");
 
             } catch(Exception ex) {
@@ -123,20 +118,6 @@ namespace OSBase.Modules {
         // OnRoundEnd updates win streak counters then calls BalanceTeams immediately.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundEnd triggered.");
-            int winner = eventInfo.Winner;
-            if (winner == TEAM_T) { 
-                winStreakT++; 
-                winStreakCT = 0;
-
-            } else if (winner == TEAM_CT) { 
-                winStreakCT++; 
-                winStreakT = 0; 
-
-            } else {
-                winStreakT = 0;
-                winStreakCT = 0;
-            }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Win streaks updated: T: {winStreakT}, CT: {winStreakCT}");
             warmup = false;
             osbase?.AddTimer(delay, () => {
                 BalanceTeams();
@@ -154,17 +135,22 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        // OnStartHalftime resets win streak counters.
-        private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnStartHalftime triggered.");
-            winStreakT = 0;
-            winStreakCT = 0;
-            return HookResult.Continue;
-        }
-
         private void BalanceTeams() {
             // This method must run on the main thread.
             var playersList = Utilities.GetPlayers();
+            int winStreakT = 0;
+            int winStreakCT = 0;
+            int winsT = 0;
+            int winsCT = 0;
+            if (osbase != null && osbase.GetGameStats() != null) {
+                var gameStats = osbase.GetGameStats();
+                if (gameStats != null) {
+                    winStreakT = gameStats.getTeam(TEAM_T).streak;
+                    winStreakCT = gameStats.getTeam(TEAM_CT).streak;
+                    winsT = gameStats.getTeam(TEAM_T).wins;
+                    winsCT = gameStats.getTeam(TEAM_CT).wins;
+                }
+            }
             // Filter out non-connected players, missing UserId, and HLTV/demorecorder clients.
             var connectedPlayers = playersList
                 .Where(player => player.Connected == PlayerConnectedState.PlayerConnected &&
@@ -209,11 +195,19 @@ namespace OSBase.Modules {
                     playersToMove = tCount - idealT;
                     moveFromT = true;
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bombsites = {bombsites}: Moving {playersToMove} player(s) from T to CT.");
-                
+                    if (winsCT - winsT >= 3 && playersToMove == 1) {
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skipping count balancing due to CT win streak.");
+                        return;
+                    }
+
                 } else if (ctCount > idealCT) {
                     playersToMove = ctCount - idealCT;
                     moveFromT = false;
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bombsites = {bombsites}: Moving {playersToMove} player(s) from CT to T.");
+                    if (winsT - winsCT >= 3 && playersToMove == 1) {
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skipping count balancing due to T win streak.");
+                        return;
+                    }
                 }
 
                 var playersToSwitch = connectedPlayers
@@ -242,18 +236,17 @@ namespace OSBase.Modules {
                         }
                         player.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(player.TeamNum == TEAM_T ? "T" : "CT")}!!");
                         immunePlayers.Add(player.UserId!.Value);
-                        Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Moved player {candidate.Name}: {moveDirection}");
+                        Server.PrintToChatAll($"[{ModuleNameNice}]: Moved player {candidate.Name}: {moveDirection}");
 
                     } else {
                         Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Could not find player with ID {candidate.Id}.");
                     }
                 }
-                winStreakT = 0;
-                winStreakCT = 0;
                 return;
             } else {
                 Console.WriteLine("$[DEBUG] OSBase[{ModuleName}] - Teams are balanced by size.");
                 // Skill balancing: only perform if win streak conditions are met.
+
                 if (totalPlayers >= minPlayers && totalPlayers <= maxPlayers && (winStreakT >= 3 || winStreakCT >= 3)) {
                     int winningTeam = winStreakT >= 3 ? TEAM_T : TEAM_CT;
                     int losingTeam = winningTeam == TEAM_T ? TEAM_CT : TEAM_T;

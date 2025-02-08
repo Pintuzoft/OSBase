@@ -4,6 +4,7 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Modules.Utils;
 using CounterStrikeSharp.API.Core;
 
 namespace OSBase.Modules {
@@ -14,8 +15,12 @@ namespace OSBase.Modules {
         private Config? config;
         private bool isWarmup = false;
 
+        private const int TEAM_T = (int)CsTeam.Terrorist;
+        private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
+
         // Store player stats keyed by user id.
         private Dictionary<int, PlayerStats> playerStats = new Dictionary<int, PlayerStats>();
+        private Dictionary<int, TeamStats> teamStats = new Dictionary<int, TeamStats>();
 
         public GameStats(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
@@ -30,6 +35,7 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+            osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
 
@@ -75,27 +81,52 @@ namespace OSBase.Modules {
 
         // Print current stats at the end of a round.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if(isWarmup) return HookResult.Continue;
+            if(isWarmup) 
+                return HookResult.Continue;
+
+            // Update team stats.
+            if (eventInfo.Winner == TEAM_T) {
+                teamStats[TEAM_T].wins++;
+                teamStats[TEAM_CT].losses++;
+                teamStats[TEAM_T].streak++;
+                teamStats[TEAM_CT].streak = 0;
+            } else if (eventInfo.Winner == TEAM_CT) {
+                teamStats[TEAM_CT].wins++;
+                teamStats[TEAM_T].losses++;
+                teamStats[TEAM_CT].streak++;
+                teamStats[TEAM_T].streak = 0;
+            }
+
             Console.WriteLine("[DEBUG] OSBase[gamedata] - Round ended. Current player stats:");
             foreach (var entry in playerStats) {
                 Console.WriteLine($"[DEBUG] OSBase[gamedata] - Player ID {entry.Key}: {entry.Value}");
             }
+
+            Console.WriteLine("[DEBUG] OSBase[gamedata] - Current team stats:");
+            foreach (var entry in teamStats) {
+                Console.WriteLine($"[DEBUG] OSBase[gamedata] - Team [{(entry.Key == TEAM_T ? "T" : "CT")}]: {entry.ToString()}");
+            } 
+
+            return HookResult.Continue;
+        }
+
+        private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnStartHalftime triggered.");
+            TeamStats buf = teamStats[TEAM_T];
+            teamStats[TEAM_T] = teamStats[TEAM_CT];
+            teamStats[TEAM_CT] = buf;
             return HookResult.Continue;
         }
 
         // Reset stats at the start of a new map.
          private void OnMapStart(string mapName) {
             this.isWarmup = true;
-            playerStats.Clear();
-            foreach (var player in Utilities.GetPlayers()) {
-                if (player != null && player.UserId.HasValue) {
-                    playerStats[player.UserId.Value] = new PlayerStats();
-                }
-            }            
+            clearStats();
         }
 
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-            isWarmup = false;
+            this.isWarmup = false;
+            clearStats();
             return HookResult.Continue;
         }
 
@@ -107,6 +138,26 @@ namespace OSBase.Modules {
             return new PlayerStats(); // Return an empty stats object if none exists.
         }
 
+        private void clearStats() {
+            // Reset stats for all players.
+            playerStats.Clear();
+            foreach (var player in Utilities.GetPlayers()) {
+                if (player != null && player.UserId.HasValue) {
+                    playerStats[player.UserId.Value] = new PlayerStats();
+                }
+            }
+            // Reset team stats.
+            teamStats.Clear();
+            teamStats[TEAM_T] = new TeamStats();
+            teamStats[TEAM_CT] = new TeamStats();
+        }
+
+        public TeamStats getTeam (int team) {
+            if ( team == TEAM_T && team == TEAM_CT) {
+                return teamStats[team];
+            }
+            return new TeamStats();     
+        }
     }
 
     // Data container for game statistics.
@@ -119,4 +170,14 @@ namespace OSBase.Modules {
             return $"Kills: {Kills}, Deaths: {Deaths}, Assists: {Assists}, Damage: {Damage}";
         }
     }
+
+    public class TeamStats {
+        public int wins { get; set; }
+        public int losses { get; set; }
+        public int streak { get; set; }   
+        public override string ToString() {
+            return $"Wins: {wins}, Losses: {losses}, Streak: {streak}";
+        }
+    }
+    
 }

@@ -26,9 +26,11 @@ namespace OSBase.Modules {
         private class Bet {
             public int amount { get; set; }
             public int team { get; set; } 
-            public Bet(int inAmount, int inTeam) {
+            public float odds { get; set; }
+            public Bet(int inAmount, int inTeam, float inOdds) {
                 amount = inAmount;
                 team = inTeam;
+                odds = inOdds;
             }
         }
 
@@ -49,7 +51,6 @@ namespace OSBase.Modules {
 
             if (config.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
                 loadEventHandlers();
-                osbase.AddCommand("bet", "bet", handleBetCommand);
                 osbase.RegisterEventHandler<EventPlayerChat>(OnPlayerChat);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
             } else {
@@ -69,12 +70,24 @@ namespace OSBase.Modules {
 
         private HookResult OnPlayerChat(EventPlayerChat eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine("[DEBUG] TeamBets: OnPlayerChat");
+            if (eventInfo == null || eventInfo?.Userid == null) {
+                return HookResult.Continue;
+            }
 
+            CCSPlayerController? player = eventInfo?.Userid != null ? Utilities.GetPlayerFromUserid(eventInfo.Userid) : null;
+
+            if (player == null) {
+                return HookResult.Continue;
+            }
+
+            if (eventInfo != null && eventInfo.Text != null && eventInfo.Text.StartsWith("bet")) {
+                handleBetCommand(player, eventInfo.Text);
+            }
             return HookResult.Continue;
         }
 
         // Command format: bet <t/ct> <amount|all>
-        private void handleBetCommand(CCSPlayerController? player, CommandInfo? commandInfo) {
+        private void handleBetCommand(CCSPlayerController? player, string command) {
             Console.WriteLine("[DEBUG] TeamBets: handleBetCommand");
             if (player != null) {
                 player.PrintToChat("[TeamBets]: WooHoo! you are here!!");
@@ -88,8 +101,11 @@ namespace OSBase.Modules {
 			    return;
             }
 
+            // Parse the command
+            List<string> cmds = command.Split(' ').ToList();
+
             // Check if the player is alive
-            if (commandInfo == null || commandInfo.ArgCount < 3) {
+            if (command == null || cmds.Count < 3) {
                 player.PrintToChat("[TeamBets]: Usage: bet <t/ct> <amount|all|half>");
                 return;
             }
@@ -113,51 +129,70 @@ namespace OSBase.Modules {
             }
 
             // Check if the player bet on a valid team
-            string teamBetName = commandInfo.ArgByIndex(0).ToLower();
-            int teamBet = 0;
-            if ( teamBetName == "t" ) {
-                teamBet = TEAM_T;
-            } else if ( teamBetName == "ct" ) {
-                teamBet = TEAM_CT;
-            } else {
-                player.PrintToChat("[TeamBets]: Invalid team. Use 't' or 'ct'.");
-                return;
+            string teamStr = cmds[1].ToLower();
+            string amountStr = cmds[2].ToLower();
+            var playersList = Utilities.GetPlayers();
+            var terrorists = playersList
+                .Where(p => p.TeamNum == TEAM_T)
+                .ToList();
+
+            var counterterrorists = playersList
+                .Where(p => p.TeamNum == TEAM_CT)
+                .ToList();
+
+
+            int tSize = terrorists.Count;
+            int ctSize = counterterrorists.Count;
+            int team = 0;
+            int amount = 0;
+            float odds = 0.0f;
+
+
+            switch (teamStr) {
+                case "t":
+                    team = TEAM_T;
+                    odds = ctSize / tSize;
+                    break;
+                case "ct":
+                    team = TEAM_CT;
+                    odds = tSize / ctSize;
+                    break;
+                default:
+                    player.PrintToChat("[TeamBets]: Invalid team. Use 't' or 'ct'.");
+                    return;
             }
 
             // Check if the player bet a valid amount
-            string betInput = commandInfo.ArgByIndex(1).ToLower();
-            int betAmount = 0;
-            int cashCow = player.InGameMoneyServices?.Account ?? 0;
-
-            if (betInput == "all") {
-                betAmount = cashCow;
-            } else if (betInput == "half") {
-                betAmount = (int)Math.Round(cashCow / 2f);
-            } else if (!int.TryParse(betInput, out betAmount)) {
-                player.PrintToChat("[TeamBets]: Invalid bet amount!");
-                return;
+            switch (amountStr) {
+                case "all":
+                    amount = player.InGameMoneyServices.Account;
+                    break;
+                case "half":
+                    amount = (int)Math.Round(player.InGameMoneyServices.Account / 2f);
+                    break;
+                default:
+                    try {
+                        amount = int.Parse(amountStr);
+                    } catch {
+                        player.PrintToChat("[TeamBets]: Invalid bet amount!");
+                        return;
+                    }
+                    break;
             }
             
-            if (betAmount <= 0) {
+            if (amount <= 0) {
                 player.PrintToChat("[TeamBets]: Bet amount must be greater than 0!");
                 return;
-            }
 
-            // Check if the player has enough cash to bet
-            if (cashCow < betAmount) {
+            } else if (amount > player.InGameMoneyServices.Account) {
                 player.PrintToChat("[TeamBets]: You don't have enough cash to bet that amount!");
                 return;
+            } else {
+                betters.Add(player.UserId.Value, new Bet(amount, team, odds));
+                player.RemoveMoney(amount);
+                player.PrintToChat($"[TeamBets]: ${amount} on {(team == TEAM_T ? "Terrorists" : "Counter-Terrorists")}");
             }
 
-            // Place the bet
-            betters.Add(player.UserId.Value, new Bet(betAmount, teamBet));
-
-            // Deduct the bet
-            player.RemoveMoney(betAmount);
-
-            // Announce the bet
-            player.PrintToChat($"[TeamBets]: ${betAmount} on {(teamBet == TEAM_T ? "Terrorists" : "Counter-Terrorists")}.");
-            return;
         }
 
         // Clear bets at the start of a new round
@@ -174,23 +209,6 @@ namespace OSBase.Modules {
             // Assume eventInfo.WinningTeam is "t" or "ct"
             int winningTeam = eventInfo.Winner;
 
-            int totalT = 0, totalCT = 0;
-            foreach (var bet in betters.Values) {
-                switch ( bet.team ) {
-                    case TEAM_T :
-                        totalT += bet.amount;
-                        break;
-
-                    case TEAM_CT :
-                        totalCT += bet.amount;
-                        break;
-                }
-            }
-
-            // Determine the losers' pot and total winning bets
-            int losersPool = winningTeam == TEAM_T ? totalCT : totalT;
-            int winnersTotal = winningTeam == TEAM_T ? totalT : totalCT;
-
             // Distribute winnings proportionally
             foreach (var kvp in betters) {
                 int playerId = kvp.Key;
@@ -202,9 +220,7 @@ namespace OSBase.Modules {
                 if (bet.team == winningTeam) {
                     // Your payout equals your bet plus your share of the losers' pool
                     int payout = bet.amount;
-                    if (winnersTotal > 0)
-                        payout += (int)((double)bet.amount / winnersTotal * losersPool);
-
+           
                     player.AddMoney(payout);
                     player.PrintToChat($"[TeamBets]: Congrats! You won ${payout} betting on {(winningTeam == TEAM_T ? "Terrorists" : "Counter-Terrorists")}!");
                 } else {
