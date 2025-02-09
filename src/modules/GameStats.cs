@@ -133,7 +133,7 @@ namespace OSBase.Modules {
                     } else {
                         playerStats[player.UserId.Value].roundLosses++;
                     }
-                    Console.WriteLine($"[DEBUG] OSBase[gamedata] - Skillrating: {player.PlayerName}:");
+                    Console.WriteLine($"[DEBUG] OSBase[gamedata] - Skillrating: {player.PlayerName}: {playerStats[player.UserId.Value].calcSkill()}");
                 }
             }
 
