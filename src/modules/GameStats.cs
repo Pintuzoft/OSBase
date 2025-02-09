@@ -202,18 +202,16 @@ namespace OSBase.Modules {
         public int shotsFired { get; set; }
         public int shotsHit { get; set; }
         public int headshotKills { get; set; }
-        public float calcSkill ( ) {
-                       
+        public float calcSkill() {                        
             // Final rating = baseline + (defaultPerformance + adjustments).
-            // For example, with baseline = 1000 and defaultPerformance = 10000,
-            // a neutral player (matching our defaults) gets 11,000.
+            // With baseline = 1000 and defaultPerformance = 10000, a neutral player gets 11000.
             const float baseline = 1000f;
             const float defaultPerformance = 10000f;
             
             // Neutral per-round defaults.
             const float defaultKPR = 1f;    // 1 kill per round
             const float defaultDPR = 1f;    // 1 death per round
-            const float defaultADR = 100f;  // Updated default: 100 damage per round
+            const float defaultADR = 100f;  // 100 damage per round
             const float defaultAPR = 0.5f;  // 0.5 assists per round
             
             // Basic metric multipliers.
@@ -223,16 +221,18 @@ namespace OSBase.Modules {
             const float assistFactor = 1000f;
             
             // --- KD Adjustment ---
-            // Neutral KD is 1.0; below that, steep penalty; above, bonus saturates.
+            // Neutral KD is 1.0.
+            // For KD below 1.0, we use a steeper multiplier.
+            // For KD ≥ 1.0, we use a milder multiplier.
             float kd = deaths > 0 ? (float)kills / deaths : kills;
             float kdAdjustment = 0f;
             if (kd < 1f)
             {
-                kdAdjustment = (kd - 1f) * 9170f;
+                kdAdjustment = (kd - 1f) * 10000f;  // e.g. kd = 0.4 -> (0.4-1.0)*10000 = -6000.
             }
             else
             {
-                kdAdjustment = 7500f * (float)Math.Tanh((kd - 1f) * 1.5f);
+                kdAdjustment = (kd - 1f) * 5000f;    // e.g. kd = 1.6 -> (1.6-1.0)*5000 = +3000.
             }
             
             // --- Win Ratio Adjustment ---
