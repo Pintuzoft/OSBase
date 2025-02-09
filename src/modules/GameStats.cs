@@ -36,6 +36,7 @@ namespace OSBase.Modules {
             osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
+            osbase?.RegisterEventHandler<EventWeaponFire>(OnWeaponFire);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
 
@@ -46,8 +47,21 @@ namespace OSBase.Modules {
                 if (!playerStats.ContainsKey(attackerId)) {
                     playerStats[attackerId] = new PlayerStats();
                 }
-                playerStats[attackerId].Damage += eventInfo.DmgHealth;
+                playerStats[attackerId].damage += eventInfo.DmgHealth;
+                playerStats[attackerId].shotsHit++;
             }            
+            return HookResult.Continue;
+        }
+
+        private HookResult OnWeaponFire(EventWeaponFire eventInfo, GameEventInfo gameEventInfo) {
+            if(isWarmup) return HookResult.Continue;
+            if (eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue) {
+                int shooterId = eventInfo.Userid.UserId.Value;
+                if (!playerStats.ContainsKey(shooterId)) {
+                    playerStats[shooterId] = new PlayerStats();
+                }
+                playerStats[shooterId].shotsFired++;
+            }
             return HookResult.Continue;
         }
 
@@ -59,14 +73,17 @@ namespace OSBase.Modules {
                 if (!playerStats.ContainsKey(attackerId)) {
                     playerStats[attackerId] = new PlayerStats();
                 }
-                playerStats[attackerId].Kills++;
+                playerStats[attackerId].kills++;
+                if ( eventInfo.Hitgroup == 1 ) {
+                    playerStats[attackerId].headshotKills++;
+                }
             }
             if (eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue) {
                 int victimId = eventInfo.Userid.UserId.Value;
                 if (!playerStats.ContainsKey(victimId)) {
                     playerStats[victimId] = new PlayerStats();
                 }
-                playerStats[victimId].Deaths++;
+                playerStats[victimId].deaths++;
             }
             // Optionally update assists if available.
             if (eventInfo.Assister != null && eventInfo.Assister.UserId.HasValue) {
@@ -74,7 +91,7 @@ namespace OSBase.Modules {
                 if (!playerStats.ContainsKey(assistId)) {
                     playerStats[assistId] = new PlayerStats();
                 }
-                playerStats[assistId].Assists++;
+                playerStats[assistId].assists++;
             }
             return HookResult.Continue;
         }
@@ -99,6 +116,7 @@ namespace OSBase.Modules {
 
             Console.WriteLine("[DEBUG] OSBase[gamedata] - Round ended. Current player stats:");
             foreach (var entry in playerStats) {
+                entry.Value.rounds++;
                 Console.WriteLine($"[DEBUG] OSBase[gamedata] - Player ID {entry.Key}: {entry.Value}");
             }
 
@@ -106,6 +124,18 @@ namespace OSBase.Modules {
             foreach (var entry in teamStats) {
                 Console.WriteLine($"[DEBUG] OSBase[gamedata] - Team [{(entry.Key == TEAM_T ? "T" : "CT")}]: {entry.ToString()}");
             } 
+
+            var playerList = Utilities.GetPlayers();
+            foreach (var player in playerList) {
+                if (player != null && player.UserId.HasValue) {
+                    if ( player.TeamNum == eventInfo.Winner ) {
+                        playerStats[player.UserId.Value].roundWins++;
+                    } else {
+                        playerStats[player.UserId.Value].roundLosses++;
+                    }
+                    Console.WriteLine($"[DEBUG] OSBase[gamedata] - Skillrating: {player.PlayerName}:");
+                }
+            }
 
             return HookResult.Continue;
         }
@@ -162,12 +192,81 @@ namespace OSBase.Modules {
 
     // Data container for game statistics.
     public class PlayerStats {
-        public int Kills { get; set; }
-        public int Deaths { get; set; }
-        public int Assists { get; set; }
-        public int Damage { get; set; }
-        public override string ToString() {
-            return $"Kills: {Kills}, Deaths: {Deaths}, Assists: {Assists}, Damage: {Damage}";
+        public int rounds { get; set; }
+        public int roundWins { get; set; }
+        public int roundLosses { get; set; }
+        public int kills { get; set; }
+        public int deaths { get; set; }
+        public int assists { get; set; }
+        public int damage { get; set; }
+        public int shotsFired { get; set; }
+        public int shotsHit { get; set; }
+        public int headshotKills { get; set; }
+        public float calcSkill ( ) {
+                       
+            // Final rating = baseline + (defaultPerformance + adjustments).
+            // For example, with baseline = 1000 and defaultPerformance = 10000,
+            // a neutral player (matching our defaults) gets 11,000.
+            const float baseline = 1000f;
+            const float defaultPerformance = 10000f;
+            
+            // Neutral per-round defaults.
+            const float defaultKPR = 1f;    // 1 kill per round
+            const float defaultDPR = 1f;    // 1 death per round
+            const float defaultADR = 100f;  // Updated default: 100 damage per round
+            const float defaultAPR = 0.5f;  // 0.5 assists per round
+            
+            // Basic metric multipliers.
+            const float killFactor = 1500f;
+            const float deathFactor = 1000f;
+            const float damageFactor = 1f;     // 1 point per extra damage per round above default
+            const float assistFactor = 1000f;
+            
+            // --- KD Adjustment ---
+            // Neutral KD is 1.0; below that, steep penalty; above, bonus saturates.
+            float kd = deaths > 0 ? (float)kills / deaths : kills;
+            float kdAdjustment = 0f;
+            if (kd < 1f)
+            {
+                kdAdjustment = (kd - 1f) * 9170f;
+            }
+            else
+            {
+                kdAdjustment = 7500f * (float)Math.Tanh((kd - 1f) * 1.5f);
+            }
+            
+            // --- Win Ratio Adjustment ---
+            float winRatio = rounds > 0 ? (float)roundWins / rounds : 0.5f;
+            float winAdjustment = (winRatio - 0.5f) * 5000f;
+            
+            // --- Headshot Bonus ---
+            float headshotRatio = kills > 0 ? (float)headshotKills / kills : 0;
+            float headshotBonus = Math.Max(headshotRatio - 0.2f, 0) * 1500f;
+            
+            // --- Accuracy Bonus ---
+            float accuracy = shotsFired > 0 ? (float)shotsHit / shotsFired : 0;
+            float accuracyBonus = Math.Max(accuracy - 0.3f, 0) * 1000f;
+            
+            // --- Per-Round Averages for Basic Metrics ---
+            float kprAvg = rounds > 0 ? (float)kills / rounds : 0;
+            float dprAvg = rounds > 0 ? (float)deaths / rounds : 0;
+            float adrAvg = rounds > 0 ? (float)damage / rounds : 0;
+            float aprAvg = rounds > 0 ? (float)assists / rounds : 0;
+            
+            float basicAdjustment =
+                (kprAvg - defaultKPR) * killFactor
+                + (defaultDPR - dprAvg) * deathFactor
+                + (adrAvg - defaultADR) * damageFactor
+                + (aprAvg - defaultAPR) * assistFactor;
+            
+            // --- Combine All Adjustments ---
+            float totalAdjustment = basicAdjustment + kdAdjustment + winAdjustment + headshotBonus + accuracyBonus;
+            float calculatedValue = defaultPerformance + totalAdjustment;
+            if (calculatedValue < 0)
+                calculatedValue = 0;
+            
+            float finalSkill = baseline + calculatedValue;
+            return Math.Clamp(finalSkill, 1000f, 30000f);
         }
     }
 

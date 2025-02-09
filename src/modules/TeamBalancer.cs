@@ -167,7 +167,7 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player list with kill counts from GameStats:");
             foreach (var p in connectedPlayers) {
-                int kills = gameStats!.GetPlayerStats(p.UserId!.Value).Kills;
+                int kills = gameStats!.GetPlayerStats(p.UserId!.Value).kills;
                 string teamName = (p.TeamNum == TEAM_T ? "T" : (p.TeamNum == TEAM_CT ? "CT" : p.TeamNum.ToString()));
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, KillCount: {kills}");
             }
@@ -214,7 +214,7 @@ namespace OSBase.Modules {
                     .Where(p => moveFromT ? p.TeamNum == TEAM_T : p.TeamNum == TEAM_CT)
                     .Select(p => new { 
                         Id = p.UserId!.Value, 
-                        KillCount = gameStats?.GetPlayerStats(p.UserId.Value).Kills, 
+                        KillCount = gameStats?.GetPlayerStats(p.UserId.Value).kills, 
                         Name = p.PlayerName 
                     })
                     .OrderBy(p => p.KillCount)
@@ -255,11 +255,11 @@ namespace OSBase.Modules {
                     // Filter out players that are not immune.
                     var winningTeamCandidates = connectedPlayers
                         .Where(p => p.TeamNum == winningTeam && !immunePlayers.Contains(p.UserId!.Value))
-                        .OrderByDescending(p => gameStats?.GetPlayerStats(p.UserId!.Value).Kills)
+                        .OrderByDescending(p => gameStats?.GetPlayerStats(p.UserId!.Value).kills)
                         .ToList();
                     var losingTeamCandidates = connectedPlayers
                         .Where(p => p.TeamNum == losingTeam && !immunePlayers.Contains(p.UserId!.Value))
-                        .OrderBy(p => gameStats?.GetPlayerStats(p.UserId!.Value).Kills)
+                        .OrderBy(p => gameStats?.GetPlayerStats(p.UserId!.Value).kills)
                         .ToList();
 
                     // Require at least two non-immune players per team.

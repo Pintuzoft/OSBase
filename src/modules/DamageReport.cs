@@ -85,6 +85,10 @@ public class DamageReport : IModule {
                 return HookResult.Continue;
             }
 
+            if (eventInfo.DmgHealth <= 0) {
+                return HookResult.Continue;
+            }
+
             int attacker = eventInfo.Attacker?.UserId ?? ENVIRONMENT; // Default to ENVIRONMENT if null
             int victim = eventInfo.Userid?.UserId ?? -1;
 
