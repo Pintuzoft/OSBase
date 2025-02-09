@@ -153,7 +153,7 @@ namespace OSBase.Modules {
         }
 
         public TeamStats getTeam (int team) {
-            if ( team == TEAM_T && team == TEAM_CT) {
+            if ( team == TEAM_T || team == TEAM_CT) {
                 return teamStats[team];
             }
             return new TeamStats();     
