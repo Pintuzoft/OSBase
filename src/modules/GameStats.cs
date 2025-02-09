@@ -203,8 +203,10 @@ namespace OSBase.Modules {
         public int shotsHit { get; set; }
         public int headshotKills { get; set; }
         public float calcSkill() {                        
-            // Final rating = baseline + (defaultPerformance + adjustments).
-            // With baseline = 1000 and defaultPerformance = 10000, a neutral player gets 11000.
+            // Final rating = baseline + (defaultPerformance + (fractionalWeight * adjustments)).
+            // For example, if baseline = 1000 and defaultPerformance = 10000,
+            // then a neutral player (matching our defaults) gets 1000 + 10000 = 11000.
+            // However, for early rounds (< 5 rounds), only a fraction (rounds/5) of the adjustment is applied.
             const float baseline = 1000f;
             const float defaultPerformance = 10000f;
             
@@ -261,7 +263,10 @@ namespace OSBase.Modules {
             
             // --- Combine All Adjustments ---
             float totalAdjustment = basicAdjustment + kdAdjustment + winAdjustment + headshotBonus + accuracyBonus;
-            float calculatedValue = defaultPerformance + totalAdjustment;
+            
+            // Here we introduce the fractional weight. For rounds < 5, only (rounds/5) of the adjustment applies.
+            float fractionalWeight = rounds < 5 ? ((float)rounds / 5f) : 1f;
+            float calculatedValue = defaultPerformance + (fractionalWeight * totalAdjustment);
             if (calculatedValue < 0)
                 calculatedValue = 0;
             
