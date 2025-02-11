@@ -117,7 +117,7 @@ namespace OSBase.Modules {
             Console.WriteLine("[DEBUG] OSBase[gamedata] - Round ended. Current player stats:");
             foreach (var entry in playerStats) {
                 entry.Value.rounds++;
-                Console.WriteLine($"[DEBUG] OSBase[gamedata] - Player ID {entry.Key}: {entry.Value}");
+                //Console.WriteLine($"[DEBUG] OSBase[gamedata] - Player ID {entry.Key}: {entry.Value}");
             }
 
             Console.WriteLine("[DEBUG] OSBase[gamedata] - Current team stats:");
@@ -202,76 +202,38 @@ namespace OSBase.Modules {
         public int shotsFired { get; set; }
         public int shotsHit { get; set; }
         public int headshotKills { get; set; }
-        public float calcSkill() {                        
-            // Final rating = baseline + (defaultPerformance + (fractionalWeight * adjustments)).
-            // For example, if baseline = 1000 and defaultPerformance = 10000,
-            // then a neutral player (matching our defaults) gets 1000 + 10000 = 11000.
-            // However, for early rounds (< 5 rounds), only a fraction (rounds/5) of the adjustment is applied.
-            const float baseline = 1000f;
-            const float defaultPerformance = 10000f;
-            
-            // Neutral per-round defaults.
-            const float defaultKPR = 1f;    // 1 kill per round
-            const float defaultDPR = 1f;    // 1 death per round
-            const float defaultADR = 100f;  // 100 damage per round
-            const float defaultAPR = 0.5f;  // 0.5 assists per round
-            
-            // Basic metric multipliers.
-            const float killFactor = 1500f;
-            const float deathFactor = 1000f;
-            const float damageFactor = 1f;     // 1 point per extra damage per round above default
-            const float assistFactor = 1000f;
-            
-            // --- KD Adjustment ---
-            // Neutral KD is 1.0.
-            // For KD below 1.0, we use a steeper multiplier.
-            // For KD ≥ 1.0, we use a milder multiplier.
-            float kd = deaths > 0 ? (float)kills / deaths : kills;
-            float kdAdjustment = 0f;
-            if (kd < 1f)
-            {
-                kdAdjustment = (kd - 1f) * 10000f;  // e.g. kd = 0.4 -> (0.4-1.0)*10000 = -6000.
-            }
-            else
-            {
-                kdAdjustment = (kd - 1f) * 5000f;    // e.g. kd = 1.6 -> (1.6-1.0)*5000 = +3000.
-            }
-            
-            // --- Win Ratio Adjustment ---
-            float winRatio = rounds > 0 ? (float)roundWins / rounds : 0.5f;
-            float winAdjustment = (winRatio - 0.5f) * 5000f;
-            
-            // --- Headshot Bonus ---
-            float headshotRatio = kills > 0 ? (float)headshotKills / kills : 0;
-            float headshotBonus = Math.Max(headshotRatio - 0.2f, 0) * 1500f;
-            
-            // --- Accuracy Bonus ---
+
+        // Calculates a skill rating that uses:
+        // - Average damage per round for a base score:
+        //     baseDamageScore = 4000 + (avgDamage * 60)
+        //   (So 0 dmg/round → 4000p, 100 dmg/round → 10000p, etc.)
+        // - Bonus points: 250 per kill, 100 per assist.
+        // - Penalty: 150 per death.
+        // - Extra bonus: 100 per headshot kill.
+        // - Accuracy bonus: For every point above 30% accuracy, add (accuracyDifference * 2000).
+        // If no rounds are played, default to 10000.
+        public float calcSkill() {
+            if (rounds == 0)
+                return 10000f;
+
+            // Base damage score (average damage per round)
+            float avgDamage = (float)damage / rounds;
+            float baseDamageScore = 4000f + (avgDamage * 60f);
+
+            // Standard bonus/penalties.
+            float killBonus = kills * 250f;
+            float assistBonus = assists * 100f;
+            float deathPenalty = deaths * 150f;
+            float headshotBonus = headshotKills * 100f;
+
+            // Accuracy bonus: use a baseline of 30% accuracy.
             float accuracy = shotsFired > 0 ? (float)shotsHit / shotsFired : 0;
-            float accuracyBonus = Math.Max(accuracy - 0.3f, 0) * 1000f;
-            
-            // --- Per-Round Averages for Basic Metrics ---
-            float kprAvg = rounds > 0 ? (float)kills / rounds : 0;
-            float dprAvg = rounds > 0 ? (float)deaths / rounds : 0;
-            float adrAvg = rounds > 0 ? (float)damage / rounds : 0;
-            float aprAvg = rounds > 0 ? (float)assists / rounds : 0;
-            
-            float basicAdjustment =
-                (kprAvg - defaultKPR) * killFactor
-                + (defaultDPR - dprAvg) * deathFactor
-                + (adrAvg - defaultADR) * damageFactor
-                + (aprAvg - defaultAPR) * assistFactor;
-            
-            // --- Combine All Adjustments ---
-            float totalAdjustment = basicAdjustment + kdAdjustment + winAdjustment + headshotBonus + accuracyBonus;
-            
-            // Here we introduce the fractional weight. For rounds < 5, only (rounds/5) of the adjustment applies.
-            float fractionalWeight = rounds < 5 ? ((float)rounds / 5f) : 1f;
-            float calculatedValue = defaultPerformance + (fractionalWeight * totalAdjustment);
-            if (calculatedValue < 0)
-                calculatedValue = 0;
-            
-            float finalSkill = baseline + calculatedValue;
-            return Math.Clamp(finalSkill, 1000f, 30000f);
+            float baselineAccuracy = 0.3f;
+            float accuracyBonus = accuracy > baselineAccuracy ? (accuracy - baselineAccuracy) * 2000f : 0f;
+
+            // Total rating is the sum of the above.
+            float totalRating = baseDamageScore + killBonus + assistBonus - deathPenalty + headshotBonus + accuracyBonus;
+            return totalRating;
         }
     }
 
