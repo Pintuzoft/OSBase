@@ -190,10 +190,22 @@ namespace OSBase.Modules {
             }
             return new TeamStats();     
         }
+        public float GetTeamTotalSkill(int team) {
+            return playerStats.Values
+                            .Where(ps => ps.team == team)
+                            .Sum(ps => ps.calcSkill());
+        }
+
+        public float GetTeamAverageSkill(int team) {
+            var teamPlayers = playerStats.Values.Where(ps => ps.team == team).ToList();
+            return teamPlayers.Any() ? teamPlayers.Average(ps => ps.calcSkill()) : 0f;
+        }
     }
+
 
     // Data container for game statistics.
     public class PlayerStats {
+        public int team { get; set; }
         public int rounds { get; set; }
         public int roundWins { get; set; }
         public int roundLosses { get; set; }
@@ -237,6 +249,8 @@ namespace OSBase.Modules {
             float totalRating = baseDamageScore + killBonus + assistBonus - deathPenalty + headshotBonus + accuracyBonus;
             return totalRating;
         }
+
+
     }
 
     public class TeamStats {

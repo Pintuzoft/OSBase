@@ -7,6 +7,7 @@ using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Modules.Utils;
 
+
 namespace OSBase.Modules {
 
     public class TeamBalancer : IModule {
@@ -136,167 +137,184 @@ namespace OSBase.Modules {
         }
 
         private void BalanceTeams() {
-            // This method must run on the main thread.
+            // Retrieve game stats and connected players.
             var playersList = Utilities.GetPlayers();
-            int winStreakT = 0;
-            int winStreakCT = 0;
-            int winsT = 0;
-            int winsCT = 0;
-            if (osbase != null && osbase.GetGameStats() != null) {
-                var gameStats = osbase.GetGameStats();
-                if (gameStats != null) {
-                    winStreakT = gameStats.getTeam(TEAM_T).streak;
-                    winStreakCT = gameStats.getTeam(TEAM_CT).streak;
-                    winsT = gameStats.getTeam(TEAM_T).wins;
-                    winsCT = gameStats.getTeam(TEAM_CT).wins;
-                }
-            }
-            // Filter out non-connected players, missing UserId, and HLTV/demorecorder clients.
-            var connectedPlayers = playersList
-                .Where(player => player.Connected == PlayerConnectedState.PlayerConnected &&
-                                 player.UserId.HasValue &&
-                                 !player.IsHLTV)
-                .ToList();
+            var gameStats = osbase?.GetGameStats();
+            if (gameStats == null)
+                return;
+
+            int winStreakT = gameStats.getTeam(TEAM_T).streak;
+            int winStreakCT = gameStats.getTeam(TEAM_CT).streak;
+            int winsT = gameStats.getTeam(TEAM_T).wins;
+            int winsCT = gameStats.getTeam(TEAM_CT).wins;
+
+            // Filter connected players (excluding HLTV/demorecorder clients)
+            var connectedPlayers = playersList.Where(p =>
+                p.Connected == PlayerConnectedState.PlayerConnected &&
+                p.UserId.HasValue &&
+                !p.IsHLTV).ToList();
 
             int totalPlayers = connectedPlayers.Count;
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Connected players count (excluding HLTV): {totalPlayers}");
-            if (totalPlayers == 0) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - No connected players found.");
+            if (totalPlayers == 0)
                 return;
-            }
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player list with kill counts from GameStats:");
-            foreach (var p in connectedPlayers) {
-                int kills = gameStats!.GetPlayerStats(p.UserId!.Value).kills;
-                string teamName = (p.TeamNum == TEAM_T ? "T" : (p.TeamNum == TEAM_CT ? "CT" : p.TeamNum.ToString()));
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player: {p.PlayerName} (ID: {p.UserId}), Team: {teamName}, KillCount: {kills}");
-            }
-
+            // Determine ideal team sizes.
             int tCount = connectedPlayers.Count(p => p.TeamNum == TEAM_T);
             int ctCount = connectedPlayers.Count(p => p.TeamNum == TEAM_CT);
-
             int idealT, idealCT;
             if (bombsites >= 2) {
                 idealT = totalPlayers / 2;
                 idealCT = totalPlayers / 2 + totalPlayers % 2;
-            
             } else {
                 idealT = totalPlayers / 2 + totalPlayers % 2;
                 idealCT = totalPlayers / 2;
             }
-            bool isTeamsBalanced = (tCount == idealT && ctCount == idealCT);
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Total: {totalPlayers}, T: {tCount} (ideal: {idealT}), CT: {ctCount} (ideal: {idealCT})");
+            bool sizesBalanced = (tCount == idealT && ctCount == idealCT);
 
-            if ( ! isTeamsBalanced ) {
-                // Count balancing: move low kill-count players from the team that is over the ideal count.
-                int playersToMove = 0;
-                bool moveFromT = false;
-                if (tCount > idealT) {
-                    playersToMove = tCount - idealT;
-                    moveFromT = true;
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bombsites = {bombsites}: Moving {playersToMove} player(s) from T to CT.");
-                    if (winsCT - winsT >= 3 && playersToMove == 1) {
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skipping count balancing due to CT win streak.");
-                        return;
-                    }
+            // Compute team average skills using GameStats helper methods.
+            float avgSkillT = gameStats.GetTeamAverageSkill(TEAM_T);
+            float avgSkillCT = gameStats.GetTeamAverageSkill(TEAM_CT);
 
-                } else if (ctCount > idealCT) {
-                    playersToMove = ctCount - idealCT;
-                    moveFromT = false;
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Bombsites = {bombsites}: Moving {playersToMove} player(s) from CT to T.");
-                    if (winsT - winsCT >= 3 && playersToMove == 1) {
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skipping count balancing due to T win streak.");
-                        return;
-                    }
-                }
+            // ---------------- COUNT BALANCING (if team sizes are imbalanced) ----------------
+            if (!sizesBalanced) {
+                bool moveFromT = (tCount > idealT);
+                int playersToMove = Math.Abs(moveFromT ? tCount - idealT : ctCount - idealCT);
 
-                var playersToSwitch = connectedPlayers
-                    .Where(p => moveFromT ? p.TeamNum == TEAM_T : p.TeamNum == TEAM_CT)
-                    .Select(p => new { 
-                        Id = p.UserId!.Value, 
-                        KillCount = gameStats?.GetPlayerStats(p.UserId.Value).kills, 
-                        Name = p.PlayerName 
-                    })
-                    .OrderBy(p => p.KillCount)
-                    .Take(playersToMove)
-                    .ToList();
+                // Optionally, if only one player is to be moved and a win streak protects the underdog team, skip.
+                if (playersToMove == 1 && ((moveFromT && winsCT - winsT >= 3) || (!moveFromT && winsT - winsCT >= 3)))
+                    return;
 
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Selected {playersToSwitch.Count} candidate(s) for count balancing.");
-                foreach (var candidate in playersToSwitch) {
-                    var player = Utilities.GetPlayerFromUserid(candidate.Id);
-                    if (player != null) {
-                        int targetTeam = moveFromT ? TEAM_CT : TEAM_T;
-                        string moveDirection = moveFromT ? "T->CT" : "CT->T";
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Switching player '{candidate.Name}' (ID: {candidate.Id}) from {(moveFromT ? "T" : "CT")} to {(moveFromT ? "CT" : "T")} immediately.");
-                        
-                        if ( warmup ) {
-                            player.ChangeTeam((CsTeam)targetTeam);
-                        } else {
-                            player.SwitchTeam((CsTeam)targetTeam);
+                for (int i = 0; i < playersToMove; i++) {
+                    // Build candidate lists from the overpopulated and underpopulated teams.
+                    var overTeamPlayers = connectedPlayers
+                        .Where(p => p.TeamNum == (moveFromT ? TEAM_T : TEAM_CT) &&
+                                    p.UserId.HasValue && !immunePlayers.Contains(p.UserId.Value))
+                        .ToList();
+                    var underTeamPlayers = connectedPlayers
+                        .Where(p => p.TeamNum == (moveFromT ? TEAM_CT : TEAM_T) &&
+                                    p.UserId.HasValue && !immunePlayers.Contains(p.UserId.Value))
+                        .ToList();
+                    if (!overTeamPlayers.Any() || !underTeamPlayers.Any())
+                        break;
+
+                    // Current difference in average skill between teams (using GameStats methods)
+                    float currentDiff = Math.Abs(
+                        gameStats.GetTeamAverageSkill(moveFromT ? TEAM_T : TEAM_CT) -
+                        gameStats.GetTeamAverageSkill(moveFromT ? TEAM_CT : TEAM_T));
+
+                    float bestNewDiff = currentDiff;
+                    CCSPlayerController? candidateOver = null;
+                    CCSPlayerController? candidateUnder = null;
+
+                    // Simulate swapping each candidate pair to see which pair minimizes the difference.
+                    foreach (var over in overTeamPlayers) {
+                        float skillOver = over.UserId.HasValue ? gameStats.GetPlayerStats(over.UserId.Value).calcSkill() : 0;
+                        foreach (var under in underTeamPlayers) {
+                            float skillUnder = under.UserId.HasValue ? gameStats.GetPlayerStats(under.UserId.Value).calcSkill() : 0;
+                            int countOver = moveFromT ? tCount : ctCount;
+                            int countUnder = moveFromT ? ctCount : tCount;
+
+                            float newTotalOver = gameStats.GetTeamTotalSkill(moveFromT ? TEAM_T : TEAM_CT) - skillOver + skillUnder;
+                            float newTotalUnder = gameStats.GetTeamTotalSkill(moveFromT ? TEAM_CT : TEAM_T) - skillUnder + skillOver;
+                            float newAvgOver = newTotalOver / countOver;
+                            float newAvgUnder = newTotalUnder / countUnder;
+                            float newDiff = Math.Abs(newAvgOver - newAvgUnder);
+
+                            if (newDiff < bestNewDiff) {
+                                bestNewDiff = newDiff;
+                                candidateOver = over;
+                                candidateUnder = under;
+                            }
                         }
-                        player.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(player.TeamNum == TEAM_T ? "T" : "CT")}!!");
-                        immunePlayers.Add(player.UserId!.Value);
-                        Server.PrintToChatAll($"[{ModuleNameNice}]: Moved player {candidate.Name}: {moveDirection}");
-
-                    } else {
-                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Could not find player with ID {candidate.Id}.");
+                    }
+                    // If a candidate pair is found that reduces the skill gap, perform the swap.
+                    if (candidateOver != null && candidateUnder != null) {
+                        int targetTeam = moveFromT ? TEAM_CT : TEAM_T;
+                        if (warmup) {
+                            candidateOver.ChangeTeam((CsTeam)targetTeam);
+                            candidateUnder.ChangeTeam((CsTeam)(moveFromT ? TEAM_T : TEAM_CT));
+                        } else {
+                            candidateOver.SwitchTeam((CsTeam)targetTeam);
+                            candidateUnder.SwitchTeam((CsTeam)(moveFromT ? TEAM_T : TEAM_CT));
+                        }
+                        candidateOver.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(candidateOver.TeamNum == TEAM_T ? "T" : "CT")}!!");
+                        candidateUnder.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(candidateUnder.TeamNum == TEAM_T ? "T" : "CT")}!!");
+                        if (candidateOver.UserId.HasValue) {
+                            immunePlayers.Add(candidateOver.UserId.Value);
+                        }
+                        if (candidateUnder.UserId.HasValue) {
+                            immunePlayers.Add(candidateUnder.UserId.Value);
+                        }
                     }
                 }
                 return;
-            } else {
-                Console.WriteLine("$[DEBUG] OSBase[{ModuleName}] - Teams are balanced by size.");
-                // Skill balancing: only perform if win streak conditions are met.
-
+            }
+            // ---------------- SKILL BALANCING (if team sizes are equal) ----------------
+            else {
+                // Only perform skill balancing if win streak conditions are met.
                 if (totalPlayers >= minPlayers && totalPlayers <= maxPlayers && (winStreakT >= 3 || winStreakCT >= 3)) {
-                    int winningTeam = winStreakT >= 3 ? TEAM_T : TEAM_CT;
-                    int losingTeam = winningTeam == TEAM_T ? TEAM_CT : TEAM_T;
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing: Winning team ({(winningTeam == TEAM_T ? "T" : "CT")}) has a win streak.");
-
-                    // Filter out players that are not immune.
-                    var winningTeamCandidates = connectedPlayers
-                        .Where(p => p.TeamNum == winningTeam && !immunePlayers.Contains(p.UserId!.Value))
-                        .OrderByDescending(p => gameStats?.GetPlayerStats(p.UserId!.Value).kills)
+                    int winningTeam = (winStreakT >= 3 ? TEAM_T : TEAM_CT);
+                    int losingTeam = (winningTeam == TEAM_T ? TEAM_CT : TEAM_T);
+                    var winCandidates = connectedPlayers
+                        .Where(p => p.TeamNum == winningTeam && p.UserId.HasValue && !immunePlayers.Contains(p.UserId.Value))
                         .ToList();
-                    var losingTeamCandidates = connectedPlayers
-                        .Where(p => p.TeamNum == losingTeam && !immunePlayers.Contains(p.UserId!.Value))
-                        .OrderBy(p => gameStats?.GetPlayerStats(p.UserId!.Value).kills)
+                    var loseCandidates = connectedPlayers
+                        .Where(p => p.TeamNum == losingTeam && p.UserId.HasValue && !immunePlayers.Contains(p.UserId.Value))
                         .ToList();
-
-                    // Require at least two non-immune players per team.
-                    if (winningTeamCandidates.Count >= 2 && losingTeamCandidates.Count >= 2) {
-                        var playerFromWinning = winningTeamCandidates[1]; // Second best from winning team.
-                        var playerFromLosing = losingTeamCandidates[0];     // Worst from losing team.
-                        
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skill balancing swap scheduled: Switching second best '{playerFromWinning.PlayerName}' (ID: {playerFromWinning.UserId}) with worst '{playerFromLosing.PlayerName}' (ID: {playerFromLosing.UserId}) immediately.");
-
-                        if ( warmup ) {
-                            playerFromWinning.ChangeTeam((CsTeam)losingTeam);
-                            playerFromLosing.ChangeTeam((CsTeam)winningTeam);
-                        } else {
-                            playerFromWinning.SwitchTeam((CsTeam)losingTeam);
-                            playerFromLosing.SwitchTeam((CsTeam)winningTeam);
-                        }
-                        playerFromWinning.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(playerFromWinning.TeamNum == TEAM_T ? "T" : "CT")}!!");
-                        playerFromLosing.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(playerFromLosing.TeamNum == TEAM_T ? "T" : "CT")}!!");
-
-                        // Add these players to immunity so they won't be swapped again soon.
+                    if (winCandidates.Count < 2 || loseCandidates.Count < 2) {
                         immunePlayers.Clear();
-                        if ( ! warmup ) {
-                            immunePlayers.Add(playerFromWinning.UserId!.Value);
-                            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - {playerFromWinning.PlayerName} is now immune.");
-                            immunePlayers.Add(playerFromLosing.UserId!.Value);
-                            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - {playerFromLosing.PlayerName} is now immune.");
-                            string winningTeamName = winningTeam == TEAM_T ? "T" : "CT";
-                            string losingTeamName = losingTeam == TEAM_T ? "T" : "CT";
-                            Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Swapped players [{winningTeamName}] {playerFromWinning.PlayerName} <-> [{losingTeamName}] {playerFromLosing.PlayerName}");
-                        } else {
-                            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Immunity not set during warmup.");
+                        return;
+                    }
+
+                    float currentDiff = Math.Abs(avgSkillT - avgSkillCT);
+                    float bestNewDiff = currentDiff;
+                    CCSPlayerController? candidateWin = null;
+                    CCSPlayerController? candidateLose = null;
+
+                    // Test candidate swaps between winning and losing teams.
+                    foreach (var pWin in winCandidates) {
+                        foreach (var pLose in loseCandidates) {
+                            if (!pWin.UserId.HasValue) continue;
+                            float winSkill = gameStats.GetPlayerStats(pWin.UserId.Value).calcSkill();
+                            if (!pLose.UserId.HasValue) continue;
+                            float loseSkill = gameStats.GetPlayerStats(pLose.UserId.Value).calcSkill();
+                            float newTotalWin = gameStats.GetTeamTotalSkill(winningTeam) - winSkill + loseSkill;
+                            float newTotalLose = gameStats.GetTeamTotalSkill(losingTeam) - loseSkill + winSkill;
+                            float newAvgWin = newTotalWin / winCandidates.Count;
+                            float newAvgLose = newTotalLose / loseCandidates.Count;
+                            float newDiff = Math.Abs(newAvgWin - newAvgLose);
+
+                            if (newDiff < bestNewDiff) {
+                                bestNewDiff = newDiff;
+                                candidateWin = pWin;
+                                candidateLose = pLose;
+                            }
                         }
+                    }
+                    // Only swap if the gap is meaningfully reduced.
+                    if (candidateWin != null && candidateLose != null && bestNewDiff < currentDiff && currentDiff > 1000f) {
+                        if (warmup) {
+                            candidateWin.ChangeTeam((CsTeam)losingTeam);
+                            candidateLose.ChangeTeam((CsTeam)winningTeam);
+                        } else {
+                            candidateWin.SwitchTeam((CsTeam)losingTeam);
+                            candidateLose.SwitchTeam((CsTeam)winningTeam);
+                        }
+                        candidateWin.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(candidateWin.TeamNum == TEAM_T ? "T" : "CT")}!!");
+                        candidateLose.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(candidateLose.TeamNum == TEAM_T ? "T" : "CT")}!!");
+                        immunePlayers.Clear();
+                        if (!warmup) {
+                            if (candidateWin.UserId.HasValue) {
+                                immunePlayers.Add(candidateWin.UserId.Value);
+                            }
+                            if (candidateLose.UserId.HasValue) {
+                                immunePlayers.Add(candidateLose.UserId.Value);
+                            }
+                        }
+                        Server.PrintToChatAll($"{ChatColors.DarkRed}[{ModuleNameNice}]: Skill balanced swap: {candidateWin.PlayerName} <-> {candidateLose.PlayerName}");
                         winStreakT = 0;
                         winStreakCT = 0;
-
                     } else {
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Not enough non-immune players available for a skill balancing swap. Resetting immunity.");
                         immunePlayers.Clear();
                     }
                 } else {
