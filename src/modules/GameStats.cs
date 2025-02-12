@@ -114,26 +114,28 @@ namespace OSBase.Modules {
                 teamStats[TEAM_T].streak = 0;
             }
 
-            Console.WriteLine("[DEBUG] OSBase[gamedata] - Round ended. Current player stats:");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended. Current player stats:");
             foreach (var entry in playerStats) {
                 entry.Value.rounds++;
                 //Console.WriteLine($"[DEBUG] OSBase[gamedata] - Player ID {entry.Key}: {entry.Value}");
             }
 
-            Console.WriteLine("[DEBUG] OSBase[gamedata] - Current team stats:");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Current team stats:");
             foreach (var entry in teamStats) {
-                Console.WriteLine($"[DEBUG] OSBase[gamedata] - Team [{(entry.Key == TEAM_T ? "T" : "CT")}]: {entry.ToString()}");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team [{(entry.Key == TEAM_T ? "T" : "CT")}]: {entry.ToString()}");
             } 
 
             var playerList = Utilities.GetPlayers();
+            PlayerStats pstats;
             foreach (var player in playerList) {
                 if (player != null && player.UserId.HasValue) {
+                    pstats = playerStats[player.UserId.Value];
                     if ( player.TeamNum == eventInfo.Winner ) {
-                        playerStats[player.UserId.Value].roundWins++;
+                        pstats.roundWins++;
                     } else {
-                        playerStats[player.UserId.Value].roundLosses++;
+                        pstats.roundLosses++;
                     }
-                    Console.WriteLine($"[DEBUG] OSBase[gamedata] - Skillrating: {player.PlayerName}: {playerStats[player.UserId.Value].calcSkill()}");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
                 }
             }
 
