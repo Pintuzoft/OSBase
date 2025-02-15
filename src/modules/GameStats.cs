@@ -37,6 +37,9 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
             osbase?.RegisterEventHandler<EventWeaponFire>(OnWeaponFire);
+            osbase?.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
+            osbase?.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+            osbase?.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
 
@@ -50,6 +53,27 @@ namespace OSBase.Modules {
                 playerStats[attackerId].damage += eventInfo.DmgHealth;
                 playerStats[attackerId].shotsHit++;
             }            
+            return HookResult.Continue;
+        }
+
+        private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
+            if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");                        
+            }
+            return HookResult.Continue;
+        }
+
+        private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
+            if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} connected.");                        
+            }
+            return HookResult.Continue;
+        }
+
+        private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
+            if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} disconnected.");                        
+            }
             return HookResult.Continue;
         }
 
@@ -117,7 +141,6 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended. Current player stats:");
             foreach (var entry in playerStats) {
                 entry.Value.rounds++;
-                //Console.WriteLine($"[DEBUG] OSBase[gamedata] - Player ID {entry.Key}: {entry.Value}");
             }
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Current team stats:");
@@ -127,20 +150,28 @@ namespace OSBase.Modules {
 
             var playerList = Utilities.GetPlayers();
             PlayerStats pstats;
+            teamStats[TEAM_T].skill = 0;
+            teamStats[TEAM_CT].skill = 0;
+            teamStats[TEAM_T].resetPlayers();
             foreach (var player in playerList) {
                 if (player != null && player.UserId.HasValue) {
                     pstats = playerStats[player.UserId.Value];
+                    pstats.team = (int)player.TeamNum;
                     if ( player.TeamNum == eventInfo.Winner ) {
                         pstats.roundWins++;
                     } else {
                         pstats.roundLosses++;
                     }
+                    teamStats[pstats.team].skill += pstats.calcSkill();
+                    teamStats[pstats.team].addPlayer(player.UserId.Value, pstats);
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
                 }
             }
-
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].skill}, [CT]: {teamStats[TEAM_CT].skill}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].numPlayers()}, [CT]: {teamStats[TEAM_CT].numPlayers()}");
             return HookResult.Continue;
         }
+
 
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnStartHalftime triggered.");
@@ -191,14 +222,11 @@ namespace OSBase.Modules {
             return new TeamStats();     
         }
         public float GetTeamTotalSkill(int team) {
-            return playerStats.Values
-                            .Where(ps => ps.team == team)
-                            .Sum(ps => ps.calcSkill());
+            return teamStats[team].skill;
         }
 
         public float GetTeamAverageSkill(int team) {
-            var teamPlayers = playerStats.Values.Where(ps => ps.team == team).ToList();
-            return teamPlayers.Any() ? teamPlayers.Average(ps => ps.calcSkill()) : 0f;
+            return teamStats[team].skill / teamStats[team].numPlayers();
         }
     }
 
@@ -216,6 +244,7 @@ namespace OSBase.Modules {
         public int shotsFired { get; set; }
         public int shotsHit { get; set; }
         public int headshotKills { get; set; }
+        public int immune { get; set; }
 
         // Calculates a skill rating that uses:
         // - Average damage per round for a base score:
@@ -235,10 +264,10 @@ namespace OSBase.Modules {
             float baseDamageScore = 4000f + (avgDamage * 60f);
 
             // Standard bonus/penalties.
-            float killBonus = kills * 250f;
-            float assistBonus = assists * 100f;
-            float deathPenalty = deaths * 150f;
-            float headshotBonus = headshotKills * 100f;
+            float killBonus = kills * 150f;
+            float assistBonus = assists * 50f;
+            float deathPenalty = deaths * 100f;
+            float headshotBonus = headshotKills * 50f;
 
             // Accuracy bonus: use a baseline of 30% accuracy.
             float accuracy = shotsFired > 0 ? (float)shotsHit / shotsFired : 0;
@@ -249,14 +278,72 @@ namespace OSBase.Modules {
             float totalRating = baseDamageScore + killBonus + assistBonus - deathPenalty + headshotBonus + accuracyBonus;
             return totalRating;
         }
-
-
     }
 
     public class TeamStats {
         public int wins { get; set; }
         public int losses { get; set; }
-        public int streak { get; set; }   
+        public int streak { get; set; }
+        public float skill { get; set; }
+        private Dictionary<int, PlayerStats> playerList = new Dictionary<int, PlayerStats>();
+        public int numPlayers() {
+            return playerList.Count;
+        }
+        public void resetPlayers () {
+            playerList.Clear();
+        }
+        public void addPlayer (int userId, PlayerStats stats) {
+            playerList[userId] = stats;
+        }
+        public void removePlayer (int userId) {
+            playerList.Remove(userId);
+        }
+        public float getAverageSkill() {
+            return skill / numPlayers();
+        }
+        public CCSPlayerController? getPlayerBySkill(float targetSkill) {
+            int bestPlayerId = -1;
+            float bestDiff = float.MaxValue;
+            foreach (var kvp in playerList) {
+                var stats = kvp.Value;
+                if (stats.immune > 0)
+                    continue;
+                float diff = Math.Abs(stats.calcSkill() - targetSkill);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    bestPlayerId = kvp.Key;
+                }
+            }
+            if (bestPlayerId == -1) {
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - getPlayerBySkill: No player found for skill {targetSkill}");
+                return null;
+            }
+            return Utilities.GetPlayerFromUserid(bestPlayerId);
+        }
+        public CCSPlayerController? GetPlayerByDeviation(float targetDeviation, bool forStrongTeam) {
+            int bestPlayerId = -1;
+            float bestDiff = float.MaxValue;
+            float teamAvg = getAverageSkill();
+
+            foreach (var kvp in playerList) {
+                // Skip immune players.
+                if (kvp.Value.immune > 0)
+                    continue;
+                float playerSkill = kvp.Value.calcSkill();
+                // Compute deviation relative to team average.
+                float deviation = forStrongTeam ? (playerSkill - teamAvg) : (teamAvg - playerSkill);
+                float diff = Math.Abs(deviation - targetDeviation);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    bestPlayerId = kvp.Key;
+                }
+            }
+            if (bestPlayerId == -1) {
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - GetPlayerByDeviation: No player found for target deviation {targetDeviation}");
+                return null;
+            }
+            return Utilities.GetPlayerFromUserid(bestPlayerId);
+        }
         public override string ToString() {
             return $"Wins: {wins}, Losses: {losses}, Streak: {streak}";
         }
