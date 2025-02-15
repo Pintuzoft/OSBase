@@ -120,6 +120,15 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
+        private void printTeams() {
+            TeamStats teamt = teamStats[TEAM_T];
+            TeamStats teamct = teamStats[TEAM_CT];
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team T: {teamt.wins}w, {teamt.losses}l, {teamt.streak}s, {teamt.skill}p");
+            teamt.printPlayers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team CT: {teamct.wins}w, {teamct.losses}l, {teamct.streak}s, {teamct.skill}p");
+            teamct.printPlayers();
+        }
+
         // Print current stats at the end of a round.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
             if(isWarmup) 
@@ -343,6 +352,11 @@ namespace OSBase.Modules {
                 return null;
             }
             return Utilities.GetPlayerFromUserid(bestPlayerId);
+        }
+        public void printPlayers() {
+            foreach (var kvp in playerList) {
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}: {kvp.Value.kills}k, {kvp.Value.assists}a, {kvp.Value.deaths}d, {kvp.Value.calcSkill()}p");
+            }
         }
         public override string ToString() {
             return $"Wins: {wins}, Losses: {losses}, Streak: {streak}";
