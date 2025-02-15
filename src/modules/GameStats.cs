@@ -173,6 +173,9 @@ namespace OSBase.Modules {
                     }
                     teamStats[pstats.team].skill += pstats.calcSkill();
                     teamStats[pstats.team].addPlayer(player.UserId.Value, pstats);
+                    if ( playerStats[player.UserId.Value].immune > 0 ) {
+                        playerStats[player.UserId.Value].immune--;
+                    }
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
                 }
             }
