@@ -163,7 +163,7 @@ namespace OSBase.Modules {
             teamStats[TEAM_CT].skill = 0;
             teamStats[TEAM_T].resetPlayers();
             foreach (var player in playerList) {
-                if (player != null && player.UserId.HasValue) {
+                if (player != null && ! player.IsHLTV && player.UserId.HasValue) {
                     pstats = playerStats[player.UserId.Value];
                     pstats.team = (int)player.TeamNum;
                     if ( player.TeamNum == eventInfo.Winner ) {
@@ -176,7 +176,7 @@ namespace OSBase.Modules {
                     if ( playerStats[player.UserId.Value].immune > 0 ) {
                         playerStats[player.UserId.Value].immune--;
                     }
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}{(playerStats[player.UserId.Value].immune > 0 ? "(immune)" : "")}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
                 }
             }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].skill}, [CT]: {teamStats[TEAM_CT].skill}");
@@ -217,7 +217,7 @@ namespace OSBase.Modules {
             // Reset stats for all players.
             playerStats.Clear();
             foreach (var player in Utilities.GetPlayers()) {
-                if (player != null && player.UserId.HasValue) {
+                if (player != null && player.UserId.HasValue && ! player.IsHLTV ) {
                     playerStats[player.UserId.Value] = new PlayerStats();
                 }
             }

@@ -105,6 +105,7 @@ namespace OSBase.Modules {
 
         private void OnMapStart(string mapName) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnMapStart triggered for map: {mapName}");
+            warmup = true;
             if (mapBombsites.ContainsKey(mapName)) {
                 bombsites = mapBombsites[mapName];
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Bombsites: {bombsites}");
@@ -119,7 +120,6 @@ namespace OSBase.Modules {
         // OnRoundEnd updates win streak counters then calls BalanceTeams immediately.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundEnd triggered.");
-            warmup = false;
             osbase?.AddTimer(delay, () => {
                 BalanceTeams();
             });    
@@ -129,7 +129,7 @@ namespace OSBase.Modules {
         // OnWarmupEnd calls BalanceTeams.
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
-            warmup = true;
+            warmup = false;
             osbase?.AddTimer(warmupDelay, () => {
                 BalanceTeams();
             });
@@ -174,7 +174,7 @@ namespace OSBase.Modules {
                     break;
             }
 
-            bool sizesBalanced = (tCount == idealT && ctCount == idealCT);
+            bool sizesBalanced = tCount == idealT && ctCount == idealCT;
 
             float tSkill = tStats.getAverageSkill();
             float ctSkill = ctStats.getAverageSkill();
@@ -203,8 +203,6 @@ namespace OSBase.Modules {
                     }
                 }
             }
-
-
         }
 
         // Skill balance algorithm. Swap 2 players based on skill difference.
