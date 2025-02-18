@@ -236,30 +236,25 @@ namespace OSBase.Modules {
             float weakTarget = diff / 2;
 
             // Select candidate from the strong team (to remove) and from the weak team (to add)
-            CCSPlayerController? candidateStrong = tIsStrong ? tStats.GetPlayerByDeviation(strongTarget, true) : ctStats.GetPlayerByDeviation(strongTarget, true); 
-            CCSPlayerController? candidateWeak = tIsStrong ? ctStats.GetPlayerByDeviation(weakTarget, false) : tStats.GetPlayerByDeviation(weakTarget, false);
+            CCSPlayerController? candidateStrong = tIsStrong ? tStats.GetPlayerByDeviation(strongTarget, true) : ctStats.GetPlayerByDeviation(strongTarget, true);
+            CCSPlayerController? candidateWeak   = tIsStrong ? ctStats.GetPlayerByDeviation(weakTarget, false) : tStats.GetPlayerByDeviation(weakTarget, false);
 
             if(candidateStrong == null || candidateWeak == null) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Candidate swap not found.");
                 return;
             }
-
-            // Check if the strong candidate is stronger than the weak candidate.
-            if ( gameStats == null ) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: gameStats is null.");
-                return;
-            }   
-            if ( ! candidateStrong.UserId.HasValue || ! candidateWeak.UserId.HasValue ) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Candidate has null UserId.");
+            if(gameStats == null || !candidateStrong.UserId.HasValue || !candidateWeak.UserId.HasValue) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Invalid candidate(s).");
                 return;
             }
-            float strongCandidateSkill = tIsStrong ? gameStats.GetPlayerStats(candidateStrong.UserId.Value).calcSkill() : gameStats.GetPlayerStats(candidateWeak.UserId.Value).calcSkill();
-            float weakCandidateSkill = tIsStrong ? gameStats.GetPlayerStats(candidateWeak.UserId.Value).calcSkill() : gameStats.GetPlayerStats(candidateStrong.UserId.Value).calcSkill();
+
+            // Now, candidateStrong should be from the strong team and candidateWeak from the weak team.
+            float strongCandidateSkill = gameStats.GetPlayerStats(candidateStrong.UserId.Value).calcSkill();
+            float weakCandidateSkill   = gameStats.GetPlayerStats(candidateWeak.UserId.Value).calcSkill();
             if (strongCandidateSkill <= weakCandidateSkill) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Candidate from strong team ({strongCandidateSkill}) is not stronger than candidate from weak team ({weakCandidateSkill}). Swap skipped.");
                 return;
             }
-
             // Execute the swap
             movePlayer(candidateStrong, tIsStrong ? TEAM_CT : TEAM_T, tStats, ctStats);
             movePlayer(candidateWeak, tIsStrong ? TEAM_T : TEAM_CT, tStats, ctStats);
