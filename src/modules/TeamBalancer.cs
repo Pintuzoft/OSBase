@@ -244,6 +244,22 @@ namespace OSBase.Modules {
                 return;
             }
 
+            // Check if the strong candidate is stronger than the weak candidate.
+            if ( gameStats == null ) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: gameStats is null.");
+                return;
+            }   
+            if ( ! candidateStrong.UserId.HasValue || ! candidateWeak.UserId.HasValue ) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Candidate has null UserId.");
+                return;
+            }
+            float strongCandidateSkill = tIsStrong ? gameStats.GetPlayerStats(candidateStrong.UserId.Value).calcSkill() : gameStats.GetPlayerStats(candidateWeak.UserId.Value).calcSkill();
+            float weakCandidateSkill = tIsStrong ? gameStats.GetPlayerStats(candidateWeak.UserId.Value).calcSkill() : gameStats.GetPlayerStats(candidateStrong.UserId.Value).calcSkill();
+            if (strongCandidateSkill <= weakCandidateSkill) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Candidate from strong team ({strongCandidateSkill}) is not stronger than candidate from weak team ({weakCandidateSkill}). Swap skipped.");
+                return;
+            }
+
             // Execute the swap
             movePlayer(candidateStrong, tIsStrong ? TEAM_CT : TEAM_T, tStats, ctStats);
             movePlayer(candidateWeak, tIsStrong ? TEAM_T : TEAM_CT, tStats, ctStats);

@@ -361,13 +361,20 @@ namespace OSBase.Modules {
                 // Fallback value – adjust this constant as appropriate.
                 targetDeviation = 1000f;
             }
+
+            // Find the leader (highest skilled player) in this team.
+            int leaderId = -1;
+            if (playerList.Count > 0) {
+                leaderId = playerList.OrderByDescending(kvp => kvp.Value.calcSkill()).First().Key;
+            }
+
             int bestPlayerId = -1;
             float bestDiff = float.MaxValue;
             float teamAvg = getAverageSkill();
 
             foreach (var kvp in playerList) {
-                // Skip immune players.
-                if (kvp.Value.immune > 0)
+                // Skip immune players and the team leader
+                if (kvp.Value.immune > 0 || kvp.Key == leaderId)
                     continue;
                 float playerSkill = kvp.Value.calcSkill();
                 // Compute deviation relative to team average.
