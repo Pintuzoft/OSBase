@@ -327,9 +327,16 @@ namespace OSBase.Modules {
         public void removePlayer (int userId) {
             playerList.Remove(userId);
         }
-        public float getAverageSkill() {
-            return skill / numPlayers();
+
+        public float getTotalSkill() {
+            return playerList.Values.Sum(p => p.calcSkill());
         }
+
+        public float getAverageSkill() {
+            int count = numPlayers();
+            return count > 0 ? getTotalSkill() / count : 0f;
+        }
+
         public CCSPlayerController? getPlayerBySkill(float targetSkill) {
             int bestPlayerId = -1;
             float bestDiff = float.MaxValue;
