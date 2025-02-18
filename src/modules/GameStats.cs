@@ -399,6 +399,8 @@ namespace OSBase.Modules {
         public override string ToString() {
             return $"Wins: {wins}, Losses: {losses}, Streak: {streak}";
         }
+
+
     }
     
 }

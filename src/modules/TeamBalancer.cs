@@ -287,6 +287,13 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Failed to find player to move.");
                 return;
             }
+
+            // print teams
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T:");
+            tStats.printPlayers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - CT:");
+            ctStats.printPlayers();
+
             // Move the player
             if ( warmup ) {
                 player.ChangeTeam((CsTeam)targetTeam);
@@ -308,6 +315,13 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: Player {player.PlayerName} has null UserId.");
             }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Moved player {player.PlayerName} to {(isTargetT ? "T" : "CT")}.");
+            
+            // print teams
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T:");
+            tStats.printPlayers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - CT:");
+            ctStats.printPlayers();
         }
+
     }
 }
