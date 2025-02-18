@@ -208,20 +208,21 @@ namespace OSBase.Modules {
                 }
             }
 
-            if ( tStats.streak > 2 || ctStats.streak > 2 ) {
+//           if ( tStats.streak > 2 || ctStats.streak > 2 ) {
                 if ( Math.Abs(tStats.streak - ctStats.streak) > 1 ) {
                     float skillDiff = Math.Abs(tSkill - ctSkill);
                     if ( skillDiff > this.GetDynamicThreshold() ) {
                         doSkillBalance(tStats, ctStats);
                     }
                 }
-            }
+//            }
         }
 
         // Skill balance algorithm. Swap 2 players based on skill difference.
         private void doSkillBalance(TeamStats tStats, TeamStats ctStats) {
             float tSkill = tStats.getAverageSkill();
             float ctSkill = ctStats.getAverageSkill();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Skill difference: {Math.Abs(tSkill - ctSkill)}");
             float diff = Math.Abs(tSkill - ctSkill);
             if(diff < this.GetDynamicThreshold()) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Skill difference is below threshold.");
@@ -269,7 +270,6 @@ namespace OSBase.Modules {
             }
         }
 
-
         private void movePlayer (CCSPlayerController player, int targetTeam, TeamStats tStats, TeamStats ctStats) {
             bool isTargetT = targetTeam == TEAM_T;
             if (player == null || !player.UserId.HasValue) {
@@ -285,7 +285,7 @@ namespace OSBase.Modules {
             if (player.UserId.HasValue) {
                 if (gameStats != null) {
                     ctStats.addPlayer(player.UserId.Value, gameStats.GetPlayerStats(player.UserId.Value));
-                    gameStats.GetPlayerStats(player.UserId.Value).immune += 4;
+                    gameStats.GetPlayerStats(player.UserId.Value).immune += 2;
                 } else {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: gameStats is null.");
                 }
