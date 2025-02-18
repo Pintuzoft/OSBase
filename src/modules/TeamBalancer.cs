@@ -33,8 +33,6 @@ namespace OSBase.Modules {
 
         private bool warmup = false;
 
-        private float swapThreshold = 5000f;
-
         private int minPlayers = 4;
         private int maxPlayers = 16;
 
@@ -136,6 +134,21 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
+        float GetDynamicThreshold ( ) {
+            int round = gameStats?.roundNumber ?? 0;
+            switch(round) {
+                case 1:  return 5000f;
+                case 2:  return 3000f;
+                case 3:  return 2000f;
+                case 4:  return 1000f;
+                case 5:  return 1500f;
+                case 6:  return 2000f;
+                default: 
+                    // For rounds beyond 12, you can keep increasing slowly or cap the threshold.
+                    return 2000f + (round - 6) * 200f;
+            }
+        }
+
         private void BalanceTeams() {
             // Retrieve game stats and connected players.
             var gameStats = osbase?.GetGameStats();
@@ -198,7 +211,7 @@ namespace OSBase.Modules {
             if ( tStats.streak > 2 || ctStats.streak > 2 ) {
                 if ( Math.Abs(tStats.streak - ctStats.streak) > 1 ) {
                     float skillDiff = Math.Abs(tSkill - ctSkill);
-                    if ( skillDiff > swapThreshold ) {
+                    if ( skillDiff > this.GetDynamicThreshold() ) {
                         doSkillBalance(tStats, ctStats);
                     }
                 }
@@ -210,7 +223,7 @@ namespace OSBase.Modules {
             float tSkill = tStats.getAverageSkill();
             float ctSkill = ctStats.getAverageSkill();
             float diff = Math.Abs(tSkill - ctSkill);
-            if(diff < swapThreshold) {
+            if(diff < this.GetDynamicThreshold()) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Skill difference is below threshold.");
                 return;
             }

@@ -15,6 +15,8 @@ namespace OSBase.Modules {
         private Config? config;
         private bool isWarmup = false;
 
+        public int roundNumber = 0;
+
         private const int TEAM_T = (int)CsTeam.Terrorist;
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
@@ -33,6 +35,7 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
             osbase?.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
             osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
+            osbase?.RegisterEventHandler<EventRoundStart>(OnRoundStart);
             osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
@@ -129,6 +132,18 @@ namespace OSBase.Modules {
             teamct.printPlayers();
         }
 
+
+        // Update stats at the start of a new round.
+        private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+            if(isWarmup) 
+                return HookResult.Continue;
+
+            roundNumber++;
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round {roundNumber} started.");
+            printTeams();
+            return HookResult.Continue;
+        }
+
         // Print current stats at the end of a round.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
             if(isWarmup) 
@@ -196,11 +211,13 @@ namespace OSBase.Modules {
         // Reset stats at the start of a new map.
          private void OnMapStart(string mapName) {
             this.isWarmup = true;
+            this.roundNumber = 0;
             clearStats();
         }
 
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             this.isWarmup = false;
+            this.roundNumber = 0;
             clearStats();
             return HookResult.Continue;
         }
