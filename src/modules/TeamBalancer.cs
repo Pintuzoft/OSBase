@@ -302,12 +302,12 @@ namespace OSBase.Modules {
             }
             if (player.UserId.HasValue) {
                 if (gameStats != null) {
-                    ctStats.addPlayer(player.UserId.Value, gameStats.GetPlayerStats(player.UserId.Value));
+                    //ctStats.addPlayer(player.UserId.Value, gameStats.GetPlayerStats(player.UserId.Value));
                     gameStats.GetPlayerStats(player.UserId.Value).immune += 2;
                 } else {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: gameStats is null.");
                 }
-                tStats.removePlayer(player.UserId.Value);
+                //tStats.removePlayer(player.UserId.Value);
                 player.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(isTargetT ? "T" : "CT")}!!");
                 Server.PrintToChatAll($"[TeamBalancer] {player.PlayerName} moved: {(isTargetT ? "CT -> T" : "T -> CT")}.");
 
