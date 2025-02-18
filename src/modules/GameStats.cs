@@ -177,6 +177,7 @@ namespace OSBase.Modules {
             teamStats[TEAM_T].skill = 0;
             teamStats[TEAM_CT].skill = 0;
             teamStats[TEAM_T].resetPlayers();
+            teamStats[TEAM_CT].resetPlayers();
             foreach (var player in playerList) {
                 if (player != null && ! player.IsHLTV && player.UserId.HasValue) {
                     pstats = playerStats[player.UserId.Value];
