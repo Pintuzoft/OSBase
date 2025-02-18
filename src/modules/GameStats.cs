@@ -333,6 +333,10 @@ namespace OSBase.Modules {
             return Utilities.GetPlayerFromUserid(bestPlayerId);
         }
         public CCSPlayerController? GetPlayerByDeviation(float targetDeviation, bool forStrongTeam) {
+            if (float.IsInfinity(targetDeviation) || float.IsNaN(targetDeviation)) {
+                // Fallback value – adjust this constant as appropriate.
+                targetDeviation = 1000f;
+            }
             int bestPlayerId = -1;
             float bestDiff = float.MaxValue;
             float teamAvg = getAverageSkill();

@@ -272,7 +272,7 @@ namespace OSBase.Modules {
             if (player.UserId.HasValue) {
                 if (gameStats != null) {
                     ctStats.addPlayer(player.UserId.Value, gameStats.GetPlayerStats(player.UserId.Value));
-                    gameStats.GetPlayerStats(player.UserId.Value).immune += 2;
+                    gameStats.GetPlayerStats(player.UserId.Value).immune += 4;
                 } else {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: gameStats is null.");
                 }
