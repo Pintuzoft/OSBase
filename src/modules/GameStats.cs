@@ -138,9 +138,9 @@ namespace OSBase.Modules {
         private void printTeams() {
             TeamStats teamt = teamStats[TEAM_T];
             TeamStats teamct = teamStats[TEAM_CT];
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team T: {teamt.wins}w, {teamt.losses}l, {teamt.streak}s, {teamt.getAverageSkill}p");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team T: {teamt.wins}w, {teamt.losses}l, {teamt.streak}s, {teamt.getAverageSkill()}p");
             teamt.printPlayers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team CT: {teamct.wins}w, {teamct.losses}l, {teamct.streak}s, {teamct.getAverageSkill}p");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team CT: {teamct.wins}w, {teamct.losses}l, {teamct.streak}s, {teamct.getAverageSkill()}p");
             teamct.printPlayers();
         }
 
@@ -215,7 +215,7 @@ namespace OSBase.Modules {
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}{(playerStats[player.UserId.Value].immune > 0 ? "(immune)" : "")}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
                 }
             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].getAverageSkill}, [CT]: {teamStats[TEAM_CT].getAverageSkill}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].getAverageSkill()}, [CT]: {teamStats[TEAM_CT].getAverageSkill()}");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].numPlayers()}, [CT]: {teamStats[TEAM_CT].numPlayers()}");
             return HookResult.Continue;
         }
