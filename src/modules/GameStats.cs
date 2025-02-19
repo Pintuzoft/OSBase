@@ -6,6 +6,7 @@ using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Utils;
 using CounterStrikeSharp.API.Core;
+using System.Diagnostics.Contracts;
 
 namespace OSBase.Modules {
 
@@ -61,7 +62,15 @@ namespace OSBase.Modules {
 
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");                        
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");
+                if ( eventInfo.Team == TEAM_T || eventInfo.Team == TEAM_CT ) {
+                    if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                        bool isTeamT = eventInfo.Team == TEAM_T;
+                        teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+                        teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
+                        teamStats[isTeamT ? TEAM_T : TEAM_CT].addPlayer(eventInfo.Userid.UserId.Value, playerStats[eventInfo.Userid.UserId.Value]);
+                    }
+                }
             }
             return HookResult.Continue;
         }
@@ -75,7 +84,10 @@ namespace OSBase.Modules {
 
         private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} disconnected.");                        
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} disconnected.");
+                if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                    playerStats[eventInfo.Userid.UserId.Value].disconnected = true;
+                }
             }
             return HookResult.Continue;
         }
@@ -126,9 +138,9 @@ namespace OSBase.Modules {
         private void printTeams() {
             TeamStats teamt = teamStats[TEAM_T];
             TeamStats teamct = teamStats[TEAM_CT];
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team T: {teamt.wins}w, {teamt.losses}l, {teamt.streak}s, {teamt.skill}p");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team T: {teamt.wins}w, {teamt.losses}l, {teamt.streak}s, {teamt.getAverageSkill}p");
             teamt.printPlayers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team CT: {teamct.wins}w, {teamct.losses}l, {teamct.streak}s, {teamct.skill}p");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team CT: {teamct.wins}w, {teamct.losses}l, {teamct.streak}s, {teamct.getAverageSkill}p");
             teamct.printPlayers();
         }
 
@@ -174,28 +186,36 @@ namespace OSBase.Modules {
 
             var playerList = Utilities.GetPlayers();
             PlayerStats pstats;
-            teamStats[TEAM_T].skill = 0;
-            teamStats[TEAM_CT].skill = 0;
             teamStats[TEAM_T].resetPlayers();
             teamStats[TEAM_CT].resetPlayers();
+
             foreach (var player in playerList) {
                 if (player != null && ! player.IsHLTV && player.UserId.HasValue) {
                     pstats = playerStats[player.UserId.Value];
-                    pstats.team = (int)player.TeamNum;
-                    if ( player.TeamNum == eventInfo.Winner ) {
-                        pstats.roundWins++;
-                    } else {
-                        pstats.roundLosses++;
+                    bool isTeamTWinner = eventInfo.Winner == TEAM_T;
+
+                    // Update round wins for the winning team.
+                    foreach (var p in teamStats[eventInfo.Winner].playerList) {
+                        if ( p.Key == player.UserId.Value ) {
+                            pstats.roundWins++;
+                        }
                     }
-                    teamStats[pstats.team].skill += pstats.calcSkill();
-                    teamStats[pstats.team].addPlayer(player.UserId.Value, pstats);
+
+                    // Update round losses for the losing team.
+                    foreach (var p in teamStats[isTeamTWinner ? TEAM_CT : TEAM_T].playerList) {
+                        if ( p.Key == player.UserId.Value ) {
+                            pstats.roundLosses++;
+                        }
+                    }
+                    // Add player to team stats.
+                    teamStats[player.TeamNum].addPlayer(player.UserId.Value, pstats);
                     if ( playerStats[player.UserId.Value].immune > 0 ) {
                         playerStats[player.UserId.Value].immune--;
                     }
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}{(playerStats[player.UserId.Value].immune > 0 ? "(immune)" : "")}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
                 }
             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].skill}, [CT]: {teamStats[TEAM_CT].skill}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].getAverageSkill}, [CT]: {teamStats[TEAM_CT].getAverageSkill}");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].numPlayers()}, [CT]: {teamStats[TEAM_CT].numPlayers()}");
             return HookResult.Continue;
         }
@@ -244,26 +264,27 @@ namespace OSBase.Modules {
             teamStats[TEAM_T] = new TeamStats();
             teamStats[TEAM_CT] = new TeamStats();
         }
-
+        public void clearDisconnected ( ) {
+            foreach (var player in playerStats) {
+                if ( player.Value.disconnected ) {
+                    playerStats.Remove((int)player.Key);
+                    teamStats[TEAM_T].removePlayer((int)player.Key);
+                    teamStats[TEAM_CT].removePlayer((int)player.Key);
+                }
+            }
+        }
         public TeamStats getTeam (int team) {
             if ( team == TEAM_T || team == TEAM_CT) {
                 return teamStats[team];
             }
             return new TeamStats();     
         }
-        public float GetTeamTotalSkill(int team) {
-            return teamStats[team].skill;
-        }
 
-        public float GetTeamAverageSkill(int team) {
-            return teamStats[team].skill / teamStats[team].numPlayers();
-        }
     }
 
 
     // Data container for game statistics.
     public class PlayerStats {
-        public int team { get; set; }
         public int rounds { get; set; }
         public int roundWins { get; set; }
         public int roundLosses { get; set; }
@@ -275,6 +296,7 @@ namespace OSBase.Modules {
         public int shotsHit { get; set; }
         public int headshotKills { get; set; }
         public int immune { get; set; }
+        public bool disconnected { get; set; }
 
         // Calculates a skill rating that uses:
         // - Average damage per round for a base score:
@@ -314,8 +336,7 @@ namespace OSBase.Modules {
         public int wins { get; set; }
         public int losses { get; set; }
         public int streak { get; set; }
-        public float skill { get; set; }
-        private Dictionary<int, PlayerStats> playerList = new Dictionary<int, PlayerStats>();
+        public Dictionary<int, PlayerStats> playerList = new Dictionary<int, PlayerStats>();
         public int numPlayers() {
             return playerList.Count;
         }
@@ -397,6 +418,7 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}: {kvp.Value.kills}k, {kvp.Value.assists}a, {kvp.Value.deaths}d, {kvp.Value.calcSkill()}p");
             }
         }
+
         public override string ToString() {
             return $"Wins: {wins}, Losses: {losses}, Streak: {streak}";
         }
