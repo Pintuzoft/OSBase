@@ -33,8 +33,8 @@ namespace OSBase.Modules {
 
         private bool warmup = false;
 
-        private int minPlayers = 4;
-        private int maxPlayers = 16;
+//        private int minPlayers = 4;
+//        private int maxPlayers = 16;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
@@ -273,7 +273,7 @@ namespace OSBase.Modules {
             float targetSkillPerPlayer = targetSkill / playersToMove;
             for (int i = 0; i < playersToMove; i++) {
                 // Find the player nearest target skill
-                CCSPlayerController? player = tStats.getPlayerBySkill(targetSkillPerPlayer);
+                CCSPlayerController? player = tStats.getPlayerBySkillNonImmune(targetSkillPerPlayer);
                 if (player == null) {
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Failed to find player to move.");
                     break;
@@ -312,12 +312,10 @@ namespace OSBase.Modules {
             }
             if (player.UserId.HasValue) {
                 if (gameStats != null) {
-                    //ctStats.addPlayer(player.UserId.Value, gameStats.GetPlayerStats(player.UserId.Value));
                     gameStats.GetPlayerStats(player.UserId.Value).immune += 2;
                 } else {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: gameStats is null.");
                 }
-                //tStats.removePlayer(player.UserId.Value);
                 player.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(isTargetT ? "T" : "CT")}!!");
                 Server.PrintToChatAll($"[TeamBalancer] {player.PlayerName} moved: {(isTargetT ? "CT -> T" : "T -> CT")}.");
 

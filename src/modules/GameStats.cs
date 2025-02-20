@@ -378,6 +378,23 @@ namespace OSBase.Modules {
             }
             return Utilities.GetPlayerFromUserid(bestPlayerId);
         }
+        public CCSPlayerController? getPlayerBySkillNonImmune(float targetSkill) {
+            int bestPlayerId = -1;
+            float bestDiff = float.MaxValue;
+            foreach (var kvp in playerList) {
+                var stats = kvp.Value;                
+                float diff = Math.Abs(stats.calcSkill() - targetSkill);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    bestPlayerId = kvp.Key;
+                }
+            }
+            if (bestPlayerId == -1) {
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - getPlayerBySkillNonImmune: No player found for skill {targetSkill}");
+                return null;
+            }
+            return Utilities.GetPlayerFromUserid(bestPlayerId);
+        }
         public CCSPlayerController? GetPlayerByDeviation(float targetDeviation, bool forStrongTeam) {
             if (float.IsInfinity(targetDeviation) || float.IsNaN(targetDeviation)) {
                 // Fallback value – adjust this constant as appropriate.
