@@ -51,6 +51,7 @@ public class Demos : IModule {
         osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
         osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);
         osbase.AddCommandListener("map", OnCommandMap, HookMode.Pre);
+        osbase.AddCommandListener("ds_workshop_changelevel", OnCommandMap, HookMode.Pre);
     }
 
     /*
@@ -58,12 +59,6 @@ public class Demos : IModule {
     */
 
     public HookResult OnCommandMap(CCSPlayerController? player, CommandInfo command) {
-        Console.Write($@"
-Arg Count: {command.ArgCount}
-Arg String: {command.ArgString}
-Command String: {command.GetCommandString}
-First Argument: {command.ArgByIndex(0)}
-Second Argument: {command.ArgByIndex(1)}");
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Changelevel detected.");
         runMapEnd();
         return HookResult.Continue;
