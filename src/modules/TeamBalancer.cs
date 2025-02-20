@@ -202,9 +202,6 @@ namespace OSBase.Modules {
 
                 // T has more players than ideal
                 evenTeamSizes(moveFromT, tSkill, ctSkill, playersToMove, tStats, ctStats);
-
-                // Do a skillbalance if the teams are still unbalanced.
-
             }
 
             if ( ! warmup ) {

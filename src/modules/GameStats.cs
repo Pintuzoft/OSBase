@@ -158,8 +158,8 @@ namespace OSBase.Modules {
 
         // Print current stats at the end of a round.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if(isWarmup) 
-                return HookResult.Continue;
+          //  if(isWarmup) 
+          //      return HookResult.Continue;
 
             // Update team stats.
             if (eventInfo.Winner == TEAM_T) {
