@@ -263,8 +263,15 @@ namespace OSBase.Modules {
             foreach (var player in Utilities.GetPlayers()) {
                 if (player != null && player.UserId.HasValue && ! player.IsHLTV ) {
                     playerStats[player.UserId.Value] = new PlayerStats();
-                    if ( player.TeamNum == TEAM_T || player.TeamNum == TEAM_CT ) {
-                        teamStats[player.TeamNum].addPlayer(player.UserId.Value, playerStats[player.UserId.Value]);
+                    switch (player.TeamNum) {
+                        case TEAM_T:
+                            teamStats[TEAM_T].addPlayer(player.UserId.Value, playerStats[player.UserId.Value]);
+                            break;
+                        case TEAM_CT:
+                            teamStats[TEAM_CT].addPlayer(player.UserId.Value, playerStats[player.UserId.Value]);
+                            break;
+                        default:
+                            break;
                     }
                 }
             }
