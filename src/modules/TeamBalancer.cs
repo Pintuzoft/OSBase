@@ -165,12 +165,6 @@ namespace OSBase.Modules {
                 return; 
             }
 
-            // Check if the round is in warmup.
-            if (warmup) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Skipping balance during warmup.");
-                return;
-            }
-
             int winner = tStats.streak > 0 ? TEAM_T : TEAM_CT;
             int loser = winner == TEAM_T ? TEAM_CT : TEAM_T;
             int tCount = tStats.numPlayers();
@@ -210,19 +204,15 @@ namespace OSBase.Modules {
                 evenTeamSizes(moveFromT, tSkill, ctSkill, playersToMove, tStats, ctStats);
 
                 // Do a skillbalance if the teams are still unbalanced.
-                if ( ! warmup ) {
+
+            }
+
+            if ( ! warmup ) {
+                float skillDiff = Math.Abs(tSkill - ctSkill);
+                if ( skillDiff > this.GetDynamicThreshold() ) {
                     doSkillBalance(tStats, ctStats);
                 }
             }
-
-//           if ( tStats.streak > 2 || ctStats.streak > 2 ) {
-//                if ( Math.Abs(tStats.streak - ctStats.streak) > 0 ) {
-                    float skillDiff = Math.Abs(tSkill - ctSkill);
-                    if ( skillDiff > this.GetDynamicThreshold() ) {
-                        doSkillBalance(tStats, ctStats);
-                    }
-//                }
-//            }
         }
 
         // Skill balance algorithm. Swap 2 players based on skill difference.
