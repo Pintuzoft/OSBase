@@ -144,7 +144,7 @@ namespace OSBase.Modules {
                 case 5:  return 1500f;
                 case 6:  return 2000f;
                 default: 
-                    // For rounds beyond 12, you can keep increasing slowly or cap the threshold.
+                    // For rounds beyond 6, you can keep increasing slowly or cap the threshold.
                     return 2000f + (round - 6) * 200f;
             }
         }
@@ -152,14 +152,18 @@ namespace OSBase.Modules {
         private void BalanceTeams() {
             // Retrieve game stats and connected players.
             var gameStats = osbase?.GetGameStats();
-            if (gameStats == null)
+            if (gameStats == null) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Game stats is null.");
                 return;
+            }
 
             TeamStats tStats = gameStats.getTeam(TEAM_T);   
             TeamStats ctStats = gameStats.getTeam(TEAM_CT);
 
-            if (tStats == null || ctStats == null)
+            if (tStats == null || ctStats == null) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Team stats is null.");
                 return; 
+            }
 
             // Check if the round is in warmup.
             if (warmup) {
@@ -189,12 +193,15 @@ namespace OSBase.Modules {
 
             bool sizesBalanced = tCount == idealT && ctCount == idealCT;
 
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: T: {tCount} CT: {ctCount} Ideal T: {idealT} Ideal CT: {idealCT}");
+
             float tSkill = tStats.getAverageSkill();
             float ctSkill = ctStats.getAverageSkill();
             int playersToMove = 0;
 
             // team sizes are balanced.
             if ( ! sizesBalanced ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Team sizes are not balanced.");
                 bool moveFromT = tCount > idealT;
                 bool moveFromCT = ctCount > idealCT;
                 playersToMove = Math.Abs(moveFromT ? tCount - idealT : ctCount - idealCT);
@@ -209,12 +216,12 @@ namespace OSBase.Modules {
             }
 
 //           if ( tStats.streak > 2 || ctStats.streak > 2 ) {
-                if ( Math.Abs(tStats.streak - ctStats.streak) > 1 ) {
+//                if ( Math.Abs(tStats.streak - ctStats.streak) > 0 ) {
                     float skillDiff = Math.Abs(tSkill - ctSkill);
                     if ( skillDiff > this.GetDynamicThreshold() ) {
                         doSkillBalance(tStats, ctStats);
                     }
-                }
+//                }
 //            }
         }
 
@@ -222,10 +229,10 @@ namespace OSBase.Modules {
         private void doSkillBalance(TeamStats tStats, TeamStats ctStats) {
             float tSkill = tStats.getAverageSkill();
             float ctSkill = ctStats.getAverageSkill();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Skill difference: {Math.Abs(tSkill - ctSkill)}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - doSkillBalance: Skill difference: {Math.Abs(tSkill - ctSkill)}");
             float diff = Math.Abs(tSkill - ctSkill);
             if(diff < this.GetDynamicThreshold()) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Skill difference is below threshold.");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - doSkillBalance: Skill difference is below threshold.");
                 return;
             }
 
@@ -240,19 +247,19 @@ namespace OSBase.Modules {
             CCSPlayerController? candidateWeak   = tIsStrong ? ctStats.GetPlayerByDeviation(weakTarget, false) : tStats.GetPlayerByDeviation(weakTarget, false);
 
             if(candidateStrong == null || candidateWeak == null) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Candidate swap not found.");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - doSkillBalance: Candidate swap not found.");
                 return;
             }
             if(gameStats == null || !candidateStrong.UserId.HasValue || !candidateWeak.UserId.HasValue) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Invalid candidate(s).");
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - doSkillBalance: Invalid candidate(s).");
                 return;
             }
 
             // Now, candidateStrong should be from the strong team and candidateWeak from the weak team.
             float strongCandidateSkill = gameStats.GetPlayerStats(candidateStrong.UserId.Value).calcSkill();
             float weakCandidateSkill   = gameStats.GetPlayerStats(candidateWeak.UserId.Value).calcSkill();
-            if (strongCandidateSkill <= weakCandidateSkill) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Candidate from strong team ({strongCandidateSkill}) is not stronger than candidate from weak team ({weakCandidateSkill}). Swap skipped.");
+            if (strongCandidateSkill < weakCandidateSkill) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - doSkillBalance: Candidate from strong team ({strongCandidateSkill}) is not stronger than candidate from weak team ({weakCandidateSkill}). Swap skipped.");
                 return;
             }
             // Execute the swap
@@ -261,22 +268,23 @@ namespace OSBase.Modules {
         }
 
         private void evenTeamSizes ( bool moveFromT, float tSkill, float ctSkill, int playersToMove, TeamStats tStats, TeamStats ctStats ) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Try Moving {playersToMove} players to {(moveFromT ? "CT" : "T")}.");
             float targetSkill = (moveFromT ? tSkill - ctSkill : ctSkill - tSkill) / 2;
             float targetSkillPerPlayer = targetSkill / playersToMove;
             for (int i = 0; i < playersToMove; i++) {
                 // Find the player nearest target skill
                 CCSPlayerController? player = tStats.getPlayerBySkill(targetSkillPerPlayer);
                 if (player == null) {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Failed to find player to move.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Failed to find player to move.");
                     break;
                 }
 
                 // Move the player to CT
                 if (player.UserId.HasValue) {
                     movePlayer(player, moveFromT ? TEAM_CT : TEAM_T, tStats, ctStats);
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Moved player {player.PlayerName} to {(moveFromT ? "CT" : "T")}.");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Moved player {player.PlayerName} to {(moveFromT ? "CT" : "T")}.");
                 } else {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Player {player.PlayerName} has null UserId.");
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - evenTeamSizes: Player {player.PlayerName} has null UserId.");
                 }
             }
         }
@@ -284,7 +292,7 @@ namespace OSBase.Modules {
         private void movePlayer (CCSPlayerController player, int targetTeam, TeamStats tStats, TeamStats ctStats) {
             bool isTargetT = targetTeam == TEAM_T;
             if (player == null || !player.UserId.HasValue) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Failed to find player to move.");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - movePlayer: Failed to find player to move.");
                 return;
             }
 
@@ -316,7 +324,7 @@ namespace OSBase.Modules {
             } else {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: Player {player.PlayerName} has null UserId.");
             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Moved player {player.PlayerName} to {(isTargetT ? "T" : "CT")}.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - movePlayer: Moved player {player.PlayerName} to {(isTargetT ? "T" : "CT")}.");
             
             // print teams
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T:");
