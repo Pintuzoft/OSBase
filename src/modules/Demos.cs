@@ -51,6 +51,7 @@ public class Demos : IModule {
         osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
         osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);
         osbase.AddCommandListener("map", OnCommandMap, HookMode.Pre);
+        osbase.AddCommandListener("changelevel", OnCommandMap, HookMode.Pre);
         osbase.AddCommandListener("ds_workshop_changelevel", OnCommandMap, HookMode.Pre);
     }
 
