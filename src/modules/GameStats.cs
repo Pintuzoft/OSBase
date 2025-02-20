@@ -158,8 +158,8 @@ namespace OSBase.Modules {
 
         // Print current stats at the end of a round.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-          //  if(isWarmup) 
-          //      return HookResult.Continue;
+            if(isWarmup) 
+                return HookResult.Continue;
 
             // Update team stats.
             if (eventInfo.Winner == TEAM_T) {
@@ -252,17 +252,22 @@ namespace OSBase.Modules {
         }
 
         private void clearStats() {
+            
+            // Reset team stats.
+            teamStats.Clear();
+            teamStats[TEAM_T] = new TeamStats();
+            teamStats[TEAM_CT] = new TeamStats();
+             
             // Reset stats for all players.
             playerStats.Clear();
             foreach (var player in Utilities.GetPlayers()) {
                 if (player != null && player.UserId.HasValue && ! player.IsHLTV ) {
                     playerStats[player.UserId.Value] = new PlayerStats();
+                    if ( player.TeamNum == TEAM_T || player.TeamNum == TEAM_CT ) {
+                        teamStats[player.TeamNum].addPlayer(player.UserId.Value, playerStats[player.UserId.Value]);
+                    }
                 }
             }
-            // Reset team stats.
-            teamStats.Clear();
-            teamStats[TEAM_T] = new TeamStats();
-            teamStats[TEAM_CT] = new TeamStats();
         }
         public void clearDisconnected ( ) {
             foreach (var player in playerStats) {
