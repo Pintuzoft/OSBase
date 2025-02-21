@@ -328,10 +328,10 @@ namespace OSBase.Modules {
             float baseDamageScore = 4000f + (avgDamage * 60f);
 
             // Standard bonus/penalties.
-            float killBonus = kills * 150f;
-            float assistBonus = assists * 50f;
-            float deathPenalty = deaths * 100f;
-            float headshotBonus = headshotKills * 50f;
+            float killBonus = kills * 200f;
+            float assistBonus = assists * 100f;
+            float deathPenalty = deaths * 150f;
+            float headshotBonus = headshotKills * 100f;
 
             // Accuracy bonus: use a baseline of 30% accuracy.
             float accuracy = shotsFired > 0 ? (float)shotsHit / shotsFired : 0;

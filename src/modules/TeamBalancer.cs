@@ -270,7 +270,7 @@ namespace OSBase.Modules {
                 // Move the player to CT
                 if (player.UserId.HasValue) {
                     movePlayer(player, moveFromT ? TEAM_CT : TEAM_T, tStats, ctStats);
-                    Server.PrintToChatAll($"[TeamBalancer] {player.PlayerName} moved: {(moveFromT ? "CT -> T" : "T -> CT")}.");
+                    Server.PrintToChatAll($"[TeamBalancer] Moved: {player.PlayerName} {(moveFromT ? "CT -> T" : "T -> CT")}.");
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Moved player {player.PlayerName} to {(moveFromT ? "CT" : "T")}.");
                 } else {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - evenTeamSizes: Player {player.PlayerName} has null UserId.");
