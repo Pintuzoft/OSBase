@@ -252,6 +252,7 @@ namespace OSBase.Modules {
             // Execute the swap
             movePlayer(candidateStrong, tIsStrong ? TEAM_CT : TEAM_T, tStats, ctStats);
             movePlayer(candidateWeak, tIsStrong ? TEAM_T : TEAM_CT, tStats, ctStats);
+            Server.PrintToChatAll($"[TeamBalancer] Swapped: {candidateStrong.PlayerName}[{(candidateStrong.TeamNum == TEAM_T ? "CT" : "T")}] <-> [{(candidateWeak.TeamNum == TEAM_T ? "CT" : "T")}]{candidateWeak.PlayerName}");
         }
 
         private void evenTeamSizes ( bool moveFromT, float tSkill, float ctSkill, int playersToMove, TeamStats tStats, TeamStats ctStats ) {
@@ -269,6 +270,7 @@ namespace OSBase.Modules {
                 // Move the player to CT
                 if (player.UserId.HasValue) {
                     movePlayer(player, moveFromT ? TEAM_CT : TEAM_T, tStats, ctStats);
+                    Server.PrintToChatAll($"[TeamBalancer] {player.PlayerName} moved: {(moveFromT ? "CT -> T" : "T -> CT")}.");
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Moved player {player.PlayerName} to {(moveFromT ? "CT" : "T")}.");
                 } else {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - evenTeamSizes: Player {player.PlayerName} has null UserId.");
@@ -304,7 +306,7 @@ namespace OSBase.Modules {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: gameStats is null.");
                 }
                 player.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(isTargetT ? "T" : "CT")}!!");
-                Server.PrintToChatAll($"[TeamBalancer] {player.PlayerName} moved: {(isTargetT ? "CT -> T" : "T -> CT")}.");
+                //Server.PrintToChatAll($"[TeamBalancer] {player.PlayerName} moved: {(isTargetT ? "CT -> T" : "T -> CT")}.");
 
             } else {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: Player {player.PlayerName} has null UserId.");
