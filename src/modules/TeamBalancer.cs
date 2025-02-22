@@ -6,6 +6,7 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Modules.Utils;
+using CounterStrikeSharp.API.Modules.Cvars;
 
 
 namespace OSBase.Modules {
@@ -30,7 +31,7 @@ namespace OSBase.Modules {
 
         private const float delay = 6.5f;
         private const float warmupDelay = 0.0f;
-
+        ConVar? wuTime = ConVar.Find("mp_warmuptime");
         private bool warmup = false;
 
 //        private int minPlayers = 4;
@@ -113,6 +114,7 @@ namespace OSBase.Modules {
                 config?.AddCustomConfigLine($"{mapConfigFile}", $"{mapName} {bombsites}");
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Default bombsites: {bombsites}");
             }
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnMapStart: WarmupTime: {wuTime}");
         }
 
         // OnRoundEnd updates win streak counters then calls BalanceTeams immediately.
