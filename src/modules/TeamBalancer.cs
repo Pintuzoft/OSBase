@@ -9,6 +9,7 @@ using CounterStrikeSharp.API.Modules.Utils;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Config;
 
+using CounterStrikeSharp.API.Core.Attributes.Registration;
 
 namespace OSBase.Modules {
 
@@ -32,7 +33,6 @@ namespace OSBase.Modules {
 
         private const float delay = 6.5f;
         private const float warmupDelay = 0.0f;
-        private float wuTime = 0f;
         private bool warmup = false;
 
 //        private int minPlayers = 4;
@@ -61,23 +61,12 @@ namespace OSBase.Modules {
             var globalConfig = config.GetGlobalConfigValue($"{ModuleName}", "0");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Global config value: {globalConfig}");
             if (globalConfig == "1") {
-                loadCVars();
                 loadEventHandlers();
                 LoadMapInfo();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
 
             } else {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
-            }
-        }
-
-        private void loadCVars ( ) {
-            ConVar? convar = ConVar.Find("mp_warmuptime");
-            if (convar != null) {
-                wuTime = convar.GetPrimitiveValue<float>();
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - mp_warmuptime: {wuTime}");
-            } else {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - mp_warmuptime not found.");
             }
         }
 
@@ -126,10 +115,9 @@ namespace OSBase.Modules {
                 config?.AddCustomConfigLine($"{mapConfigFile}", $"{mapName} {bombsites}");
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Default bombsites: {bombsites}");
             }
-//            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnMapStart: WarmupTime: {wuTime}");
         }
 
-        // OnRoundEnd updates win streak counters then calls BalanceTeams immediately.
+        [GameEventHandler(HookMode.Post)]
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundEnd triggered.");
             osbase?.AddTimer(warmup?warmupDelay:delay, () => {
@@ -138,13 +126,13 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        // OnWarmupEnd calls BalanceTeams.
+        [GameEventHandler(HookMode.Pre)]
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
-//            osbase?.AddTimer(warmupDelay, () => {
-//                BalanceTeams();
+            osbase?.AddTimer(0f, () => {
+                BalanceTeams();
                 warmup = false;
-//            });
+            });
             return HookResult.Continue;
         }
 
@@ -309,11 +297,11 @@ namespace OSBase.Modules {
             ctStats.printPlayers();
 
             // Move the player
-//            if ( warmup ) {
-//                player.ChangeTeam((CsTeam)targetTeam);
-//            } else {
+            if ( warmup ) {
+                player.ChangeTeam((CsTeam)targetTeam);
+            } else {
                 player.SwitchTeam((CsTeam)targetTeam);
-//            }
+            }
             if (player.UserId.HasValue) {
                 if (gameStats != null) {
                     gameStats.GetPlayerStats(player.UserId.Value).immune += 2;
