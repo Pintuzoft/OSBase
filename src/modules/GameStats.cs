@@ -197,12 +197,18 @@ namespace OSBase.Modules {
         }
 
         public void loadPlayerData ( int winner ) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(0)");
             var playerList = Utilities.GetPlayers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(1)");
             PlayerStats pstats;
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(2)");
             teamStats[TEAM_T].resetPlayers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(3)");
             teamStats[TEAM_CT].resetPlayers();
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(4)");
 
             foreach (var player in playerList) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(5)");
                 if (player != null && ! player.IsHLTV && player.UserId.HasValue) {
                     pstats = playerStats[player.UserId.Value];
                     bool isTeamTWinner = winner == TEAM_T;
