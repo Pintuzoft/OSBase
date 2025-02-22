@@ -29,7 +29,7 @@ namespace OSBase.Modules {
         private int bombsites = 2;
 
         private const float delay = 6.5f;
-//        private const float warmupDelay = 2.0f;
+        private const float warmupDelay = 3.0f;
 
         private bool warmup = false;
 
@@ -127,10 +127,10 @@ namespace OSBase.Modules {
         // OnWarmupEnd calls BalanceTeams.
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
-            warmup = false;
-//            osbase?.AddTimer(warmupDelay, () => {
+            osbase?.AddTimer(warmupDelay, () => {
                 BalanceTeams();
-//            });
+                warmup = false;
+            });
             return HookResult.Continue;
         }
 
