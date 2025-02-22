@@ -142,15 +142,29 @@ namespace OSBase.Modules {
         float GetDynamicThreshold ( ) {
             int round = gameStats?.roundNumber ?? 0;
             switch(round) {
-                case 1:  return 5000f;
-                case 2:  return 3000f;
-                case 3:  return 2000f;
-                case 4:  return 1000f;
-                case 5:  return 1500f;
-                case 6:  return 2000f;
+                case 1:   return 10000f;
+                case 2:   return 9000f;
+                case 3:   return 9000f;
+                case 4:   return 7000f;
+                case 5:   return 2000f;
+                case 6:   return 4000f;
+                case 7:   return 5000f;
+                case 8:   return 4000f;
+                case 9:   return 2000f;
+                case 10:  return 2500f;
+                case 11:  return 3000f;
+                case 12:  return 3500f;
+                case 13:  return 4000f;
+                case 14:  return 4500f;
+                case 15:  return 5000f;
+                case 16:  return 5000f;
+                case 17:  return 6000f;
+                case 18:  return 6000f;
+                case 19:  return 8000f;
+                case 20:  return 8000f;
                 default: 
                     // For rounds beyond 6, you can keep increasing slowly or cap the threshold.
-                    return 2000f + (round - 6) * 200f;
+                    return 8000f + (round - 20) * 200f;
             }
         }
 

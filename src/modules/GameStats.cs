@@ -274,7 +274,6 @@ namespace OSBase.Modules {
         }
 
         private void clearStats() {
-            
             // Reset team stats.
             teamStats.Clear();
             teamStats[TEAM_T] = new TeamStats();
