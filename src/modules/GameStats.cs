@@ -18,6 +18,7 @@ namespace OSBase.Modules {
 
         public int roundNumber = 0;
 
+        private const int TEAM_SPEC = (int)CsTeam.Spectator;
         private const int TEAM_T = (int)CsTeam.Terrorist;
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
@@ -29,6 +30,9 @@ namespace OSBase.Modules {
             this.osbase = inOsbase;
             this.config = inConfig;
             loadEventHandlers();
+            teamStats[TEAM_SPEC] = new TeamStats();
+            teamStats[TEAM_T] = new TeamStats();
+            teamStats[TEAM_CT] = new TeamStats();            
         }
 
         public void loadEventHandlers() {
@@ -62,10 +66,11 @@ namespace OSBase.Modules {
 
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");
-                if ( eventInfo.Team == TEAM_T || eventInfo.Team == TEAM_CT ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnPlayerTeam: Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");
+                if ( eventInfo.Team == ( TEAM_T | TEAM_CT | TEAM_SPEC ) ) {
                     if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                         bool isTeamT = eventInfo.Team == TEAM_T;
+                        teamStats[TEAM_SPEC].removePlayer(eventInfo.Userid.UserId.Value);
                         teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
                         teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
                         teamStats[isTeamT ? TEAM_T : TEAM_CT].addPlayer(eventInfo.Userid.UserId.Value, playerStats[eventInfo.Userid.UserId.Value]);
@@ -77,7 +82,7 @@ namespace OSBase.Modules {
 
         private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} connected.");                        
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} connected.");                        
             }
             return HookResult.Continue;
         }
@@ -194,10 +199,6 @@ namespace OSBase.Modules {
         public void loadPlayerData ( int winner ) {
             var playerList = Utilities.GetPlayers();
             PlayerStats pstats;
-            if ( teamStats.Count == 0 ) {
-                teamStats[TEAM_T] = new TeamStats();
-                teamStats[TEAM_CT] = new TeamStats();
-            }
             teamStats[TEAM_T].resetPlayers();
             teamStats[TEAM_CT].resetPlayers();
 

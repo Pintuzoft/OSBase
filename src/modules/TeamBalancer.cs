@@ -129,6 +129,10 @@ namespace OSBase.Modules {
         [GameEventHandler(HookMode.Pre)]
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
+            if ( gameStats == null ) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - OnWarmupEnd: Game stats is null.");
+                return HookResult.Continue;
+            }
             gameStats?.loadPlayerData(0);
             BalanceTeams();
             warmup = false;
