@@ -70,6 +70,16 @@ namespace OSBase.Modules {
                 if ( eventInfo.Team == ( TEAM_T | TEAM_CT | TEAM_SPEC ) ) {
                     if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                         bool isTeamT = eventInfo.Team == TEAM_T;
+                        if ( teamStats[TEAM_SPEC] == null ) {
+                            teamStats[TEAM_SPEC] = new TeamStats();
+                        } 
+                        if ( teamStats[TEAM_T] == null ) {
+                            teamStats[TEAM_T] = new TeamStats();
+                        }
+                        if ( teamStats[TEAM_CT] == null ) {
+                            teamStats[TEAM_CT] = new TeamStats();
+                        }
+
                         if ( teamStats[TEAM_SPEC].playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                             teamStats[TEAM_SPEC].removePlayer(eventInfo.Userid.UserId.Value);
                         } 
