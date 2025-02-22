@@ -29,7 +29,7 @@ namespace OSBase.Modules {
         private int bombsites = 2;
 
         private const float delay = 6.5f;
-        private const float warmupDelay = 5.0f;
+        private const float warmupDelay = 8.0f;
 
         private bool warmup = false;
 
@@ -261,7 +261,8 @@ namespace OSBase.Modules {
             float targetSkillPerPlayer = targetSkill / playersToMove;
             for (int i = 0; i < playersToMove; i++) {
                 // Find the player nearest target skill
-                CCSPlayerController? player = tStats.getPlayerBySkillNonImmune(targetSkillPerPlayer);
+                TeamStats sourceTeamStats = moveFromT ? tStats : ctStats;
+                CCSPlayerController? player = sourceTeamStats.getPlayerBySkillNonImmune(targetSkillPerPlayer);
                 if (player == null) {
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Failed to find player to move.");
                     break;
@@ -270,7 +271,7 @@ namespace OSBase.Modules {
                 // Move the player to CT
                 if (player.UserId.HasValue) {
                     movePlayer(player, moveFromT ? TEAM_CT : TEAM_T, tStats, ctStats);
-                    Server.PrintToChatAll($"[TeamBalancer] Moved: {player.PlayerName} {(moveFromT ? "CT -> T" : "T -> CT")}.");
+                    Server.PrintToChatAll($"[TeamBalancer] Moved: {player.PlayerName} {(moveFromT ? "T -> CT" : "CT -> T")}.");
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Moved player {player.PlayerName} to {(moveFromT ? "CT" : "T")}.");
                 } else {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - evenTeamSizes: Player {player.PlayerName} has null UserId.");
