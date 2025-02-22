@@ -7,6 +7,7 @@ using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Modules.Utils;
 using CounterStrikeSharp.API.Modules.Cvars;
+using CounterStrikeSharp.API.Modules.Config;
 
 
 namespace OSBase.Modules {
@@ -31,7 +32,7 @@ namespace OSBase.Modules {
 
         private const float delay = 6.5f;
         private const float warmupDelay = 0.0f;
- //       private string wuTime = ConVar.Find("mp_warmuptime")?.StringValue ?? "0";
+        private string wuTime = string.Empty;
         private bool warmup = false;
 
 //        private int minPlayers = 4;
@@ -60,12 +61,23 @@ namespace OSBase.Modules {
             var globalConfig = config.GetGlobalConfigValue($"{ModuleName}", "0");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Global config value: {globalConfig}");
             if (globalConfig == "1") {
+                loadCVars();
                 loadEventHandlers();
                 LoadMapInfo();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
 
             } else {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
+            }
+        }
+
+        private void loadCVars ( ) {
+            ConVar? convar = ConVar.Find("mp_warmuptime");
+            if (convar != null) {
+                wuTime = convar.StringValue;
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - mp_warmuptime: {wuTime}");
+            } else {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - mp_warmuptime not found.");
             }
         }
 
