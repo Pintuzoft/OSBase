@@ -31,7 +31,7 @@ namespace OSBase.Modules {
 
         private const float delay = 6.5f;
         private const float warmupDelay = 0.0f;
-        private string wuTime = ConVar.Find("mp_warmuptime")?.StringValue ?? "0";
+ //       private string wuTime = ConVar.Find("mp_warmuptime")?.StringValue ?? "0";
         private bool warmup = false;
 
 //        private int minPlayers = 4;
@@ -114,7 +114,7 @@ namespace OSBase.Modules {
                 config?.AddCustomConfigLine($"{mapConfigFile}", $"{mapName} {bombsites}");
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Default bombsites: {bombsites}");
             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnMapStart: WarmupTime: {wuTime}");
+//            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnMapStart: WarmupTime: {wuTime}");
         }
 
         // OnRoundEnd updates win streak counters then calls BalanceTeams immediately.
