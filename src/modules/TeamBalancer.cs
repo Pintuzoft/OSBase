@@ -29,7 +29,7 @@ namespace OSBase.Modules {
         private int bombsites = 2;
 
         private const float delay = 6.5f;
-        private const float warmupDelay = 3.0f;
+        private const float warmupDelay = 1.0f;
 
         private bool warmup = false;
 
