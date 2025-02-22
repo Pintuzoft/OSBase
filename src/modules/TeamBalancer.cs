@@ -29,7 +29,7 @@ namespace OSBase.Modules {
         private int bombsites = 2;
 
         private const float delay = 6.5f;
-        private const float warmupDelay = 1.0f;
+        private const float warmupDelay = 0.0f;
 
         private bool warmup = false;
 
@@ -118,19 +118,19 @@ namespace OSBase.Modules {
         // OnRoundEnd updates win streak counters then calls BalanceTeams immediately.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundEnd triggered.");
-            osbase?.AddTimer(delay, () => {
+            osbase?.AddTimer(warmup?warmupDelay:delay, () => {
                 BalanceTeams();
-            });    
+            });
             return HookResult.Continue;
         }
 
         // OnWarmupEnd calls BalanceTeams.
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
-            osbase?.AddTimer(warmupDelay, () => {
-                BalanceTeams();
+//            osbase?.AddTimer(warmupDelay, () => {
+//                BalanceTeams();
                 warmup = false;
-            });
+//            });
             return HookResult.Continue;
         }
 
@@ -295,11 +295,11 @@ namespace OSBase.Modules {
             ctStats.printPlayers();
 
             // Move the player
-            if ( warmup ) {
-                player.ChangeTeam((CsTeam)targetTeam);
-            } else {
+//            if ( warmup ) {
+//                player.ChangeTeam((CsTeam)targetTeam);
+//            } else {
                 player.SwitchTeam((CsTeam)targetTeam);
-            }
+//            }
             if (player.UserId.HasValue) {
                 if (gameStats != null) {
                     gameStats.GetPlayerStats(player.UserId.Value).immune += 2;
