@@ -129,7 +129,7 @@ namespace OSBase.Modules {
         [GameEventHandler(HookMode.Pre)]
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
-            gameStats?.loadPlayerData(-1);
+            gameStats?.loadPlayerData(0);
             BalanceTeams();
             warmup = false;
             return HookResult.Continue;

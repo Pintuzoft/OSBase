@@ -194,6 +194,10 @@ namespace OSBase.Modules {
         public void loadPlayerData ( int winner ) {
             var playerList = Utilities.GetPlayers();
             PlayerStats pstats;
+            if ( teamStats.Count == 0 ) {
+                teamStats[TEAM_T] = new TeamStats();
+                teamStats[TEAM_CT] = new TeamStats();
+            }
             teamStats[TEAM_T].resetPlayers();
             teamStats[TEAM_CT].resetPlayers();
 
