@@ -197,62 +197,42 @@ namespace OSBase.Modules {
         }
 
         public void loadPlayerData ( int winner ) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(0)");
             var playerList = Utilities.GetPlayers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(1)");
             PlayerStats pstats;
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(2)");
             teamStats[TEAM_T].resetPlayers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(3)");
             teamStats[TEAM_CT].resetPlayers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(4)");
 
             foreach (var player in playerList) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(5)");
                 if (player != null && ! player.IsHLTV && player.UserId.HasValue) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(6)");
+                    if (!playerStats.ContainsKey(player.UserId.Value)) {
+                        playerStats[player.UserId.Value] = new PlayerStats();
+                    }
                     pstats = playerStats[player.UserId.Value];
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(7)");
                     bool isTeamTWinner = winner == TEAM_T;
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(8)");
 
                     if ( winner == (TEAM_T|TEAM_CT) ) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(9)");
                         // Update round wins for the winning team.
                         foreach (var p in teamStats[winner].playerList) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(10)");
                             if ( p.Key == player.UserId.Value ) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(11)");
                                 pstats.roundWins++;
                             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(12)");
                         }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(13)");
 
                         // Update round losses for the losing team.
                         foreach (var p in teamStats[isTeamTWinner ? TEAM_CT : TEAM_T].playerList) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(14)");
                             if ( p.Key == player.UserId.Value ) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(15)");
                                 pstats.roundLosses++;
                             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(16)");
                         }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(17)");
                     }
                     // Add player to team stats.
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(18)");
                     teamStats[player.TeamNum].addPlayer(player.UserId.Value, pstats);
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(19)");
                     if ( playerStats[player.UserId.Value].immune > 0 ) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(20)");
                         playerStats[player.UserId.Value].immune--;
                     }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(21)");
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}{(playerStats[player.UserId.Value].immune > 0 ? "(immune)" : "")}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
                 }
             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - loadPlayerData(22)");
 
         }
 
