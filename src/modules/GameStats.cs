@@ -184,6 +184,14 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team [{(entry.Key == TEAM_T ? "T" : "CT")}]: {entry.ToString()}");
             } 
 
+            loadPlayerData ( eventInfo.Winner );
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].getAverageSkill()}, [CT]: {teamStats[TEAM_CT].getAverageSkill()}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].numPlayers()}, [CT]: {teamStats[TEAM_CT].numPlayers()}");
+            return HookResult.Continue;
+        }
+
+        public void loadPlayerData ( int winner ) {
             var playerList = Utilities.GetPlayers();
             PlayerStats pstats;
             teamStats[TEAM_T].resetPlayers();
@@ -192,19 +200,21 @@ namespace OSBase.Modules {
             foreach (var player in playerList) {
                 if (player != null && ! player.IsHLTV && player.UserId.HasValue) {
                     pstats = playerStats[player.UserId.Value];
-                    bool isTeamTWinner = eventInfo.Winner == TEAM_T;
+                    bool isTeamTWinner = winner == TEAM_T;
 
-                    // Update round wins for the winning team.
-                    foreach (var p in teamStats[eventInfo.Winner].playerList) {
-                        if ( p.Key == player.UserId.Value ) {
-                            pstats.roundWins++;
+                    if ( winner == (TEAM_T|TEAM_CT) ) {
+                        // Update round wins for the winning team.
+                        foreach (var p in teamStats[winner].playerList) {
+                            if ( p.Key == player.UserId.Value ) {
+                                pstats.roundWins++;
+                            }
                         }
-                    }
 
-                    // Update round losses for the losing team.
-                    foreach (var p in teamStats[isTeamTWinner ? TEAM_CT : TEAM_T].playerList) {
-                        if ( p.Key == player.UserId.Value ) {
-                            pstats.roundLosses++;
+                        // Update round losses for the losing team.
+                        foreach (var p in teamStats[isTeamTWinner ? TEAM_CT : TEAM_T].playerList) {
+                            if ( p.Key == player.UserId.Value ) {
+                                pstats.roundLosses++;
+                            }
                         }
                     }
                     // Add player to team stats.
@@ -215,11 +225,7 @@ namespace OSBase.Modules {
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}{(playerStats[player.UserId.Value].immune > 0 ? "(immune)" : "")}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
                 }
             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].getAverageSkill()}, [CT]: {teamStats[TEAM_CT].getAverageSkill()}");
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].numPlayers()}, [CT]: {teamStats[TEAM_CT].numPlayers()}");
-            return HookResult.Continue;
         }
-
 
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnStartHalftime triggered.");
