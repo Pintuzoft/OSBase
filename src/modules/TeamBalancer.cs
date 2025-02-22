@@ -31,7 +31,7 @@ namespace OSBase.Modules {
 
         private const float delay = 6.5f;
         private const float warmupDelay = 0.0f;
-        ConVar? wuTime = ConVar.Find("mp_warmuptime");
+        private string wuTime = ConVar.Find("mp_warmuptime")?.StringValue ?? "0";
         private bool warmup = false;
 
 //        private int minPlayers = 4;
