@@ -305,6 +305,7 @@ namespace OSBase.Modules {
 //            } else {
                 player.SwitchTeam((CsTeam)targetTeam);
 //            }
+            gameStats?.movePlayer(player.UserId.Value, targetTeam);
             if (player.UserId.HasValue) {
                 if (gameStats != null) {
                     gameStats.GetPlayerStats(player.UserId.Value).immune += 2;

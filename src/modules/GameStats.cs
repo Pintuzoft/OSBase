@@ -323,6 +323,32 @@ namespace OSBase.Modules {
             return new TeamStats();     
         }
 
+        public void movePlayer ( int userId, int team ) {
+            if ( playerStats.ContainsKey(userId) ) {
+                PlayerStats pstats = playerStats[userId];
+                if ( teamStats[TEAM_SPEC] == null ) {
+                    teamStats[TEAM_SPEC] = new TeamStats();
+                } 
+                if ( teamStats[TEAM_T] == null ) {
+                    teamStats[TEAM_T] = new TeamStats();
+                }
+                if ( teamStats[TEAM_CT] == null ) {
+                    teamStats[TEAM_CT] = new TeamStats();
+                }
+
+                if ( teamStats[TEAM_SPEC].playerList.ContainsKey(userId) ) {
+                    teamStats[TEAM_SPEC].removePlayer(userId);
+                } 
+                if ( teamStats[TEAM_T].playerList.ContainsKey(userId) ) {
+                    teamStats[TEAM_T].removePlayer(userId);
+                }
+                if ( teamStats[TEAM_CT].playerList.ContainsKey(userId) ) {
+                    teamStats[TEAM_CT].removePlayer(userId);
+                }
+                teamStats[team].addPlayer(userId, playerStats[userId]);
+            }
+        }
+
     }
 
 
