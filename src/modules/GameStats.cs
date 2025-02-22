@@ -70,9 +70,15 @@ namespace OSBase.Modules {
                 if ( eventInfo.Team == ( TEAM_T | TEAM_CT | TEAM_SPEC ) ) {
                     if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                         bool isTeamT = eventInfo.Team == TEAM_T;
-                        teamStats[TEAM_SPEC].removePlayer(eventInfo.Userid.UserId.Value);
-                        teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-                        teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
+                        if ( teamStats[TEAM_SPEC].playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                            teamStats[TEAM_SPEC].removePlayer(eventInfo.Userid.UserId.Value);
+                        } 
+                        if ( teamStats[TEAM_T].playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                            teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+                        }
+                        if ( teamStats[TEAM_CT].playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                            teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
+                        }
                         teamStats[isTeamT ? TEAM_T : TEAM_CT].addPlayer(eventInfo.Userid.UserId.Value, playerStats[eventInfo.Userid.UserId.Value]);
                     }
                 }
