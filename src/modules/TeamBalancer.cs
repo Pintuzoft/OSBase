@@ -32,7 +32,7 @@ namespace OSBase.Modules {
 
         private const float delay = 6.5f;
         private const float warmupDelay = 0.0f;
-        private string wuTime = string.Empty;
+        private float wuTime = 0f;
         private bool warmup = false;
 
 //        private int minPlayers = 4;
@@ -74,7 +74,7 @@ namespace OSBase.Modules {
         private void loadCVars ( ) {
             ConVar? convar = ConVar.Find("mp_warmuptime");
             if (convar != null) {
-                wuTime = convar.StringValue;
+                wuTime = convar.GetPrimitiveValue<float>();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - mp_warmuptime: {wuTime}");
             } else {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - mp_warmuptime not found.");
