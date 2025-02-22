@@ -67,12 +67,10 @@ namespace OSBase.Modules {
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnPlayerTeam: Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");
-                if ( eventInfo.Team == ( TEAM_T | TEAM_CT | TEAM_SPEC ) ) {
+                if ( eventInfo.Team == ( TEAM_T | TEAM_CT ) ) {
                     if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                         bool isTeamT = eventInfo.Team == TEAM_T;
-                        if ( teamStats[TEAM_SPEC] == null ) {
-                            teamStats[TEAM_SPEC] = new TeamStats();
-                        } 
+
                         if ( teamStats[TEAM_T] == null ) {
                             teamStats[TEAM_T] = new TeamStats();
                         }
@@ -317,11 +315,11 @@ namespace OSBase.Modules {
         }
 
         public void movePlayer ( int userId, int team ) {
+            if ( team != (TEAM_T | TEAM_CT) ) {
+                return;
+            }
             if ( playerStats.ContainsKey(userId) ) {
                 PlayerStats pstats = playerStats[userId];
-                if ( teamStats[TEAM_SPEC] == null ) {
-                    teamStats[TEAM_SPEC] = new TeamStats();
-                } 
                 if ( teamStats[TEAM_T] == null ) {
                     teamStats[TEAM_T] = new TeamStats();
                 }
