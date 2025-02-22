@@ -80,15 +80,9 @@ namespace OSBase.Modules {
                             teamStats[TEAM_CT] = new TeamStats();
                         }
 
-                        if ( teamStats[TEAM_SPEC].playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                            teamStats[TEAM_SPEC].removePlayer(eventInfo.Userid.UserId.Value);
-                        } 
-                        if ( teamStats[TEAM_T].playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                            teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-                        }
-                        if ( teamStats[TEAM_CT].playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                            teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
-                        }
+                        teamStats[TEAM_SPEC].removePlayer(eventInfo.Userid.UserId.Value);
+                        teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+                        teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
                         teamStats[isTeamT ? TEAM_T : TEAM_CT].addPlayer(eventInfo.Userid.UserId.Value, playerStats[eventInfo.Userid.UserId.Value]);
                     }
                 }
@@ -336,15 +330,9 @@ namespace OSBase.Modules {
                     teamStats[TEAM_CT] = new TeamStats();
                 }
 
-                if ( teamStats[TEAM_SPEC].playerList.ContainsKey(userId) ) {
-                    teamStats[TEAM_SPEC].removePlayer(userId);
-                } 
-                if ( teamStats[TEAM_T].playerList.ContainsKey(userId) ) {
-                    teamStats[TEAM_T].removePlayer(userId);
-                }
-                if ( teamStats[TEAM_CT].playerList.ContainsKey(userId) ) {
-                    teamStats[TEAM_CT].removePlayer(userId);
-                }
+                teamStats[TEAM_SPEC].removePlayer(userId);
+                teamStats[TEAM_T].removePlayer(userId);
+                teamStats[TEAM_CT].removePlayer(userId);
                 teamStats[team].addPlayer(userId, playerStats[userId]);
             }
         }
@@ -413,10 +401,14 @@ namespace OSBase.Modules {
             playerList.Clear();
         }
         public void addPlayer (int userId, PlayerStats stats) {
-            playerList[userId] = stats;
+            if ( ! playerList.ContainsKey(userId) ) {
+                playerList[userId] = stats;
+            } 
         }
         public void removePlayer (int userId) {
-            playerList.Remove(userId);
+            if ( playerList.ContainsKey(userId) ) {
+                playerList.Remove(userId);
+            }
         }
 
         public float getTotalSkill() {
