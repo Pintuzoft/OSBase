@@ -78,9 +78,9 @@ namespace OSBase.Modules {
                             teamStats[TEAM_CT] = new TeamStats();
                         }
 
-                        teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-                        teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
                         teamStats[isTeamT ? TEAM_T : TEAM_CT].addPlayer(eventInfo.Userid.UserId.Value, playerStats[eventInfo.Userid.UserId.Value]);
+                        teamStats[isTeamT ? TEAM_CT : TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+
                     }
                 }
             }
@@ -329,6 +329,8 @@ namespace OSBase.Modules {
                 teamStats[TEAM_T].removePlayer(userId);
                 teamStats[TEAM_CT].removePlayer(userId);
                 teamStats[team].addPlayer(userId, playerStats[userId]);
+                teamStats[team == TEAM_T ? TEAM_CT : TEAM_T].removePlayer(userId);
+
             }
         }
 
