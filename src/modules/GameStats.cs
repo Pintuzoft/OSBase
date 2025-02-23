@@ -23,7 +23,7 @@ namespace OSBase.Modules {
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
         // Store player stats keyed by user id.
-        private Dictionary<int, PlayerStats> playerStats = new Dictionary<int, PlayerStats>();
+        public Dictionary<int, PlayerStats> playerStats = new Dictionary<int, PlayerStats>();
         private Dictionary<int, TeamStats> teamStats = new Dictionary<int, TeamStats>();
 
         public GameStats(OSBase inOsbase, Config inConfig) {

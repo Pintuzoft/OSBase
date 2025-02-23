@@ -76,11 +76,13 @@ namespace OSBase.Modules {
 
             CCSPlayerController? player = eventInfo?.Userid != null ? Utilities.GetPlayerFromUserid(eventInfo.Userid) : null;
 
-            if (player == null) {
+
+
+            if ( player == null || ! player.IsValid || ! player.UserId.HasValue ) {
                 return HookResult.Continue;
             }
 
-            if (eventInfo != null && eventInfo.Text != null && eventInfo.Text.StartsWith("bet")) {
+            if ( eventInfo != null && eventInfo.Text != null && eventInfo.Text.StartsWith("bet") ) {
                 handleBetCommand(player, eventInfo.Text);
             }
             return HookResult.Continue;

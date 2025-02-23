@@ -281,7 +281,14 @@ namespace OSBase.Modules {
             for (int i = 0; i < playersToMove; i++) {
                 // Find the player nearest target skill
                 TeamStats sourceTeamStats = moveFromT ? tStats : ctStats;
-                CCSPlayerController? player = sourceTeamStats.getPlayerBySkillNonImmune(targetSkillPerPlayer);
+                CCSPlayerController? player;
+                
+                if (gameStats != null && gameStats.playerStats.Count < 10) {
+                    player = sourceTeamStats.getPlayerBySkillNonImmune(targetSkillPerPlayer);
+                } else {
+                    player = sourceTeamStats.getPlayerBySkill(targetSkillPerPlayer);
+                }
+                
                 if (player == null) {
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Failed to find player to move.");
                     break;
