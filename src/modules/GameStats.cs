@@ -30,7 +30,6 @@ namespace OSBase.Modules {
             this.osbase = inOsbase;
             this.config = inConfig;
             loadEventHandlers();
-            teamStats[TEAM_SPEC] = new TeamStats();
             teamStats[TEAM_T] = new TeamStats();
             teamStats[TEAM_CT] = new TeamStats();            
         }
@@ -67,21 +66,22 @@ namespace OSBase.Modules {
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnPlayerTeam: Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");
+                if ( teamStats[TEAM_T] == null ) {
+                    teamStats[TEAM_T] = new TeamStats();
+                }
+                if ( teamStats[TEAM_CT] == null ) {
+                    teamStats[TEAM_CT] = new TeamStats();
+                }
                 if ( eventInfo.Team == ( TEAM_T | TEAM_CT ) ) {
                     if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                         bool isTeamT = eventInfo.Team == TEAM_T;
-
-                        if ( teamStats[TEAM_T] == null ) {
-                            teamStats[TEAM_T] = new TeamStats();
-                        }
-                        if ( teamStats[TEAM_CT] == null ) {
-                            teamStats[TEAM_CT] = new TeamStats();
-                        }
-
+                        teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+                        teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
                         teamStats[isTeamT ? TEAM_T : TEAM_CT].addPlayer(eventInfo.Userid.UserId.Value, playerStats[eventInfo.Userid.UserId.Value]);
-                        teamStats[isTeamT ? TEAM_CT : TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-
                     }
+                } else {
+                    teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+                    teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
                 }
             }
             return HookResult.Continue;
