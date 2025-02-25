@@ -321,11 +321,8 @@ namespace OSBase.Modules {
             ctStats.printPlayers();
 
             // Move the player
-//            if ( warmup ) {
-//                player.ChangeTeam((CsTeam)targetTeam);
-//            } else {
-                player.SwitchTeam((CsTeam)targetTeam);
-//            }
+            player.SwitchTeam((CsTeam)targetTeam);
+
             gameStats?.movePlayer(player.UserId.Value, targetTeam);
             if (player.UserId.HasValue) {
                 if (gameStats != null) {

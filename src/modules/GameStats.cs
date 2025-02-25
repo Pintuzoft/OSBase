@@ -414,7 +414,9 @@ namespace OSBase.Modules {
 
         public float getAverageSkill() {
             int count = numPlayers();
-            return count > 0 ? getTotalSkill() / count : 0f;
+            float sum = count > 0 ? getTotalSkill() / count : 0f;
+            sum += streak * 500f;
+            return sum;
         }
 
         public CCSPlayerController? getPlayerBySkill(float targetSkill) {
