@@ -137,18 +137,15 @@ namespace OSBase.Modules {
             var terrorists = playersList
                 .Where(p => p.TeamNum == TEAM_T)
                 .ToList();
-
             var counterterrorists = playersList
                 .Where(p => p.TeamNum == TEAM_CT)
                 .ToList();
-
 
             int tSize = terrorists.Count;
             int ctSize = counterterrorists.Count;
             int team = 0;
             int amount = 0;
             float odds = 0.0f;
-
 
             switch (teamStr) {
                 case "t":
@@ -191,7 +188,7 @@ namespace OSBase.Modules {
                 return;
             } else {
                 betters.Add(player.UserId.Value, new Bet(amount, team, odds));
-                player.RemoveMoney(amount);
+                player.InGameMoneyServices.Account -= amount;
                 player.PrintToChat($"[TeamBets]: ${amount} on {(team == TEAM_T ? "Terrorists" : "Counter-Terrorists")}");
             }
 
@@ -222,8 +219,9 @@ namespace OSBase.Modules {
                 if (bet.team == winningTeam) {
                     // Your payout equals your bet plus your share of the losers' pool
                     int payout = bet.amount;
-           
-                    player.AddMoney(payout);
+                    if (player.InGameMoneyServices != null) {
+                        player.InGameMoneyServices.Account += payout;
+                    }
                     player.PrintToChat($"[TeamBets]: Congrats! You won ${payout} betting on {(winningTeam == TEAM_T ? "Terrorists" : "Counter-Terrorists")}!");
                 } else {
                     player.PrintToChat("[TeamBets]: Your bet lost! Better luck next round.");

@@ -15,9 +15,7 @@ namespace OSBase.Modules {
         private OSBase? osbase;
         private Config? config;
         private bool isWarmup = false;
-
         public int roundNumber = 0;
-
         private const int TEAM_SPEC = (int)CsTeam.Spectator;
         private const int TEAM_T = (int)CsTeam.Terrorist;
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
@@ -26,15 +24,24 @@ namespace OSBase.Modules {
         public Dictionary<int, PlayerStats> playerStats = new Dictionary<int, PlayerStats>();
         private Dictionary<int, TeamStats> teamStats = new Dictionary<int, TeamStats>();
 
+        private Database db;
+
         public GameStats(OSBase inOsbase, Config inConfig) {
             this.osbase = inOsbase;
             this.config = inConfig;
+            this.db = new Database(this.osbase, this.config);
+            createTables();
             loadEventHandlers();
             teamStats[TEAM_T] = new TeamStats();
             teamStats[TEAM_CT] = new TeamStats();            
         }
 
-        public void loadEventHandlers() {
+        private void createTables ( ) {
+            string query = "TABLE IF NOT EXISTS skill_log (steamid varchar(32),name varchar(64),skill int(11), datestr datetime);";
+            this.db.create(query);
+        }
+
+        public void loadEventHandlers ( ) {
             // Register relevant events.
             osbase?.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
             osbase?.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
