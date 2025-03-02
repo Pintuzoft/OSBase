@@ -74,6 +74,9 @@ namespace OSBase.Modules {
             // 4 rows in set (0.002 sec)
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Map ended. Writing player stats to database.");
             foreach (var entry in playerList ) {
+                if ( entry.Value.steamid.Equals("0") || entry.Value.name.Length == 0 || entry.Value.rounds < 10 ) {
+                    continue;
+                }
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Writing stats for player {entry.Value.name} ({entry.Value.steamid})");
                 string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
                 var parameters = new MySqlParameter[] {
@@ -238,27 +241,6 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].getAverageSkill()}, [CT]: {teamList[TEAM_CT].getAverageSkill()}");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].numPlayers()}, [CT]: {teamList[TEAM_CT].numPlayers()}");
 
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - round ended. Writing player stats to database.");
-            foreach (var entry in playerList ) {
-                if ( entry.Value.steamid.Equals("0") ) {
-                    continue;
-                }
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Writing stats for player {entry.Value.name} ({entry.Value.steamid})");
-                string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
-                var parameters = new MySqlParameter[] {
-                    new MySqlParameter("@steamid", entry.Value.steamid),
-                    new MySqlParameter("@name", entry.Value.name),
-                    new MySqlParameter("@skill", entry.Value.calcSkill())
-                };
-                try {
-                    this.db.insert(query, parameters);
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for player {entry.Value.name} ({entry.Value.steamid})");
-                } catch (Exception e) {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
-                }
-            }
-
             return HookResult.Continue;
         }
 
@@ -276,13 +258,6 @@ namespace OSBase.Modules {
             this.roundNumber = 0;
             clearStats();
         }
-
-//        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-//            this.isWarmup = false;
- //           this.roundNumber = 0;
-//            clearStats();
- //           return HookResult.Continue;
- //       }
 
         // Public method to access a player's stats.
         public PlayerStats GetPlayerStats(int userId) {
@@ -532,7 +507,7 @@ namespace OSBase.Modules {
         }
         public void printPlayers() {
             foreach (var kvp in playerList) {
-                Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}/{kvp.Value.name}: {kvp.Value.rounds}r/{kvp.Value.roundWins}w/{kvp.Value.roundLosses} - {kvp.Value.kills}k/{kvp.Value.assists}a/{kvp.Value.deaths}d -> {kvp.Value.calcSkill()}p");
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}/{kvp.Value.name}: {kvp.Value.rounds}r/{kvp.Value.roundWins}w/{kvp.Value.roundLosses}l - {kvp.Value.kills}k/{kvp.Value.assists}a/{kvp.Value.deaths}d:{kvp.Value.damage}dmg -> {kvp.Value.calcSkill()}p");
             }
         }
 
