@@ -42,7 +42,7 @@ public class Database {
                     continue;
                 var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length == 2 && int.TryParse(parts[1], out int bs)) {
-                    switch (bs+"") {
+                    switch (parts[0]) {
                         case "dbhost":
                             dbhost = parts[1];
                             break;
