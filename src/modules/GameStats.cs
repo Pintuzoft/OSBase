@@ -7,6 +7,7 @@ using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Utils;
 using CounterStrikeSharp.API.Core;
 using System.Diagnostics.Contracts;
+using MySqlConnector;
 
 namespace OSBase.Modules {
 
@@ -59,8 +60,54 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
             osbase?.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
             osbase?.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
+            osbase?.RegisterEventHandler<EventEndmatchMapvoteSelectingMap>(OnMapEnd);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
+
+        private HookResult OnMapEnd(EventEndmatchMapvoteSelectingMap eventInfo, GameEventInfo gameEventInfo) {
+            //MariaDB [osbase]> describe skill_log;
+            //+---------+-------------+------+-----+---------+-------+
+            //| Field   | Type        | Null | Key | Default | Extra |
+            //+---------+-------------+------+-----+---------+-------+
+            //| steamid | varchar(32) | YES  |     | NULL    |       |
+            //| name    | varchar(64) | YES  |     | NULL    |       |
+            //| skill   | int(11)     | YES  |     | NULL    |       |
+            //| datestr | datetime    | YES  |     | NULL    |       |
+            //+---------+-------------+------+-----+---------+-------+
+            //4 rows in set (0.002 sec)
+
+            var pList = Utilities.GetPlayers();
+
+            foreach (var p in pList) {
+                if (!p.UserId.HasValue) {
+                    continue;
+                }
+                if (!playerList.ContainsKey(p.UserId.Value)) {
+                    playerList[p.UserId.Value] = new PlayerStats();
+                }
+
+                PlayerStats player = playerList[p.UserId.Value];
+                if (player.rounds >= 0) { 
+                    string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
+                    var parameters = new MySqlParameter[] {
+                        new MySqlParameter("@steamid", p.SteamID),
+                        new MySqlParameter("@name", p.PlayerName ?? ""),
+                        new MySqlParameter("@skill", player.calcSkill())
+                    };
+                    try {
+                        this.db.insert(query, parameters);
+                    } catch (Exception e) {
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
+                    }
+                }
+            }
+
+            clearDisconnected();
+            return HookResult.Continue;
+        }
+
+
+
 
         private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
             if(isWarmup) return HookResult.Continue;
@@ -205,6 +252,35 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].getAverageSkill()}, [CT]: {teamList[TEAM_CT].getAverageSkill()}");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].numPlayers()}, [CT]: {teamList[TEAM_CT].numPlayers()}");
+
+//----------------
+            var pList = Utilities.GetPlayers();
+
+            foreach (var p in pList) {
+                if (!p.UserId.HasValue) {
+                    continue;
+                }
+                if (!playerList.ContainsKey(p.UserId.Value)) {
+                    playerList[p.UserId.Value] = new PlayerStats();
+                }
+
+                PlayerStats player = playerList[p.UserId.Value];
+                if (player.rounds >= 0) { 
+                    string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
+                    var parameters = new MySqlParameter[] {
+                        new MySqlParameter("@steamid", p.SteamID),
+                        new MySqlParameter("@name", p.PlayerName ?? ""),
+                        new MySqlParameter("@skill", player.calcSkill())
+                    };
+                    try {
+                        this.db.insert(query, parameters);
+                    } catch (Exception e) {
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
+                    }
+                }
+            }
+//----------------
+
             return HookResult.Continue;
         }
 
