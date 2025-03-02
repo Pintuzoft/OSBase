@@ -239,6 +239,9 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - round ended. Writing player stats to database.");
             foreach (var entry in playerList ) {
+                if ( entry.Value.steamid.Equals("0") ) {
+                    continue;
+                }
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Writing stats for player {entry.Value.name} ({entry.Value.steamid})");
                 string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
                 var parameters = new MySqlParameter[] {
