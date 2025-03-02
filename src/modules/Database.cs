@@ -36,6 +36,7 @@ public class Database {
         string dbpass = config.GetGlobalConfigValue("database", "dbpass");
         string dbname = config.GetGlobalConfigValue("database", "dbname");
         string dbport = config.GetGlobalConfigValue("database", "dbport");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Database connection string: {dbhost}:{dbuser}:{dbpass}:{dbname}:{dbport}");
         return $"server={dbhost};user id={dbuser};password={dbpass};database={dbname};port={dbport};pooling=true;minimumpoolsize=5;maximumpoolsize=50;connectionidletimeout=1200;";
     }
 
