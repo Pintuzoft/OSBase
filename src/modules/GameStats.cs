@@ -265,7 +265,7 @@ namespace OSBase.Modules {
                 }
 
                 PlayerStats player = playerList[p.UserId.Value];
-                if (player.rounds >= 0) { 
+                if ( ! p.IsBot && ! p.IsHLTV && player.rounds >= 0 ) { 
                     string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
                     var parameters = new MySqlParameter[] {
                         new MySqlParameter("@steamid", p.SteamID),
