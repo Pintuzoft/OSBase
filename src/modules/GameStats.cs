@@ -72,13 +72,16 @@ namespace OSBase.Modules {
         }
 
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
-            if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnPlayerTeam: Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");
-                teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
-                teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-                teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);                        
-                teamList[eventInfo.Team].addPlayer(eventInfo.Userid.UserId.Value, playerList[eventInfo.Userid.UserId.Value]);
+            if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
+                return HookResult.Continue;
             }
+            if ( ! playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
+            }   
+            teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
+            teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+            teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);                        
+            teamList[eventInfo.Team].addPlayer(eventInfo.Userid.UserId.Value, playerList[eventInfo.Userid.UserId.Value]);
             return HookResult.Continue;
         }
 
@@ -94,7 +97,7 @@ namespace OSBase.Modules {
 
         private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} disconnected.");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} disconnected.");
                 if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                     playerList[eventInfo.Userid.UserId.Value].disconnected = true;
                 }
