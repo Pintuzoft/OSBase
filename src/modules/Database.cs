@@ -38,10 +38,10 @@ public class Database {
 
             foreach (var line in dbcfg) {
                 string trimmedLine = line.Trim();
-                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//"))
+                if ( string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//") )
                     continue;
                 var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length == 2 && int.TryParse(parts[1], out int bs)) {
+                if ( parts.Length == 2 ) {
                     switch (parts[0]) {
                         case "dbhost":
                             dbhost = parts[1];
