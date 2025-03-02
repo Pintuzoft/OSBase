@@ -54,14 +54,14 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase?.RegisterEventHandler<EventRoundStart>(OnRoundStart);
             osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+            osbase?.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
             osbase?.RegisterEventHandler<EventWeaponFire>(OnWeaponFire);
-            osbase?.RegisterEventHandler<EventEndmatchMapvoteSelectingMap>(OnMapEnd);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
 
-        private HookResult OnMapEnd(EventEndmatchMapvoteSelectingMap eventInfo, GameEventInfo gameEventInfo) {
+        private void OnMapEnd ( ) {
             // MariaDB [osbase]> describe skill_log;
             // +---------+-------------+------+-----+---------+-------+
             // | Field   | Type        | Null | Key | Default | Extra |
@@ -72,38 +72,22 @@ namespace OSBase.Modules {
             // | datestr | datetime    | YES  |     | NULL    |       |
             // +---------+-------------+------+-----+---------+-------+
             // 4 rows in set (0.002 sec)
-
-            var pList = Utilities.GetPlayers();
-            if ( pList == null ) {
-                return HookResult.Continue;
-            } else if ( pList.Count < 4 ) {
-                return HookResult.Continue;
-            }
-
-            foreach (var p in pList) {
-                if (!p.UserId.HasValue) {
-                    continue;
-                }
-                if (!playerList.ContainsKey(p.UserId.Value)) {
-                    playerList[p.UserId.Value] = new PlayerStats();
-                }
-
-                PlayerStats player = playerList[p.UserId.Value];
-                if ( ! p.IsBot && ! p.IsHLTV && player.rounds >= 10 ) { 
-                    string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
-                    var parameters = new MySqlParameter[] {
-                        new MySqlParameter("@steamid", p.SteamID),
-                        new MySqlParameter("@name", p.PlayerName ?? ""),
-                        new MySqlParameter("@skill", player.calcSkill())
-                    };
-                    try {
-                        this.db.insert(query, parameters);
-                    } catch (Exception e) {
-                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
-                    }
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Map ended. Writing player stats to database.");
+            foreach (var entry in playerList ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Writing stats for player {entry.Value.name} ({entry.Value.steamid})");
+                string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
+                var parameters = new MySqlParameter[] {
+                    new MySqlParameter("@steamid", entry.Value.steamid),
+                    new MySqlParameter("@name", entry.Value.name),
+                    new MySqlParameter("@skill", entry.Value.calcSkill())
+                };
+                try {
+                    this.db.insert(query, parameters);
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for player {entry.Value.name} ({entry.Value.steamid})");
+                } catch (Exception e) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
                 }
             }
-            return HookResult.Continue;
         }
 
         private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
@@ -125,6 +109,9 @@ namespace OSBase.Modules {
                 return HookResult.Continue;
             }
             int shooterId = eventInfo.Userid.UserId.Value;
+            if ( ! playerList.ContainsKey(shooterId) ) {
+                playerList[shooterId] = new PlayerStats();
+            }
             playerList[shooterId].shotsFired++;
             return HookResult.Continue;
         }
@@ -134,6 +121,9 @@ namespace OSBase.Modules {
             if(isWarmup) return HookResult.Continue;
             if (eventInfo.Attacker != null && eventInfo.Attacker.UserId.HasValue) {
                 int attackerId = eventInfo.Attacker.UserId.Value;
+                if ( ! playerList.ContainsKey(attackerId) ) {
+                    playerList[attackerId] = new PlayerStats();
+                }
                 playerList[attackerId].kills++;
                 if ( eventInfo.Hitgroup == 1 ) {
                     playerList[attackerId].headshotKills++;
@@ -141,11 +131,17 @@ namespace OSBase.Modules {
             }
             if (eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue) {
                 int victimId = eventInfo.Userid.UserId.Value;
+                if ( ! playerList.ContainsKey(victimId) ) {
+                    playerList[victimId] = new PlayerStats();
+                }
                 playerList[victimId].deaths++;
             }
             // Optionally update assists if available.
             if (eventInfo.Assister != null && eventInfo.Assister.UserId.HasValue) {
                 int assistId = eventInfo.Assister.UserId.Value;
+                if ( ! playerList.ContainsKey(assistId) ) {
+                    playerList[assistId] = new PlayerStats();
+                }
                 playerList[assistId].assists++;
             }
             return HookResult.Continue;
@@ -189,6 +185,13 @@ namespace OSBase.Modules {
                     if ( ! playerList.ContainsKey(player.UserId.Value) ) {
                         playerList[player.UserId.Value] = new PlayerStats();
                     }
+                    if ( playerList[player.UserId.Value].name.Length == 0 ) {
+                        playerList[player.UserId.Value].name = player.PlayerName ?? "";
+                    }
+                    if ( playerList[player.UserId.Value].steamid.Length == 0 ) {
+                        playerList[player.UserId.Value].steamid = player.SteamID+"";
+                    }
+                    
                     switch (player.TeamNum) {
                         case TEAM_S:
                             teamList[TEAM_S].addPlayer(player.UserId.Value, playerList[player.UserId.Value]);
@@ -232,6 +235,24 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].getAverageSkill()}, [CT]: {teamList[TEAM_CT].getAverageSkill()}");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].numPlayers()}, [CT]: {teamList[TEAM_CT].numPlayers()}");
+
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - round ended. Writing player stats to database.");
+            foreach (var entry in playerList ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Writing stats for player {entry.Value.name} ({entry.Value.steamid})");
+                string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
+                var parameters = new MySqlParameter[] {
+                    new MySqlParameter("@steamid", entry.Value.steamid),
+                    new MySqlParameter("@name", entry.Value.name),
+                    new MySqlParameter("@skill", entry.Value.calcSkill())
+                };
+                try {
+                    this.db.insert(query, parameters);
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for player {entry.Value.name} ({entry.Value.steamid})");
+                } catch (Exception e) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
+                }
+            }
 
             return HookResult.Continue;
         }
@@ -331,6 +352,8 @@ namespace OSBase.Modules {
 
     // Data container for game statistics.
     public class PlayerStats {
+        public string name { get; set; } = string.Empty;
+        public string steamid { get; set; } = string.Empty;
         public int rounds { get; set; }
         public int roundWins { get; set; }
         public int roundLosses { get; set; }
