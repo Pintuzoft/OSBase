@@ -77,6 +77,11 @@ namespace OSBase.Modules {
             //4 rows in set (0.002 sec)
 
             var pList = Utilities.GetPlayers();
+            if ( pList == null ) {
+                return HookResult.Continue;
+            } else if ( pList.Count < 4 ) {
+                return HookResult.Continue;
+            }
 
             foreach (var p in pList) {
                 if (!p.UserId.HasValue) {
@@ -87,7 +92,7 @@ namespace OSBase.Modules {
                 }
 
                 PlayerStats player = playerList[p.UserId.Value];
-                if (player.rounds >= 0) { 
+                if ( ! p.IsBot && ! p.IsHLTV && player.rounds >= 10 ) { 
                     string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
                     var parameters = new MySqlParameter[] {
                         new MySqlParameter("@steamid", p.SteamID),
@@ -252,34 +257,6 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].getAverageSkill()}, [CT]: {teamList[TEAM_CT].getAverageSkill()}");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].numPlayers()}, [CT]: {teamList[TEAM_CT].numPlayers()}");
-
-//----------------
-            var pList = Utilities.GetPlayers();
-
-            foreach (var p in pList) {
-                if (!p.UserId.HasValue) {
-                    continue;
-                }
-                if (!playerList.ContainsKey(p.UserId.Value)) {
-                    playerList[p.UserId.Value] = new PlayerStats();
-                }
-
-                PlayerStats player = playerList[p.UserId.Value];
-                if ( ! p.IsBot && ! p.IsHLTV && player.rounds >= 0 ) { 
-                    string query = "INTO skill_log (steamid, name, skill, datestr) VALUES (@steamid, @name, @skill, NOW());";
-                    var parameters = new MySqlParameter[] {
-                        new MySqlParameter("@steamid", p.SteamID),
-                        new MySqlParameter("@name", p.PlayerName ?? ""),
-                        new MySqlParameter("@skill", player.calcSkill())
-                    };
-                    try {
-                        this.db.insert(query, parameters);
-                    } catch (Exception e) {
-                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
-                    }
-                }
-            }
-//----------------
 
             return HookResult.Continue;
         }
