@@ -86,31 +86,37 @@ namespace OSBase.Modules {
         }
 
         private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
-            if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} connected.");
-                if ( ! playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                    playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
-                }                    
+            if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
+                return HookResult.Continue;
+            }
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} connected.");
+            if ( ! playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
             }
             return HookResult.Continue;
         }
 
         private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
-            if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} disconnected.");
-                if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                    playerList[eventInfo.Userid.UserId.Value].disconnected = true;
-                }
+            if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
+                return HookResult.Continue;
             }
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} disconnected.");
+            if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                playerList[eventInfo.Userid.UserId.Value].disconnected = true;
+            }
+            teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
+            teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+            teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
             return HookResult.Continue;
         }
 
         private HookResult OnWeaponFire(EventWeaponFire eventInfo, GameEventInfo gameEventInfo) {
             if(isWarmup) return HookResult.Continue;
-            if (eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue) {
-                int shooterId = eventInfo.Userid.UserId.Value;
-                playerList[shooterId].shotsFired++;
+            if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
+                return HookResult.Continue;
             }
+            int shooterId = eventInfo.Userid.UserId.Value;
+            playerList[shooterId].shotsFired++;
             return HookResult.Continue;
         }
 
