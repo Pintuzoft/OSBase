@@ -38,8 +38,12 @@ namespace OSBase.Modules {
         }
 
         private void createTables ( ) {
-            string query = "TABLE IF NOT EXISTS skill_log (steamid varchar(32),name varchar(64),skill int(11), datestr datetime);";
-            this.db.create(query);
+            string query = "TABLE IF NOT EXISTS skill_log (steamid varchar(32),name varchar(64),skill int(11), datestr datetime);";            
+            try {
+                this.db.create(query);
+            } catch (Exception e) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error creating table: {e.Message}");
+            }
         }
 
         public void loadEventHandlers ( ) {
@@ -103,6 +107,9 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} disconnected.");
             if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                 playerList[eventInfo.Userid.UserId.Value].disconnected = true;
+            }
+            if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                playerList.Remove(eventInfo.Userid.UserId.Value);
             }
             teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
             teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
