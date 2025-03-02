@@ -59,7 +59,7 @@ public class Database {
                             dbport = parts[1];
                             break;
                         default:
-                            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse database cfg for {parts[0]}");
+                            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse database cfg for {parts[0]}:{parts[1]}");
                             break;
                     }
 
