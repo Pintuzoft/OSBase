@@ -55,7 +55,7 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventRoundStart>(OnRoundStart);
             osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase?.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
-            osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+           // osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
             osbase?.RegisterEventHandler<EventWeaponFire>(OnWeaponFire);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
@@ -155,7 +155,7 @@ namespace OSBase.Modules {
             teamt.printPlayers();
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team CT: {teamct.wins}w, {teamct.losses}l, {teamct.streak}s, {teamct.getAverageSkill()}p");
             teamct.printPlayers();  
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team SPEC: {teamct.wins}w, {teamct.losses}l, {teamct.streak}s, {teamct.getAverageSkill()}p");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team SPEC: {teamspec.getAverageSkill()}p");
             teamspec.printPlayers();
         }
 
@@ -173,9 +173,11 @@ namespace OSBase.Modules {
 
         // Print current stats at the end of a round.
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if(isWarmup) 
+            if(isWarmup) {
+                isWarmup = false;
+                clearStats();
                 return HookResult.Continue;
-
+            }
             // Update team player lists
             teamList[TEAM_T].resetPlayers();
             teamList[TEAM_CT].resetPlayers();
@@ -275,12 +277,12 @@ namespace OSBase.Modules {
             clearStats();
         }
 
-        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-            this.isWarmup = false;
-            this.roundNumber = 0;
-            clearStats();
-            return HookResult.Continue;
-        }
+//        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+//            this.isWarmup = false;
+ //           this.roundNumber = 0;
+//            clearStats();
+ //           return HookResult.Continue;
+ //       }
 
         // Public method to access a player's stats.
         public PlayerStats GetPlayerStats(int userId) {
