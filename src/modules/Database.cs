@@ -34,10 +34,9 @@ public class Database {
     }
 
         private void LoadConfig() {
-            config?.CreateCustomConfig($"{ModuleName}", "// Map info\nde_dust2 2\n");
-            List<string> maps = config?.FetchCustomConfig($"{ModuleName}") ?? new List<string>();
+            List<string> dbcfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
-            foreach (var line in maps) {
+            foreach (var line in dbcfg) {
                 string trimmedLine = line.Trim();
                 if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//"))
                     continue;
