@@ -106,13 +106,8 @@ namespace OSBase.Modules {
                     }
                 }
             }
-
-            clearDisconnected();
             return HookResult.Continue;
         }
-
-
-
 
         private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
             if(isWarmup) return HookResult.Continue;
@@ -128,7 +123,9 @@ namespace OSBase.Modules {
         }
 
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: OnPlayerTeam triggered.");
             if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] ERROR - Player changed team, but no user id found.");
                 return HookResult.Continue;
             }
             if ( ! playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
@@ -138,34 +135,38 @@ namespace OSBase.Modules {
             teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
             teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);                        
             teamList[eventInfo.Team].addPlayer(eventInfo.Userid.UserId.Value, playerList[eventInfo.Userid.UserId.Value]);
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} moved to team {eventInfo.Team}");
             return HookResult.Continue;
         }
 
         private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: OnPlayerConnect triggered.");
             if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] ERROR - Player connected, but no user id found.");
                 return HookResult.Continue;
             }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} connected.");
             if ( ! playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                 playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
             }
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} added.");
             return HookResult.Continue;
         }
 
         private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: OnPlayerDisconnect triggered.");
             if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] ERROR - Player disconnected, but no user id found.");
                 return HookResult.Continue;
             }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} disconnected.");
-            if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                playerList[eventInfo.Userid.UserId.Value].disconnected = true;
-            }
             if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
                 playerList.Remove(eventInfo.Userid.UserId.Value);
             }
             teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
             teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
             teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} removed.");
             return HookResult.Continue;
         }
 
@@ -319,16 +320,6 @@ namespace OSBase.Modules {
                 }
             }
         }
-        public void clearDisconnected ( ) {
-            foreach (var player in playerList) {
-                if ( player.Value.disconnected ) {
-                    playerList.Remove((int)player.Key);
-                    teamList[TEAM_S].removePlayer((int)player.Key);
-                    teamList[TEAM_T].removePlayer((int)player.Key);
-                    teamList[TEAM_CT].removePlayer((int)player.Key);
-                }
-            }
-        }
         public TeamStats getTeam (int team) {
             if ( team == TEAM_T || team == TEAM_CT) {
                 return teamList[team];
@@ -337,10 +328,14 @@ namespace OSBase.Modules {
         }
 
         public void movePlayer ( int userId, int team ) {
+            Console.WriteLine($"[DEBUG] OSBase[gamestats] - movePlayer: {userId} to team {team}");
             if ( team != (TEAM_T | TEAM_CT) ) {
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - movePlayer: Invalid team {team}");
                 return;
             }
+            
             if ( playerList.ContainsKey(userId) ) {
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - movePlayer: Player {userId} found.");
                 PlayerStats pstats = playerList[userId];
                 if ( teamList[TEAM_T] == null ) {
                     teamList[TEAM_T] = new TeamStats();
@@ -352,6 +347,9 @@ namespace OSBase.Modules {
                 teamList[TEAM_CT].removePlayer(userId);
                 teamList[team].addPlayer(userId, playerList[userId]);
                 teamList[team == TEAM_T ? TEAM_CT : TEAM_T].removePlayer(userId);
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - movePlayer: Player {userId} moved to team {team}");
+            } else {
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - movePlayer: Player {userId} not found.");
             }
         }
     }

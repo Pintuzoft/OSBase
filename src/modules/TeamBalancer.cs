@@ -311,8 +311,6 @@ namespace OSBase.Modules {
                 return;
             }
 
-            gameStats?.clearDisconnected();
-
             // print teams
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T:");
             tStats.printPlayers();

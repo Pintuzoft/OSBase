@@ -33,41 +33,41 @@ public class Database {
         config.CreateCustomConfig($"{ModuleName}.cfg", "// Database Configuration\ndbhost=localhost\ndbuser=root\ndbpass=\ndbname=database\ndbport=3306\n");
     }
 
-        private void LoadConfig() {
-            List<string> dbcfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
+    private void LoadConfig() {
+        List<string> dbcfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
-            foreach (var line in dbcfg) {
-                string trimmedLine = line.Trim();
-                if ( string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//") )
-                    continue;
-                var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                if ( parts.Length == 2 ) {
-                    switch (parts[0]) {
-                        case "dbhost":
-                            dbhost = parts[1];
-                            break;
-                        case "dbuser":
-                            dbuser = parts[1];
-                            break;
-                        case "dbpass":
-                            dbpass = parts[1];
-                            break;
-                        case "dbname":
-                            dbname = parts[1];
-                            break;
-                        case "dbport":
-                            dbport = parts[1];
-                            break;
-                        default:
-                            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse database cfg for {parts[0]}:{parts[1]}");
-                            break;
-                    }
-
-                } else {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse database cfg for {parts[0]}");
+        foreach (var line in dbcfg) {
+            string trimmedLine = line.Trim();
+            if ( string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//") )
+                continue;
+            var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if ( parts.Length == 2 ) {
+                switch (parts[0]) {
+                    case "dbhost":
+                        dbhost = parts[1];
+                        break;
+                    case "dbuser":
+                        dbuser = parts[1];
+                        break;
+                    case "dbpass":
+                        dbpass = parts[1];
+                        break;
+                    case "dbname":
+                        dbname = parts[1];
+                        break;
+                    case "dbport":
+                        dbport = parts[1];
+                        break;
+                    default:
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse database cfg for {parts[0]}:{parts[1]}");
+                        break;
                 }
+
+            } else {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse database cfg for {parts[0]}");
             }
         }
+    }
 
 
     // Build the connection string from config values
