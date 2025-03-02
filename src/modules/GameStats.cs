@@ -57,24 +57,21 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
             osbase?.RegisterEventHandler<EventWeaponFire>(OnWeaponFire);
-            osbase?.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
-            osbase?.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
-            osbase?.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
             osbase?.RegisterEventHandler<EventEndmatchMapvoteSelectingMap>(OnMapEnd);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
 
         private HookResult OnMapEnd(EventEndmatchMapvoteSelectingMap eventInfo, GameEventInfo gameEventInfo) {
-            //MariaDB [osbase]> describe skill_log;
-            //+---------+-------------+------+-----+---------+-------+
-            //| Field   | Type        | Null | Key | Default | Extra |
-            //+---------+-------------+------+-----+---------+-------+
-            //| steamid | varchar(32) | YES  |     | NULL    |       |
-            //| name    | varchar(64) | YES  |     | NULL    |       |
-            //| skill   | int(11)     | YES  |     | NULL    |       |
-            //| datestr | datetime    | YES  |     | NULL    |       |
-            //+---------+-------------+------+-----+---------+-------+
-            //4 rows in set (0.002 sec)
+            // MariaDB [osbase]> describe skill_log;
+            // +---------+-------------+------+-----+---------+-------+
+            // | Field   | Type        | Null | Key | Default | Extra |
+            // +---------+-------------+------+-----+---------+-------+
+            // | steamid | varchar(32) | YES  |     | NULL    |       |
+            // | name    | varchar(64) | YES  |     | NULL    |       |
+            // | skill   | int(11)     | YES  |     | NULL    |       |
+            // | datestr | datetime    | YES  |     | NULL    |       |
+            // +---------+-------------+------+-----+---------+-------+
+            // 4 rows in set (0.002 sec)
 
             var pList = Utilities.GetPlayers();
             if ( pList == null ) {
@@ -119,54 +116,6 @@ namespace OSBase.Modules {
                 playerList[attackerId].damage += eventInfo.DmgHealth;
                 playerList[attackerId].shotsHit++;
             }            
-            return HookResult.Continue;
-        }
-
-        private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: OnPlayerTeam triggered.");
-            if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] ERROR - Player changed team, but no user id found.");
-                return HookResult.Continue;
-            }
-            if ( ! playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
-            }   
-            teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
-            teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-            teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);                        
-            teamList[eventInfo.Team].addPlayer(eventInfo.Userid.UserId.Value, playerList[eventInfo.Userid.UserId.Value]);
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} moved to team {eventInfo.Team}");
-            return HookResult.Continue;
-        }
-
-        private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: OnPlayerConnect triggered.");
-            if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] ERROR - Player connected, but no user id found.");
-                return HookResult.Continue;
-            }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} connected.");
-            if ( ! playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
-            }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} added.");
-            return HookResult.Continue;
-        }
-
-        private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: OnPlayerDisconnect triggered.");
-            if ( eventInfo.Userid == null || eventInfo.Userid.UserId == null || ! eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] ERROR - Player disconnected, but no user id found.");
-                return HookResult.Continue;
-            }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} disconnected.");
-            if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                playerList.Remove(eventInfo.Userid.UserId.Value);
-            }
-            teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
-            teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-            teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} removed.");
             return HookResult.Continue;
         }
 
@@ -230,6 +179,31 @@ namespace OSBase.Modules {
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
             if(isWarmup) 
                 return HookResult.Continue;
+
+            // Update team player lists
+            teamList[TEAM_T].resetPlayers();
+            teamList[TEAM_CT].resetPlayers();
+            teamList[TEAM_S].resetPlayers();
+            foreach (var player in Utilities.GetPlayers()) {
+                if (player != null && player.UserId.HasValue && ! player.IsHLTV ) {
+                    if ( ! playerList.ContainsKey(player.UserId.Value) ) {
+                        playerList[player.UserId.Value] = new PlayerStats();
+                    }
+                    switch (player.TeamNum) {
+                        case TEAM_S:
+                            teamList[TEAM_S].addPlayer(player.UserId.Value, playerList[player.UserId.Value]);
+                            break;
+                        case TEAM_T:
+                            teamList[TEAM_T].addPlayer(player.UserId.Value, playerList[player.UserId.Value]);
+                            break;
+                        case TEAM_CT:
+                            teamList[TEAM_CT].addPlayer(player.UserId.Value, playerList[player.UserId.Value]);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
 
             // Update team stats.
             if (eventInfo.Winner == TEAM_T) {
