@@ -6,7 +6,7 @@ using MySqlConnector; // Using MySqlConnector package
 
 namespace OSBase.Modules;
 public class Database {
-    private const string ModuleName = "Database";
+    private const string ModuleName = "database";
     private readonly string connectionString;
     private OSBase? osbase;
     private Config? config;
