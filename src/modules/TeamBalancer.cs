@@ -133,7 +133,6 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - OnWarmupEnd: Game stats is null.");
                 return HookResult.Continue;
             }
-            gameStats?.loadPlayerData(0);
             BalanceTeams();
             warmup = false;
             return HookResult.Continue;
@@ -283,7 +282,7 @@ namespace OSBase.Modules {
                 TeamStats sourceTeamStats = moveFromT ? tStats : ctStats;
                 CCSPlayerController? player;
                 
-                if (gameStats != null && gameStats.playerStats.Count < 10) {
+                if (gameStats != null && gameStats.playerList.Count < 10) {
                     player = sourceTeamStats.getPlayerBySkillNonImmune(targetSkillPerPlayer);
                 } else {
                     player = sourceTeamStats.getPlayerBySkill(targetSkillPerPlayer);

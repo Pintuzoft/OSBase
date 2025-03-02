@@ -16,13 +16,13 @@ namespace OSBase.Modules {
         private Config? config;
         private bool isWarmup = false;
         public int roundNumber = 0;
-        private const int TEAM_SPEC = (int)CsTeam.Spectator;
+        private const int TEAM_S = (int)CsTeam.Spectator;
         private const int TEAM_T = (int)CsTeam.Terrorist;
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
         // Store player stats keyed by user id.
-        public Dictionary<int, PlayerStats> playerStats = new Dictionary<int, PlayerStats>();
-        private Dictionary<int, TeamStats> teamStats = new Dictionary<int, TeamStats>();
+        public Dictionary<int, PlayerStats> playerList = new Dictionary<int, PlayerStats>();
+        private Dictionary<int, TeamStats> teamList = new Dictionary<int, TeamStats>();
 
         private Database db;
 
@@ -32,8 +32,9 @@ namespace OSBase.Modules {
             this.db = new Database(this.osbase, this.config);
             createTables();
             loadEventHandlers();
-            teamStats[TEAM_T] = new TeamStats();
-            teamStats[TEAM_CT] = new TeamStats();            
+            teamList[TEAM_S] = new TeamStats();
+            teamList[TEAM_T] = new TeamStats();
+            teamList[TEAM_CT] = new TeamStats();            
         }
 
         private void createTables ( ) {
@@ -61,11 +62,11 @@ namespace OSBase.Modules {
             if(isWarmup) return HookResult.Continue;
             if (eventInfo.Attacker != null && eventInfo.Attacker.UserId.HasValue) {
                 int attackerId = eventInfo.Attacker.UserId.Value;
-                if (!playerStats.ContainsKey(attackerId)) {
-                    playerStats[attackerId] = new PlayerStats();
+                if ( ! playerList.ContainsKey(attackerId) ) {
+                    playerList[attackerId] = new PlayerStats();
                 }
-                playerStats[attackerId].damage += eventInfo.DmgHealth;
-                playerStats[attackerId].shotsHit++;
+                playerList[attackerId].damage += eventInfo.DmgHealth;
+                playerList[attackerId].shotsHit++;
             }            
             return HookResult.Continue;
         }
@@ -73,22 +74,29 @@ namespace OSBase.Modules {
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnPlayerTeam: Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");
-                if ( teamStats[TEAM_T] == null ) {
-                    teamStats[TEAM_T] = new TeamStats();
+                if ( teamList[TEAM_S] == null ) {
+                    teamList[TEAM_S] = new TeamStats();
+                }           
+                if ( teamList[TEAM_T] == null ) {
+                    teamList[TEAM_T] = new TeamStats();
                 }
-                if ( teamStats[TEAM_CT] == null ) {
-                    teamStats[TEAM_CT] = new TeamStats();
+                if ( teamList[TEAM_CT] == null ) {
+                    teamList[TEAM_CT] = new TeamStats();
                 }
-                if ( eventInfo.Team == ( TEAM_T | TEAM_CT ) ) {
-                    if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                        bool isTeamT = eventInfo.Team == TEAM_T;
-                        teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-                        teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
-                        teamStats[isTeamT ? TEAM_T : TEAM_CT].addPlayer(eventInfo.Userid.UserId.Value, playerStats[eventInfo.Userid.UserId.Value]);
+                if ( eventInfo.Team == ( TEAM_S | TEAM_T | TEAM_CT ) ) {
+                    if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                        teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
+                        teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+                        teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);                        
+                    } else {
+                        playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
                     }
+                    teamList[eventInfo.Team].addPlayer(eventInfo.Userid.UserId.Value, playerList[eventInfo.Userid.UserId.Value]);
+
                 } else {
-                    teamStats[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-                    teamStats[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
+                    teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
+                    teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+                    teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
                 }
             }
             return HookResult.Continue;
@@ -104,8 +112,8 @@ namespace OSBase.Modules {
         private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid}:{eventInfo.Userid.PlayerName} disconnected.");
-                if ( playerStats.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                    playerStats[eventInfo.Userid.UserId.Value].disconnected = true;
+                if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                    playerList[eventInfo.Userid.UserId.Value].disconnected = true;
                 }
             }
             return HookResult.Continue;
@@ -115,10 +123,10 @@ namespace OSBase.Modules {
             if(isWarmup) return HookResult.Continue;
             if (eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue) {
                 int shooterId = eventInfo.Userid.UserId.Value;
-                if (!playerStats.ContainsKey(shooterId)) {
-                    playerStats[shooterId] = new PlayerStats();
+                if ( ! playerList.ContainsKey(shooterId) ) {
+                    playerList[shooterId] = new PlayerStats();
                 }
-                playerStats[shooterId].shotsFired++;
+                playerList[shooterId].shotsFired++;
             }
             return HookResult.Continue;
         }
@@ -128,35 +136,35 @@ namespace OSBase.Modules {
             if(isWarmup) return HookResult.Continue;
             if (eventInfo.Attacker != null && eventInfo.Attacker.UserId.HasValue) {
                 int attackerId = eventInfo.Attacker.UserId.Value;
-                if (!playerStats.ContainsKey(attackerId)) {
-                    playerStats[attackerId] = new PlayerStats();
+                if (!playerList.ContainsKey(attackerId)) {
+                    playerList[attackerId] = new PlayerStats();
                 }
-                playerStats[attackerId].kills++;
+                playerList[attackerId].kills++;
                 if ( eventInfo.Hitgroup == 1 ) {
-                    playerStats[attackerId].headshotKills++;
+                    playerList[attackerId].headshotKills++;
                 }
             }
             if (eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue) {
                 int victimId = eventInfo.Userid.UserId.Value;
-                if (!playerStats.ContainsKey(victimId)) {
-                    playerStats[victimId] = new PlayerStats();
+                if ( ! playerList.ContainsKey(victimId)) {
+                    playerList[victimId] = new PlayerStats();
                 }
-                playerStats[victimId].deaths++;
+                playerList[victimId].deaths++;
             }
             // Optionally update assists if available.
             if (eventInfo.Assister != null && eventInfo.Assister.UserId.HasValue) {
                 int assistId = eventInfo.Assister.UserId.Value;
-                if (!playerStats.ContainsKey(assistId)) {
-                    playerStats[assistId] = new PlayerStats();
+                if (!playerList.ContainsKey(assistId)) {
+                    playerList[assistId] = new PlayerStats();
                 }
-                playerStats[assistId].assists++;
+                playerList[assistId].assists++;
             }
             return HookResult.Continue;
         }
 
         private void printTeams() {
-            TeamStats teamt = teamStats[TEAM_T];
-            TeamStats teamct = teamStats[TEAM_CT];
+            TeamStats teamt = teamList[TEAM_T];
+            TeamStats teamct = teamList[TEAM_CT];
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team T: {teamt.wins}w, {teamt.losses}l, {teamt.streak}s, {teamt.getAverageSkill()}p");
             teamt.printPlayers();
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team CT: {teamct.wins}w, {teamct.losses}l, {teamct.streak}s, {teamct.getAverageSkill()}p");
@@ -182,79 +190,38 @@ namespace OSBase.Modules {
 
             // Update team stats.
             if (eventInfo.Winner == TEAM_T) {
-                teamStats[TEAM_T].wins++;
-                teamStats[TEAM_CT].losses++;
-                teamStats[TEAM_T].streak++;
-                teamStats[TEAM_CT].streak = 0;
+                teamList[TEAM_T].streak++;
+                teamList[TEAM_CT].streak = 0;
+                teamList[TEAM_T].incWins();
+                teamList[TEAM_CT].incLosses();
             } else if (eventInfo.Winner == TEAM_CT) {
-                teamStats[TEAM_CT].wins++;
-                teamStats[TEAM_T].losses++;
-                teamStats[TEAM_CT].streak++;
-                teamStats[TEAM_T].streak = 0;
+                teamList[TEAM_CT].streak++;
+                teamList[TEAM_T].streak = 0;
+                teamList[TEAM_CT].incWins();
+                teamList[TEAM_T].incLosses();
             }
+            teamList[TEAM_T].incRounds();
+            teamList[TEAM_CT].incRounds();
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended. Current player stats:");
-            foreach (var entry in playerStats) {
-                entry.Value.rounds++;
-            }
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Current team stats:");
-            foreach (var entry in teamStats) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team [{(entry.Key == TEAM_T ? "T" : "CT")}]: {entry.ToString()}");
-            } 
-
-            loadPlayerData ( eventInfo.Winner );
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].getAverageSkill()}, [CT]: {teamStats[TEAM_CT].getAverageSkill()}");
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamStats[TEAM_T].numPlayers()}, [CT]: {teamStats[TEAM_CT].numPlayers()}");
-            return HookResult.Continue;
-        }
-
-        public void loadPlayerData ( int winner ) {
-            var playerList = Utilities.GetPlayers();
-            PlayerStats pstats;
-            teamStats[TEAM_T].resetPlayers();
-            teamStats[TEAM_CT].resetPlayers();
-
-            foreach (var player in playerList) {
-                if (player != null && ! player.IsHLTV && player.UserId.HasValue) {
-                    if (!playerStats.ContainsKey(player.UserId.Value)) {
-                        playerStats[player.UserId.Value] = new PlayerStats();
-                    }
-                    pstats = playerStats[player.UserId.Value];
-                    bool isTeamTWinner = winner == TEAM_T;
-
-                    if ( winner == (TEAM_T|TEAM_CT) ) {
-                        // Update round wins for the winning team.
-                        foreach (var p in teamStats[winner].playerList) {
-                            if ( p.Key == player.UserId.Value ) {
-                                pstats.roundWins++;
-                            }
-                        }
-
-                        // Update round losses for the losing team.
-                        foreach (var p in teamStats[isTeamTWinner ? TEAM_CT : TEAM_T].playerList) {
-                            if ( p.Key == player.UserId.Value ) {
-                                pstats.roundLosses++;
-                            }
-                        }
-                    }
-                    // Add player to team stats.
-                    teamStats[player.TeamNum].addPlayer(player.UserId.Value, pstats);
-                    if ( playerStats[player.UserId.Value].immune > 0 ) {
-                        playerStats[player.UserId.Value].immune--;
-                    }
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Skillrating: {player.PlayerName}{(playerStats[player.UserId.Value].immune > 0 ? "(immune)" : "")}: {pstats.kills}k, {pstats.assists}a, {pstats.deaths} [{pstats.damage}] -> {pstats.calcSkill()}");
+            foreach (var entry in teamList) {
+                if ( entry.Key == TEAM_S ) {
+                    continue;
                 }
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Team [{(entry.Key == TEAM_T ? "T" : "CT")}]: {entry.ToString()}");
+                entry.Value.printPlayers();
             }
 
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].getAverageSkill()}, [CT]: {teamList[TEAM_CT].getAverageSkill()}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - [T]: {teamList[TEAM_T].numPlayers()}, [CT]: {teamList[TEAM_CT].numPlayers()}");
+            return HookResult.Continue;
         }
 
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnStartHalftime triggered.");
-            TeamStats buf = teamStats[TEAM_T];
-            teamStats[TEAM_T] = teamStats[TEAM_CT];
-            teamStats[TEAM_CT] = buf;
+            TeamStats buf = teamList[TEAM_T];
+            teamList[TEAM_T] = teamList[TEAM_CT];
+            teamList[TEAM_CT] = buf;
             return HookResult.Continue;
         }
 
@@ -274,29 +241,33 @@ namespace OSBase.Modules {
 
         // Public method to access a player's stats.
         public PlayerStats GetPlayerStats(int userId) {
-            if (playerStats.ContainsKey(userId)) {
-                return playerStats[userId];
+            if (playerList.ContainsKey(userId)) {
+                return playerList[userId];
             }
             return new PlayerStats(); // Return an empty stats object if none exists.
         }
 
         private void clearStats() {
             // Reset team stats.
-            teamStats.Clear();
-            teamStats[TEAM_T] = new TeamStats();
-            teamStats[TEAM_CT] = new TeamStats();
+            teamList.Clear();
+            teamList[TEAM_S] = new TeamStats();
+            teamList[TEAM_T] = new TeamStats();
+            teamList[TEAM_CT] = new TeamStats();
              
             // Reset stats for all players.
-            playerStats.Clear();
+            playerList.Clear();
             foreach (var player in Utilities.GetPlayers()) {
                 if (player != null && player.UserId.HasValue && ! player.IsHLTV ) {
-                    playerStats[player.UserId.Value] = new PlayerStats();
+                    playerList[player.UserId.Value] = new PlayerStats();
                     switch (player.TeamNum) {
+                        case TEAM_S:
+                            teamList[TEAM_S].addPlayer(player.UserId.Value, playerList[player.UserId.Value]);
+                            break;
                         case TEAM_T:
-                            teamStats[TEAM_T].addPlayer(player.UserId.Value, playerStats[player.UserId.Value]);
+                            teamList[TEAM_T].addPlayer(player.UserId.Value, playerList[player.UserId.Value]);
                             break;
                         case TEAM_CT:
-                            teamStats[TEAM_CT].addPlayer(player.UserId.Value, playerStats[player.UserId.Value]);
+                            teamList[TEAM_CT].addPlayer(player.UserId.Value, playerList[player.UserId.Value]);
                             break;
                         default:
                             break;
@@ -305,17 +276,18 @@ namespace OSBase.Modules {
             }
         }
         public void clearDisconnected ( ) {
-            foreach (var player in playerStats) {
+            foreach (var player in playerList) {
                 if ( player.Value.disconnected ) {
-                    playerStats.Remove((int)player.Key);
-                    teamStats[TEAM_T].removePlayer((int)player.Key);
-                    teamStats[TEAM_CT].removePlayer((int)player.Key);
+                    playerList.Remove((int)player.Key);
+                    teamList[TEAM_S].removePlayer((int)player.Key);
+                    teamList[TEAM_T].removePlayer((int)player.Key);
+                    teamList[TEAM_CT].removePlayer((int)player.Key);
                 }
             }
         }
         public TeamStats getTeam (int team) {
             if ( team == TEAM_T || team == TEAM_CT) {
-                return teamStats[team];
+                return teamList[team];
             }
             return new TeamStats();     
         }
@@ -324,23 +296,20 @@ namespace OSBase.Modules {
             if ( team != (TEAM_T | TEAM_CT) ) {
                 return;
             }
-            if ( playerStats.ContainsKey(userId) ) {
-                PlayerStats pstats = playerStats[userId];
-                if ( teamStats[TEAM_T] == null ) {
-                    teamStats[TEAM_T] = new TeamStats();
+            if ( playerList.ContainsKey(userId) ) {
+                PlayerStats pstats = playerList[userId];
+                if ( teamList[TEAM_T] == null ) {
+                    teamList[TEAM_T] = new TeamStats();
                 }
-                if ( teamStats[TEAM_CT] == null ) {
-                    teamStats[TEAM_CT] = new TeamStats();
+                if ( teamList[TEAM_CT] == null ) {
+                    teamList[TEAM_CT] = new TeamStats();
                 }
-
-                teamStats[TEAM_T].removePlayer(userId);
-                teamStats[TEAM_CT].removePlayer(userId);
-                teamStats[team].addPlayer(userId, playerStats[userId]);
-                teamStats[team == TEAM_T ? TEAM_CT : TEAM_T].removePlayer(userId);
-
+                teamList[TEAM_T].removePlayer(userId);
+                teamList[TEAM_CT].removePlayer(userId);
+                teamList[team].addPlayer(userId, playerList[userId]);
+                teamList[team == TEAM_T ? TEAM_CT : TEAM_T].removePlayer(userId);
             }
         }
-
     }
 
 
@@ -412,6 +381,26 @@ namespace OSBase.Modules {
         public void removePlayer (int userId) {
             if ( playerList.ContainsKey(userId) ) {
                 playerList.Remove(userId);
+            }
+        }
+
+        public void incWins() {
+            wins++;
+            foreach (var p in playerList) {
+                p.Value.roundWins++;
+            }
+        }
+
+        public void incLosses() {
+            losses++;
+            foreach (var p in playerList) {
+                p.Value.roundLosses++;
+            }
+        }
+
+        public void incRounds() {
+            foreach (var p in playerList) {
+                p.Value.rounds++;
             }
         }
 
