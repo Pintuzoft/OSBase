@@ -532,7 +532,7 @@ namespace OSBase.Modules {
         }
         public void printPlayers() {
             foreach (var kvp in playerList) {
-                Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}/{kvp.Value.name}: {kvp.Value.kills}r, {kvp.Value.kills}k, {kvp.Value.assists}a, {kvp.Value.deaths}d, {kvp.Value.calcSkill()}p");
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}/{kvp.Value.name}: {kvp.Value.rounds}r/{kvp.Value.roundWins}w/{kvp.Value.roundLosses} - {kvp.Value.kills}k/{kvp.Value.assists}a/{kvp.Value.deaths}d -> {kvp.Value.calcSkill()}p");
             }
         }
 
