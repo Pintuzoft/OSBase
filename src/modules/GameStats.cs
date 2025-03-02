@@ -104,7 +104,10 @@ namespace OSBase.Modules {
 
         private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} connected.");                        
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} connected.");
+                if ( ! playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
+                    playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
+                }                    
             }
             return HookResult.Continue;
         }
@@ -123,9 +126,9 @@ namespace OSBase.Modules {
             if(isWarmup) return HookResult.Continue;
             if (eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue) {
                 int shooterId = eventInfo.Userid.UserId.Value;
-                if ( ! playerList.ContainsKey(shooterId) ) {
-                    playerList[shooterId] = new PlayerStats();
-                }
+//                if ( ! playerList.ContainsKey(shooterId) ) {
+//                    playerList[shooterId] = new PlayerStats();
+//                }
                 playerList[shooterId].shotsFired++;
             }
             return HookResult.Continue;
@@ -136,9 +139,9 @@ namespace OSBase.Modules {
             if(isWarmup) return HookResult.Continue;
             if (eventInfo.Attacker != null && eventInfo.Attacker.UserId.HasValue) {
                 int attackerId = eventInfo.Attacker.UserId.Value;
-                if (!playerList.ContainsKey(attackerId)) {
-                    playerList[attackerId] = new PlayerStats();
-                }
+//                if (!playerList.ContainsKey(attackerId)) {
+//                    playerList[attackerId] = new PlayerStats();
+//                }
                 playerList[attackerId].kills++;
                 if ( eventInfo.Hitgroup == 1 ) {
                     playerList[attackerId].headshotKills++;
@@ -146,17 +149,17 @@ namespace OSBase.Modules {
             }
             if (eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue) {
                 int victimId = eventInfo.Userid.UserId.Value;
-                if ( ! playerList.ContainsKey(victimId)) {
-                    playerList[victimId] = new PlayerStats();
-                }
+//                if ( ! playerList.ContainsKey(victimId)) {
+//                    playerList[victimId] = new PlayerStats();
+//                }
                 playerList[victimId].deaths++;
             }
             // Optionally update assists if available.
             if (eventInfo.Assister != null && eventInfo.Assister.UserId.HasValue) {
                 int assistId = eventInfo.Assister.UserId.Value;
-                if (!playerList.ContainsKey(assistId)) {
-                    playerList[assistId] = new PlayerStats();
-                }
+//                if (!playerList.ContainsKey(assistId)) {
+//                    playerList[assistId] = new PlayerStats();
+//                }
                 playerList[assistId].assists++;
             }
             return HookResult.Continue;
@@ -200,6 +203,7 @@ namespace OSBase.Modules {
                 teamList[TEAM_CT].incWins();
                 teamList[TEAM_T].incLosses();
             }
+
             teamList[TEAM_T].incRounds();
             teamList[TEAM_CT].incRounds();
 
