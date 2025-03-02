@@ -10,12 +10,19 @@ public class Database {
     private readonly string connectionString;
     private OSBase? osbase;
     private Config? config;
+    private string dbhost = "";
+    private string dbuser = "";
+    private string dbpass = "";
+    private string dbname = "";
+    private string dbport = "";
+
     public Database(OSBase inOsbase, Config inConfig) {
         this.osbase = inOsbase;
         this.config = inConfig;
 
         // Register required global config values
         createCustomConfigs();
+        LoadConfig();
         connectionString = buildConnectionString ( );
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
@@ -26,16 +33,49 @@ public class Database {
         config.CreateCustomConfig($"{ModuleName}.cfg", "// Database Configuration\ndbhost=localhost\ndbuser=root\ndbpass=\ndbname=database\ndbport=3306\n");
     }
 
+        private void LoadConfig() {
+            config?.CreateCustomConfig($"{ModuleName}", "// Map info\nde_dust2 2\n");
+            List<string> maps = config?.FetchCustomConfig($"{ModuleName}") ?? new List<string>();
+
+            foreach (var line in maps) {
+                string trimmedLine = line.Trim();
+                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//"))
+                    continue;
+                var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2 && int.TryParse(parts[1], out int bs)) {
+                    switch (bs+"") {
+                        case "dbhost":
+                            dbhost = parts[1];
+                            break;
+                        case "dbuser":
+                            dbuser = parts[1];
+                            break;
+                        case "dbpass":
+                            dbpass = parts[1];
+                            break;
+                        case "dbname":
+                            dbname = parts[1];
+                            break;
+                        case "dbport":
+                            dbport = parts[1];
+                            break;
+                        default:
+                            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse database cfg for {parts[0]}");
+                            break;
+                    }
+
+                } else {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse database cfg for {parts[0]}");
+                }
+            }
+        }
+
+
     // Build the connection string from config values
     private string buildConnectionString ( ) {
         if (config == null) {
             throw new InvalidOperationException($"[DEBUG] OSBase[{ModuleName}]: Config cannot be null");
         }
-        string dbhost = config.GetGlobalConfigValue("database", "dbhost");
-        string dbuser = config.GetGlobalConfigValue("database", "dbuser");
-        string dbpass = config.GetGlobalConfigValue("database", "dbpass");
-        string dbname = config.GetGlobalConfigValue("database", "dbname");
-        string dbport = config.GetGlobalConfigValue("database", "dbport");
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Database connection string: {dbhost}:{dbuser}:{dbpass}:{dbname}:{dbport}");
         return $"server={dbhost};user id={dbuser};password={dbpass};database={dbname};port={dbport};pooling=true;minimumpoolsize=5;maximumpoolsize=50;connectionidletimeout=1200;";
     }
