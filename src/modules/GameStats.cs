@@ -74,30 +74,10 @@ namespace OSBase.Modules {
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             if ( eventInfo.Userid != null && eventInfo.Userid.UserId.HasValue ) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnPlayerTeam: Player {eventInfo.Userid.UserId.Value}:{eventInfo.Userid.PlayerName} switched to team {eventInfo.Userid.TeamNum}:{eventInfo.Team}");
-                if ( teamList[TEAM_S] == null ) {
-                    teamList[TEAM_S] = new TeamStats();
-                }           
-                if ( teamList[TEAM_T] == null ) {
-                    teamList[TEAM_T] = new TeamStats();
-                }
-                if ( teamList[TEAM_CT] == null ) {
-                    teamList[TEAM_CT] = new TeamStats();
-                }
-                if ( eventInfo.Team == ( TEAM_S | TEAM_T | TEAM_CT ) ) {
-                    if ( playerList.ContainsKey(eventInfo.Userid.UserId.Value) ) {
-                        teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
-                        teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-                        teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);                        
-                    } else {
-                        playerList[eventInfo.Userid.UserId.Value] = new PlayerStats();
-                    }
-                    teamList[eventInfo.Team].addPlayer(eventInfo.Userid.UserId.Value, playerList[eventInfo.Userid.UserId.Value]);
-
-                } else {
-                    teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
-                    teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
-                    teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);
-                }
+                teamList[TEAM_S].removePlayer(eventInfo.Userid.UserId.Value);
+                teamList[TEAM_T].removePlayer(eventInfo.Userid.UserId.Value);
+                teamList[TEAM_CT].removePlayer(eventInfo.Userid.UserId.Value);                        
+                teamList[eventInfo.Team].addPlayer(eventInfo.Userid.UserId.Value, playerList[eventInfo.Userid.UserId.Value]);
             }
             return HookResult.Continue;
         }
