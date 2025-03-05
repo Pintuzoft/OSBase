@@ -151,7 +151,7 @@ public class ServerInfo : IModule {
                 new MySqlParameter("@name", player.PlayerName),
                 new MySqlParameter("@kills", kills),
                 new MySqlParameter("@assist", assists),
-                new MySqlParameter("@deaths", deaths),
+                new MySqlParameter("@deaths", deaths)
             };
             try {
                 if (this.db != null) {
@@ -225,7 +225,7 @@ public class ServerInfo : IModule {
             new MySqlParameter("@team", eventInfo.Team),
             new MySqlParameter("@kills", kills),
             new MySqlParameter("@assists", assists),
-            new MySqlParameter("@deaths", deaths),
+            new MySqlParameter("@deaths", deaths)
         };
         try {
             if (this.db != null) {
