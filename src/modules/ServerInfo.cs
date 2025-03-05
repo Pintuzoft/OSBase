@@ -103,7 +103,7 @@ public class ServerInfo : IModule {
         if (player == null) 
             return HookResult.Continue;
 
-        string query = $"INTO serverinfo_user (host, port, name, team) VALUES (@host, @port, @name, 0) on duplicate key update name=@name";
+        string query = $"INTO serverinfo_user (host, port, name, team, damage) VALUES (@host, @port, @name, 0, 0) on duplicate key update name=@name";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
@@ -157,12 +157,13 @@ public class ServerInfo : IModule {
         if (player == null) 
             return HookResult.Continue;            
 
-        string query = $"INTO serverinfo_user (host, port, name, team) VALUES (@host, @port, @name, @team) on duplicate key update team=@team";
+        string query = $"INTO serverinfo_user (host, port, name, team, score) VALUES (@host, @port, @name, @team, @score) on duplicate key update team=@team, damage=@damage";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
             new MySqlParameter("@name", player.PlayerName),
-            new MySqlParameter("@team", eventInfo.Team)
+            new MySqlParameter("@team", eventInfo.Team),
+            new MySqlParameter("@score", player.Score)
         };
         try {
             if (this.db != null) {
@@ -225,8 +226,9 @@ public class ServerInfo : IModule {
         serverinfo_user (
             host varchar(64) not null, 
             port int(11) not null, 
-            name varchar(128), 
+            name varchar(128),
             team int(11), 
+            score int(11),
             primary key (host,port,name), 
             constraint foreign key (host,port) 
                 references serverinfo_server (host,port) 
