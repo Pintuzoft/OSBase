@@ -61,6 +61,7 @@ public class ServerInfo : IModule {
         osbase?.RegisterEventHandler<EventPlayerConnect>(onPlayerConnect);
         osbase?.RegisterEventHandler<EventPlayerDisconnect>(onPlayerDisconnect);
         osbase?.RegisterEventHandler<EventPlayerTeam>(onPlayerTeam);
+        osbase?.RegisterEventHandler<EventRoundEnd>(onRoundEnd);
         osbase?.RegisterListener<Listeners.OnMapStart>(onMapStart);
     }
 
@@ -103,7 +104,7 @@ public class ServerInfo : IModule {
         if (player == null) 
             return HookResult.Continue;
 
-        string query = $"INTO serverinfo_user (host, port, name, team, score) VALUES (@host, @port, @name, 0, 0) on duplicate key update name=@name";
+        string query = $"INTO serverinfo_user (host, port, name, team, kills, assists, deaths) VALUES (@host, @port, @name, 0, 0, 0, 0) on duplicate key update name=@name";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
@@ -120,6 +121,51 @@ public class ServerInfo : IModule {
         }
         return HookResult.Continue;
     }
+
+    // on round end update player stats
+    private HookResult onRoundEnd (EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+        if (eventInfo == null) 
+            return HookResult.Continue;
+
+        var pList = Utilities.GetPlayers ( );
+
+        foreach (var player in pList) {
+            if (player == null) 
+                continue;
+
+            string name = player.PlayerName;
+            int kills = 0;
+            int assists = 0;
+            int deaths = 0;
+            PlayerStats? stats = player.UserId.HasValue ? osbase?.GetGameStats()?.GetPlayerStats(player.UserId.Value) : null;
+            if (stats != null) {
+                kills = stats.kills;
+                assists = stats.assists;
+                deaths = stats.deaths;
+            }
+
+            string query = $"INTO serverinfo_user (host, port, name, team, kills, assists, deaths) VALUES (@host, @port, @name, 0, @kills, @assists, @deaths) on duplicate key update kills=@kills, assists=@assists, deaths=@deaths";
+            var parameters = new MySqlParameter[] {
+                new MySqlParameter("@host", host),
+                new MySqlParameter("@port", port),
+                new MySqlParameter("@name", player.PlayerName),
+                new MySqlParameter("@kills", kills),
+                new MySqlParameter("@assist", assists),
+                new MySqlParameter("@deaths", deaths),
+            };
+            try {
+                if (this.db != null) {
+                    this.db.insert(query, parameters);
+                } else {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Database instance is null.");
+                }
+            } catch (Exception e) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error updating table: {e.Message}");
+            }
+        }
+        return HookResult.Continue;
+    }
+
 
     private HookResult onPlayerDisconnect (EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
         if (eventInfo == null || eventInfo.Userid == null) 
@@ -157,13 +203,29 @@ public class ServerInfo : IModule {
         if (player == null) 
             return HookResult.Continue;            
 
-        string query = $"INTO serverinfo_user (host, port, name, team, score) VALUES (@host, @port, @name, @team, @score) on duplicate key update team=@team, score=@score";
+        if (player.UserId == null) 
+            return HookResult.Continue;
+
+        string name = player.PlayerName;
+        int kills = 0;
+        int assists = 0;
+        int deaths = 0;
+        PlayerStats? stats = osbase?.GetGameStats()?.GetPlayerStats(player.UserId.Value);
+        if (stats != null) {
+            kills = stats.kills;
+            assists = stats.assists;
+            deaths = stats.deaths;
+        }
+
+        string query = $"INTO serverinfo_user (host, port, name, team, kills, assists, deaths) VALUES (@host, @port, @name, @team, @kills, @assists, @deaths) on duplicate key update team=@team, kills=@kills, assists=@assists, deaths=@deaths";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
             new MySqlParameter("@name", player.PlayerName),
             new MySqlParameter("@team", eventInfo.Team),
-            new MySqlParameter("@score", player.Score)
+            new MySqlParameter("@kills", kills),
+            new MySqlParameter("@assist", assists),
+            new MySqlParameter("@deaths", deaths),
         };
         try {
             if (this.db != null) {
@@ -228,7 +290,9 @@ public class ServerInfo : IModule {
             port int(11) not null, 
             name varchar(128),
             team int(11), 
-            score int(11),
+            kills int(11),
+            assists int(11),
+            deaths int(11),
             primary key (host,port,name), 
             constraint foreign key (host,port) 
                 references serverinfo_server (host,port) 

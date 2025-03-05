@@ -302,6 +302,14 @@ namespace OSBase.Modules {
             return new TeamStats();     
         }
 
+        // Get team players
+        public Dictionary<int, PlayerStats> getTeamPlayers (int team) {
+            if ( team == TEAM_T || team == TEAM_CT || team == TEAM_S ) {
+                return teamList[team].playerList;
+            }
+            return new Dictionary<int, PlayerStats>();
+        }
+
         public void movePlayer ( int userId, int team ) {
             Console.WriteLine($"[DEBUG] OSBase[gamestats] - movePlayer: {userId} to team {team}");
             if ( team != (TEAM_T | TEAM_CT) ) {
