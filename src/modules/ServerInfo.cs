@@ -60,6 +60,36 @@ public class ServerInfo : IModule {
         osbase?.RegisterListener<Listeners.OnMapStart>(onMapStart);
     }
 
+    private void LoadConfig() {
+        List<string> dbcfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
+
+        foreach (var line in dbcfg) {
+            string trimmedLine = line.Trim();
+            if ( string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//") )
+                continue;
+            var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if ( parts.Length == 2 ) {
+                switch (parts[0]) {
+                    case "name":
+                        name = parts[1];
+                        break;
+                    case "host":
+                        host = parts[1];
+                        break;
+                    case "port":
+                        port = int.Parse(parts[1]);
+                        break;
+                    default:
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse config for {parts[0]}:{parts[1]}");
+                        break;
+                }
+
+            } else {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse config for {parts[0]}");
+            }
+        }
+    }
+
     private HookResult onPlayerConnect (EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
         if (eventInfo == null || eventInfo.Userid == null) 
             return HookResult.Continue;
@@ -96,7 +126,7 @@ public class ServerInfo : IModule {
         if (player == null) 
             return HookResult.Continue;
 
-        string query = $"DELETE FROM serverinfo_user WHERE host=@host AND port=@port AND name=@name";
+        string query = $"FROM serverinfo_user WHERE host=@host AND port=@port AND name=@name";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
@@ -132,7 +162,7 @@ public class ServerInfo : IModule {
         };
         try {
             if (this.db != null) {
-                this.db.update(query, parameters);
+                this.db.insert(query, parameters);
             } else {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Database instance is null.");
             }
@@ -154,35 +184,7 @@ public class ServerInfo : IModule {
         config.CreateCustomConfig($"{ModuleName}.cfg", "// ServerInfo Configuration\nname \"Server Name\"\nhost \"cs2.oldswedes.se\"\nport 27015\n");
     }
 
-    private void LoadConfig() {
-        List<string> dbcfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
-        foreach (var line in dbcfg) {
-            string trimmedLine = line.Trim();
-            if ( string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//") )
-                continue;
-            var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-            if ( parts.Length == 2 ) {
-                switch (parts[0]) {
-                    case "name":
-                        name = parts[1];
-                        break;
-                    case "host":
-                        host = parts[1];
-                        break;
-                    case "port":
-                        port = int.Parse(parts[1]);
-                        break;
-                    default:
-                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse config for {parts[0]}:{parts[1]}");
-                        break;
-                }
-
-            } else {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse config for {parts[0]}");
-            }
-        }
-    }
     private void createTables ( ) {
         /* | server | CREATE TABLE `server` (
             `port` int(11) NOT NULL,
