@@ -224,7 +224,7 @@ public class ServerInfo : IModule {
             new MySqlParameter("@name", player.PlayerName),
             new MySqlParameter("@team", eventInfo.Team),
             new MySqlParameter("@kills", kills),
-            new MySqlParameter("@assist", assists),
+            new MySqlParameter("@assists", assists),
             new MySqlParameter("@deaths", deaths),
         };
         try {
