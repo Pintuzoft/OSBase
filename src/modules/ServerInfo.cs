@@ -13,6 +13,7 @@ using MySqlConnector;
 namespace OSBase.Modules;
 
 using System.IO;
+using CounterStrikeSharp.API.Modules.Utils;
 
 public class ServerInfo : IModule {
     public string ModuleName => "serverinfo";   
@@ -23,6 +24,9 @@ public class ServerInfo : IModule {
     private string host = "";
     private string name = "";
     private string map = "";
+    private const int TEAM_T = (int)CsTeam.Terrorist;
+    private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
+    private const int TEAM_S = (int)CsTeam.Spectator;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -151,14 +155,14 @@ public class ServerInfo : IModule {
         var player = eventInfo.Userid;
 
         if (player == null) 
-            return HookResult.Continue;
+            return HookResult.Continue;            
 
         string query = $"INTO serverinfo_user (host, port, name, team) VALUES (@host, @port, @name, @team) on duplicate key update team=@team";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
             new MySqlParameter("@name", player.PlayerName),
-            new MySqlParameter("@team", player.Team)
+            new MySqlParameter("@team", eventInfo.Team)
         };
         try {
             if (this.db != null) {
