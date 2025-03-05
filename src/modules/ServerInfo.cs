@@ -144,13 +144,14 @@ public class ServerInfo : IModule {
                 deaths = stats.deaths;
             }
 
-            string query = $"INTO serverinfo_user (host, port, name, team, kills, assists, deaths) VALUES (@host, @port, @name, 0, @kills, @assists, @deaths) on duplicate key update kills=@kills, assists=@assists, deaths=@deaths";
+            string query = $"INTO serverinfo_user (host, port, name, team, kills, assists, deaths) VALUES (@host, @port, @name, @team, @kills, @assists, @deaths) on duplicate key update team=@team, kills=@kills, assists=@assists, deaths=@deaths";
             var parameters = new MySqlParameter[] {
                 new MySqlParameter("@host", host),
                 new MySqlParameter("@port", port),
                 new MySqlParameter("@name", player.PlayerName),
+                new MySqlParameter("@team", player.TeamNum),
                 new MySqlParameter("@kills", kills),
-                new MySqlParameter("@assist", assists),
+                new MySqlParameter("@assists", assists),
                 new MySqlParameter("@deaths", deaths)
             };
             try {
