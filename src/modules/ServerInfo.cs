@@ -69,12 +69,11 @@ public class ServerInfo : IModule {
         if (player == null) 
             return HookResult.Continue;
 
-        string query = $"INTO serverinfo_user (host, port, name, team) VALUES (@host, @port, @name, @team) on duplicate key update team=@team";
+        string query = $"INTO serverinfo_user (host, port, name, team) VALUES (@host, @port, @name, 0) on duplicate key update name=@name";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
             new MySqlParameter("@name", player.PlayerName),
-            new MySqlParameter("@team", player.Team)
         };
         try {
             if (this.db != null) {
@@ -124,7 +123,7 @@ public class ServerInfo : IModule {
         if (player == null) 
             return HookResult.Continue;
 
-        string query = $"UPDATE serverinfo_user SET team=@team WHERE host=@host AND port=@port AND name=@name";
+        string query = $"INTO serverinfo_user (host, port, name, team) VALUES (@host, @port, @name, @team) on duplicate key update team=@team";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
@@ -145,7 +144,8 @@ public class ServerInfo : IModule {
 
     private void onMapStart ( string mapName ) {
         this.map = mapName;
-        clearUsers();
+        saveServerinfo ( );
+        clearUsers ( );
     }
 
     private void createCustomConfigs() {
@@ -242,9 +242,6 @@ public class ServerInfo : IModule {
 
 
     private void saveServerinfo() {
-        if (osbase == null) 
-            return;
-
         string query = $"INTO serverinfo_server (host, port, name, map) VALUES (@host, @port, @name, @map) on duplicate key update name=@name, map=@map";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
@@ -268,6 +265,9 @@ public class ServerInfo : IModule {
     private void clearUsers() {
         if (this.db == null) 
             return;
-        this.db.delete("from serverinfo_user where ");
+        this.db.delete("from serverinfo_user where host=@host and port=@port", new MySqlParameter[] {
+            new MySqlParameter("@host", host),
+            new MySqlParameter("@port", port)
+        });
     }
 }
