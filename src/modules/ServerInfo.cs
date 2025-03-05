@@ -103,7 +103,7 @@ public class ServerInfo : IModule {
         if (player == null) 
             return HookResult.Continue;
 
-        string query = $"INTO serverinfo_user (host, port, name, team, damage) VALUES (@host, @port, @name, 0, 0) on duplicate key update name=@name";
+        string query = $"INTO serverinfo_user (host, port, name, team, score) VALUES (@host, @port, @name, 0, 0) on duplicate key update name=@name";
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
