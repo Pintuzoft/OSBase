@@ -206,7 +206,7 @@ public class ServerInfo : IModule {
         string server = """
         TABLE IF NOT EXISTS 
         serverinfo_server (
-            port int,
+            port int(11),
             host varchar(64),
             name varchar(64), 
             map varchar(64), 
@@ -215,8 +215,8 @@ public class ServerInfo : IModule {
         ) engine=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
         """;
         string user = """
-        TABLE IF NOT EXISTS s
-        erverinfo_user (
+        TABLE IF NOT EXISTS
+        serverinfo_user (
             host varchar(64) not null, 
             port int(11) not null, 
             name varchar(128), 
