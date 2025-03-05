@@ -134,7 +134,7 @@ public class ServerInfo : IModule {
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
-            new MySqlParameter("@name", player.PlayerName)
+            new MySqlParameter("@name", eventInfo.Userid.PlayerName)
         };
         try {
             if (this.db != null) {
