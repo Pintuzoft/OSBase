@@ -139,9 +139,9 @@ public class ServerInfo : IModule {
             int deaths = 0;
             PlayerStats? stats = player.UserId.HasValue ? osbase?.GetGameStats()?.GetPlayerStats(player.UserId.Value) : null;
             if (stats != null) {
-                kills = stats.getKills();
-                assists = stats.getAssists();
-                deaths = stats.getDeaths();
+                kills = stats.kills;
+                assists = stats.assists;
+                deaths = stats.deaths;
             }
 
             string query = $"INTO serverinfo_user (host, port, name, team, kills, assists, deaths) VALUES (@host, @port, @name, @team, @kills, @assists, @deaths) on duplicate key update team=@team, kills=@kills, assists=@assists, deaths=@deaths";
@@ -213,9 +213,9 @@ public class ServerInfo : IModule {
         int deaths = 0;
         PlayerStats? stats = osbase?.GetGameStats()?.GetPlayerStats(player.UserId.Value);
         if (stats != null) {
-            kills = stats.getKills();
-            assists = stats.getAssists();
-            deaths = stats.getDeaths();
+            kills = stats.kills;
+            assists = stats.assists;
+            deaths = stats.deaths;
         }
 
         string query = $"INTO serverinfo_user (host, port, name, team, kills, assists, deaths) VALUES (@host, @port, @name, @team, @kills, @assists, @deaths) on duplicate key update team=@team, kills=@kills, assists=@assists, deaths=@deaths";
