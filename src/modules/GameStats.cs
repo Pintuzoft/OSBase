@@ -132,12 +132,13 @@ namespace OSBase.Modules {
         // Update stats when a player dies.
         private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
             if(isWarmup) return HookResult.Continue;
+
             if (eventInfo.Attacker != null && eventInfo.Attacker.UserId.HasValue) {
                 int attackerId = eventInfo.Attacker.UserId.Value;
                 if ( ! playerList.ContainsKey(attackerId) ) {
                     playerList[attackerId] = new PlayerStats();
                 }
-                playerList[attackerId].kills++;
+                playerList[attackerId].incKills();
                 if ( eventInfo.Hitgroup == 1 ) {
                     playerList[attackerId].headshotKills++;
                 }
@@ -147,7 +148,7 @@ namespace OSBase.Modules {
                 if ( ! playerList.ContainsKey(victimId) ) {
                     playerList[victimId] = new PlayerStats();
                 }
-                playerList[victimId].deaths++;
+                playerList[victimId].incDeaths();
             }
             // Optionally update assists if available.
             if (eventInfo.Assister != null && eventInfo.Assister.UserId.HasValue) {
@@ -155,7 +156,7 @@ namespace OSBase.Modules {
                 if ( ! playerList.ContainsKey(assistId) ) {
                     playerList[assistId] = new PlayerStats();
                 }
-                playerList[assistId].assists++;
+                playerList[assistId].incAssists();
             }
             return HookResult.Continue;
         }
@@ -356,9 +357,9 @@ namespace OSBase.Modules {
         public int rounds { get; set; }
         public int roundWins { get; set; }
         public int roundLosses { get; set; }
-        public int kills { get; set; }
-        public int deaths { get; set; }
-        public int assists { get; set; }
+        private int kills;
+        private int deaths;
+        private int assists;
         public int damage { get; set; }
         public int shotsFired { get; set; }
         public int shotsHit { get; set; }
@@ -398,6 +399,29 @@ namespace OSBase.Modules {
             float totalRating = baseDamageScore + killBonus + assistBonus - deathPenalty + headshotBonus + accuracyBonus;
             return totalRating;
         }
+
+        public void incKills() {
+            kills++;
+        }
+        public void incAssists() {
+            assists++;
+        }
+        public void incDeaths() {
+            deaths++;
+        }
+
+        public int getKills() {
+            return kills;
+        }
+
+        public int getDeaths() {
+            return deaths;
+        }
+
+        public int getAssists() {
+            return assists;
+        }
+
     }
 
     public class TeamStats {
@@ -526,7 +550,7 @@ namespace OSBase.Modules {
         }
         public void printPlayers() {
             foreach (var kvp in playerList) {
-                Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}/{kvp.Value.name}: {kvp.Value.rounds}r/{kvp.Value.roundWins}w/{kvp.Value.roundLosses}l - {kvp.Value.kills}k/{kvp.Value.assists}a/{kvp.Value.deaths}d:{kvp.Value.damage}dmg -> {kvp.Value.calcSkill()}p");
+                Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}/{kvp.Value.name}: {kvp.Value.rounds}r/{kvp.Value.roundWins}w/{kvp.Value.roundLosses}l - {kvp.Value.getKills()}k/{kvp.Value.getAssists()}a/{kvp.Value.getDeaths()}d:{kvp.Value.damage}dmg -> {kvp.Value.calcSkill()}p");
             }
         }
 
