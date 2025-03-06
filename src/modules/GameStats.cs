@@ -269,6 +269,7 @@ namespace OSBase.Modules {
 
         private void clearStats() {
             // Reset team stats.
+            playerList.Clear();
             teamList.Clear();
             teamList[TEAM_S] = new TeamStats();
             teamList[TEAM_T] = new TeamStats();
