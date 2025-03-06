@@ -21,6 +21,8 @@ namespace OSBase.Modules {
         private const int TEAM_T = (int)CsTeam.Terrorist;
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
+        private bool hasLoadedEvents = false;
+
         // Store player stats keyed by user id.
         public Dictionary<int, PlayerStats> playerList = new Dictionary<int, PlayerStats>();
         private Dictionary<int, TeamStats> teamList = new Dictionary<int, TeamStats>();
@@ -33,6 +35,7 @@ namespace OSBase.Modules {
             this.db = new Database(this.osbase, this.config);
             createTables();
             loadEventHandlers();
+            this.hasLoadedEvents = true;
             teamList[TEAM_S] = new TeamStats();
             teamList[TEAM_T] = new TeamStats();
             teamList[TEAM_CT] = new TeamStats();            
@@ -48,6 +51,9 @@ namespace OSBase.Modules {
         }
 
         public void loadEventHandlers ( ) {
+            if ( this.hasLoadedEvents ) {
+                return;
+            }
             // Register relevant events.
             osbase?.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
             osbase?.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
@@ -91,6 +97,10 @@ namespace OSBase.Modules {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
                 }
             }
+            playerList.Clear();
+            teamList[TEAM_T].resetPlayers();
+            teamList[TEAM_CT].resetPlayers();
+            teamList[TEAM_S].resetPlayers();
         }
 
         private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
