@@ -135,7 +135,11 @@ public class Demos : IModule {
         Server.ExecuteCommand("tv_enable 1");
         Server.ExecuteCommand("tv_stoprecord");
         if (osbase != null) {
-            Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}-{ctName}_vs_{tName}.dem");
+            if ( tName.Equals("none") && ctName.Equals("none") ) {
+                Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}.dem");
+            } else {
+                Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}-{ctName}_vs_{tName}.dem");
+            }
         }
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord enabled. Demo recording started.");
     }
