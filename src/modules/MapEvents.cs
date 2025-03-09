@@ -59,9 +59,9 @@ public class MapEvents : IModule {
 
     private void OnMapStart(string mapName) {
         isWarmup = true;
-        if (osbase != null) {
-            osbase.currentMap = mapName;
-        }
+        //if (osbase != null) {
+        //    osbase.currentMap = mapName;
+        //}
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Warmup begins.");
         config?.ExecuteCustomConfig("mapstart.cfg");
         config?.ExecuteCustomConfig("warmupstart.cfg");

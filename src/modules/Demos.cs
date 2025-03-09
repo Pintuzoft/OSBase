@@ -45,6 +45,7 @@ public class Demos : IModule {
 
     private void loadEventHandlers() {
         if(osbase == null) return;
+        osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
         osbase.RegisterEventHandler<EventBeginNewMatch>(OnMatchStart);
@@ -60,6 +61,12 @@ public class Demos : IModule {
         EVENT HANDLERS
     */
 
+    private void OnMapStart(string mapName) {
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has started.");
+        if (osbase != null) {
+            osbase.currentMap = mapName;
+        }
+    }
     public HookResult OnCommandMap(CCSPlayerController? player, CommandInfo command) {
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Changelevel detected.");
         runMapEnd();
