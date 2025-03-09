@@ -8,6 +8,7 @@ using CounterStrikeSharp.API.Modules.Utils;
 namespace OSBase.Modules {
     public class Teams : IModule {
         public string ModuleName => "teams";
+        private static Teams? teams = null;
         private OSBase? osbase;
         private Config? config;
         private Dictionary<string, TeamInfo> tList = new Dictionary<string, TeamInfo>();
@@ -40,6 +41,7 @@ namespace OSBase.Modules {
             } else {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
             }
+            teams = this;
         }
 
         private void createCustomConfigs() {
@@ -71,9 +73,7 @@ namespace OSBase.Modules {
                 }
                 tList.Add(parts[0], team);
             }
-        }     
-
-
+        }
 
         private void loadEventHandlers() {
             if(osbase == null) return;
@@ -126,6 +126,21 @@ namespace OSBase.Modules {
                 team.resetMatches();
             }
             return team;
+        }
+
+        public static Teams getTeams ( ) {
+            if (teams == null) {
+                throw new InvalidOperationException("Teams module is not loaded.");
+            }
+            return teams;
+        }
+
+        public TeamInfo getT ( ) {
+            return tTeam;
+        }
+
+        public TeamInfo getCT ( ) {
+            return ctTeam;
         }
 
     }

@@ -27,7 +27,6 @@ public class Demos : IModule {
         // Register required global config values
         config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
-
         if (osbase == null) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
             return;
@@ -35,8 +34,6 @@ public class Demos : IModule {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
             return;
         }
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: isTeamsLoaded: {osbase.isModuleLoaded("teams")}");
 
         if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
             loadEventHandlers();
@@ -124,10 +121,21 @@ public class Demos : IModule {
     }
     private void runWarmupEnd() {
         string date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        string tName = "Terrorists";
+        string ctName = "CounterTerrorists";
+        try {
+            TeamInfo tTeam = Teams.getTeams().getT();
+            TeamInfo ctTeam = Teams.getTeams().getCT();
+            tName = tTeam.getTeamName();
+            ctName = ctTeam.getTeamName();
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to get teams -> {e.Message}");
+            return;
+        }
         Server.ExecuteCommand("tv_enable 1");
         Server.ExecuteCommand("tv_stoprecord");
         if (osbase != null) {
-            Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}.dem");
+            Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}-{ctName}_vs_{tName}.dem");
         }
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord enabled. Demo recording started.");
     }
