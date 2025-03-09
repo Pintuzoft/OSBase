@@ -14,6 +14,9 @@ namespace OSBase.Modules {
         private const int TEAM_T = (int)CsTeam.Terrorist;
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
+        private TeamInfo tTeam = new TeamInfo("Terrorists");
+        private TeamInfo ctTeam = new TeamInfo("CounterTerrorists");
+
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
             config = inConfig;
@@ -63,7 +66,7 @@ namespace OSBase.Modules {
                         team.addPlayer(ulong.Parse(steamid));
                         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Added steamid {steamid} to team {parts[0]}");
                     } catch (Exception e) {
-                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse steamid {steamid} for team {parts[0]}");
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse steamid {steamid} for team {parts[0]} -> {e.Message}");
                     }
                 }
                 tList.Add(parts[0], team);
@@ -103,15 +106,11 @@ namespace OSBase.Modules {
 
             TeamInfo team = findTeamWithMostMatches();
 
-            if (team.getMatches() != 0) {
-                // We got a team, lets set its name
-                
-                // = team.getTeamName();
-
+            if ( eventInfo.Team == TEAM_T ) {
+                tTeam = team != null ? team : new TeamInfo("Terrorists");
+            } else if ( eventInfo.Team == TEAM_CT ) {
+                ctTeam = team != null ? team : new TeamInfo("CounterTerrorists");
             }
-
-
-
 
             return HookResult.Continue;
         }

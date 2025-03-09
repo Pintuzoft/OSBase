@@ -27,6 +27,7 @@ public class Demos : IModule {
         // Register required global config values
         config.RegisterGlobalConfigValue($"{ModuleName}", "1");
 
+
         if (osbase == null) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
             return;
@@ -34,6 +35,8 @@ public class Demos : IModule {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
             return;
         }
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: isTeamsLoaded: {osbase.isModuleLoaded("teams")}");
 
         if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
             loadEventHandlers();

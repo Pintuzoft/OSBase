@@ -16,7 +16,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.315";
+    public override string ModuleVersion => "0.0.316";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for handling map events with config execution";
     
@@ -69,6 +69,10 @@ public class OSBase : BasePlugin {
 
     public GameStats? GetGameStats() {
         return gameStats;
+    }
+
+    public bool isModuleLoaded(string moduleName) {
+        return loadedModules.Any(m => m.ModuleName == moduleName);
     }
 
 }
