@@ -47,6 +47,7 @@ public class Demos : IModule {
         if(osbase == null) return;
         osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+        osbase.RegisterEventHandler<EventBeginNewMatch>(OnMatchStart);
         osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
         osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
         osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);
@@ -82,8 +83,14 @@ public class Demos : IModule {
         return HookResult.Continue;
     }
 
+    [GameEventHandler(HookMode.Pre)]
     private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Warmup has ended.");
+        runWarmupEnd(); 
+        return HookResult.Continue;
+    }
+    private HookResult OnMatchStart(EventBeginNewMatch eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Match start.");
         runWarmupEnd(); 
         return HookResult.Continue;
     }
@@ -108,6 +115,7 @@ public class Demos : IModule {
     private void runWarmupEnd() {
         string date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         Server.ExecuteCommand("tv_enable 1");
+        Server.ExecuteCommand("tv_stoprecord");
         if (osbase != null) {
             Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}.dem");
         }

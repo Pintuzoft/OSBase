@@ -42,7 +42,7 @@ namespace OSBase.Modules {
         }
 
         private void createTables ( ) {
-            string query = "TABLE IF NOT EXISTS skill_log (steamid varchar(32),name varchar(64),skill int(11), datestr datetime);";            
+            string query = "TABLE IF NOT EXISTS skill_log (steamid varchar(32),name varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,skill int(11), datestr datetime);";            
             try {
                 this.db.create(query);
             } catch (Exception e) {

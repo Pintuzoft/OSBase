@@ -289,7 +289,7 @@ public class ServerInfo : IModule {
         serverinfo_user (
             host varchar(64) not null, 
             port int(11) not null, 
-            name varchar(128),
+            name varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
             team int(11), 
             kills int(11),
             assists int(11),
