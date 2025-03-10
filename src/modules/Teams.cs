@@ -102,8 +102,10 @@ namespace OSBase.Modules {
 
             foreach (var player in players) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Checking player {player.SteamID} in team {eventInfo.Team}");
-                if (player.TeamNum != eventInfo.Team) 
+                if (player.TeamNum != eventInfo.Team) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player {player.SteamID} is not in team {eventInfo.Team}");
                     continue;
+                }
                 foreach (var ti in tList) {
                     if (ti.Value.isPlayerInTeam(steamid)) {
                         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player {steamid} is in team {ti.Key}");
