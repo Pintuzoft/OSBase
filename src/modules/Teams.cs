@@ -144,11 +144,15 @@ namespace OSBase.Modules {
 
         private TeamInfo findTeamWithMostMatches () {
             TeamInfo team = new TeamInfo("none");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Finding team with most matches");
             foreach (var ti in tList) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Team: {ti.Key} Matches: {ti.Value.getMatches()}");
                 if ( ti.Value.getMatches() > team.getMatches() ) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Found team with more matches: {ti.Key}");
                     team = ti.Value;
                 }
             }
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Team with most matches is {team.getTeamName()}");
             return team;
         }
 
