@@ -1,4 +1,5 @@
 using System;
+using System.Net.NetworkInformation;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
@@ -9,12 +10,12 @@ namespace OSBase.Modules {
     public class Teams : IModule {
         public string ModuleName => "teams";
         private static Teams? teams = null;
+        private static bool matchActive = false;
         private OSBase? osbase;
         private Config? config;
         private Dictionary<string, TeamInfo> tList = new Dictionary<string, TeamInfo>();
         private const int TEAM_T = (int)CsTeam.Terrorist;
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
-
         private TeamInfo tTeam = new TeamInfo("Terrorists");
         private TeamInfo ctTeam = new TeamInfo("CounterTerrorists");
 
@@ -53,6 +54,7 @@ namespace OSBase.Modules {
         // load the config file load the team names dynamically and the steamids as the players in the team
 
         private void LoadConfig() {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Loading config...");
             List<string> teamcfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
             foreach (var line in teamcfg) {
@@ -73,6 +75,7 @@ namespace OSBase.Modules {
                 }
                 tList.Add(parts[0], team);
             }
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Loaded {tList.Count} teams.");
         }
 
         private void loadEventHandlers() {
@@ -112,6 +115,12 @@ namespace OSBase.Modules {
                 ctTeam = team != null ? team : new TeamInfo("CounterTerrorists");
             }
 
+            if ( tTeam.playerCount() > 0 || ctTeam.playerCount() > 0 ) {
+                Teams.matchIsActive();
+            } else {
+                Teams.matchIsNotActive();
+            }
+
             return HookResult.Continue;
         }
 
@@ -122,9 +131,9 @@ namespace OSBase.Modules {
                     team = ti.Value;
                 }
             }
-            if ( team.getMatches() < 4 ) {
-                team.resetMatches();
-            }
+            //if ( team.getMatches() < 4 ) {
+            //    team.resetMatches();
+            //}
             return team;
         }
 
@@ -141,6 +150,16 @@ namespace OSBase.Modules {
 
         public TeamInfo getCT ( ) {
             return ctTeam;
+        }
+
+        public static bool isMatchActive ( ) {
+            return matchActive;
+        }
+        public static void matchIsActive ( ) {
+            matchActive = true;
+        }
+        public static void matchIsNotActive ( ) {
+            matchActive = false;
         }
 
     }
@@ -175,6 +194,10 @@ namespace OSBase.Modules {
 
         public bool isPlayerInTeam(ulong steamid) {
             return pList.Contains(steamid);
+        }
+
+        public int playerCount ( ) {
+            return pList.Count;
         }
     }
 }

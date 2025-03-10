@@ -108,8 +108,6 @@ public class Demos : IModule {
         return HookResult.Continue;
     }
 
-
-
     /*
         METHODS
     */
@@ -123,11 +121,15 @@ public class Demos : IModule {
         string date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         string tName = "Terrorists";
         string ctName = "CounterTerrorists";
+        bool isMatch = false;
         try {
-            TeamInfo tTeam = Teams.getTeams().getT();
-            TeamInfo ctTeam = Teams.getTeams().getCT();
-            tName = tTeam.getTeamName();
-            ctName = ctTeam.getTeamName();
+            isMatch = Teams.isMatchActive();
+            if ( isMatch ) {
+                TeamInfo tTeam = Teams.getTeams().getT();
+                TeamInfo ctTeam = Teams.getTeams().getCT();
+                tName = tTeam.getTeamName();
+                ctName = ctTeam.getTeamName();
+            }
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to get teams -> {e.Message}");
             return;
@@ -135,10 +137,10 @@ public class Demos : IModule {
         Server.ExecuteCommand("tv_enable 1");
         Server.ExecuteCommand("tv_stoprecord");
         if (osbase != null) {
-            if ( tName.Equals("none") && ctName.Equals("none") ) {
-                Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}.dem");
-            } else {
+            if ( isMatch ) {
                 Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}-{ctName}_vs_{tName}.dem");
+            } else {
+                Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}.dem");                
             }
         }
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord enabled. Demo recording started.");
