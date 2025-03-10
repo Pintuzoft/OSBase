@@ -75,6 +75,7 @@ namespace OSBase.Modules {
                 }
                 tList.Add(parts[0], team);
             }
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Loaded {tList.Count} teams.");
         }
 
@@ -129,6 +130,10 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Match is NOT active");
             }
 
+            foreach (var ti in tList) {
+                ti.Value.printTeam();
+            }
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: End of onPlayerTeam");
             return HookResult.Continue;
         }
@@ -140,9 +145,6 @@ namespace OSBase.Modules {
                     team = ti.Value;
                 }
             }
-            //if ( team.getMatches() < 4 ) {
-            //    team.resetMatches();
-            //}
             return team;
         }
 
@@ -207,6 +209,12 @@ namespace OSBase.Modules {
 
         public int playerCount ( ) {
             return pList.Count;
+        }
+        public void printTeam ( ) {
+            Console.WriteLine($"[DEBUG] Team: {TeamName}");
+            foreach (var p in pList) {
+                Console.WriteLine($"[DEBUG] Player: {p}");
+            }
         }
     }
 }
