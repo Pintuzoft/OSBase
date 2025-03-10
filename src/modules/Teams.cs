@@ -122,6 +122,10 @@ namespace OSBase.Modules {
                 ctTeam = team != null ? team : new TeamInfo("CounterTerrorists");
             }
 
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Print Active Teams:");
+            Console.WriteLine($"[DEBUG] T:  TeamName: {tTeam.getTeamName()}");
+            Console.WriteLine($"[DEBUG] CT: TeamName: {ctTeam.getTeamName()}");
+            
             if ( tTeam.playerCount() > 0 || ctTeam.playerCount() > 0 ) {
                 Teams.matchIsActive();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Match is active");
