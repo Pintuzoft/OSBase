@@ -86,6 +86,7 @@ namespace OSBase.Modules {
         private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             if (eventInfo == null || eventInfo.Userid == null) 
                 return HookResult.Continue;
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player {eventInfo.Userid.SteamID} changed to team {eventInfo.Team}");
 
             // identify the team and run a complete check of the team and the players in the team to see if the team is valid and which team is on the team
 
@@ -94,20 +95,25 @@ namespace OSBase.Modules {
             
             // reset matches
             foreach (var ti in tList) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Resetting matches for team {ti.Key}");
                 ti.Value.resetMatches();
             }
 
             foreach (var player in players) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Checking player {player.SteamID} in team {eventInfo.Team}");
                 if (player.TeamNum != eventInfo.Team) 
                     continue;
                 foreach (var ti in tList) {
                     if (ti.Value.isPlayerInTeam(steamid)) {
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player {steamid} is in team {ti.Key}");
                         ti.Value.incMatches();
                     }
                 }
             }
 
             TeamInfo team = findTeamWithMostMatches();
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Team with most matches is {team.getTeamName()}");
 
             if ( eventInfo.Team == TEAM_T ) {
                 tTeam = team != null ? team : new TeamInfo("Terrorists");
@@ -117,10 +123,13 @@ namespace OSBase.Modules {
 
             if ( tTeam.playerCount() > 0 || ctTeam.playerCount() > 0 ) {
                 Teams.matchIsActive();
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Match is active");
             } else {
                 Teams.matchIsNotActive();
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Match is NOT active");
             }
 
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: End of onPlayerTeam");
             return HookResult.Continue;
         }
 
