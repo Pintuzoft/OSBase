@@ -95,6 +95,8 @@ namespace OSBase.Modules {
             if (osbase == null) 
                 return;
 
+            matchIsNotActive();
+
             // T
             foreach (var ti in tList) {
                 ti.Value.resetMatches();
@@ -104,6 +106,7 @@ namespace OSBase.Modules {
                     foreach (var ti in tList) {
                         if ( ti.Value.isPlayerInTeam(player.SteamID)) {
                             ti.Value.incMatches();
+                            matchIsActive();
                         }
                     }
                 }
@@ -119,6 +122,7 @@ namespace OSBase.Modules {
                     foreach (var ti in tList) {
                         if ( ti.Value.isPlayerInTeam(player.SteamID)) {
                             ti.Value.incMatches();
+                            matchIsActive();
                         }
                     }
                 }
