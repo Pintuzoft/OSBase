@@ -85,63 +85,51 @@ namespace OSBase.Modules {
         }
 
         private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
-            if (eventInfo == null || eventInfo.Userid == null) 
-                return HookResult.Continue;
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player {eventInfo.Userid.SteamID} changed to team {eventInfo.Team}");
+            osbase?.AddTimer(0.5f, () => {
+                checkTeams();
+            });
+            return HookResult.Continue;
+        }
 
-            // identify the team and run a complete check of the team and the players in the team to see if the team is valid and which team is on the team
+        private void checkTeams ( ) {
+            if (osbase == null) 
+                return;
 
-            ulong steamid = eventInfo.Userid.SteamID;
-            var players = Utilities.GetPlayers();
-            
-            // reset matches
+            // T
             foreach (var ti in tList) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Resetting matches for team {ti.Key}");
                 ti.Value.resetMatches();
             }
-
-            foreach (var player in players) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Checking player {player.SteamID} in team {eventInfo.Team}");
-                if (player.TeamNum != eventInfo.Team) {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player {player.SteamID}:{player.TeamNum} is not in team {eventInfo.Team}");
-                    continue;
-                }
-                foreach (var ti in tList) {
-                    if (ti.Value.isPlayerInTeam(steamid)) {
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Player {steamid} is in team {ti.Key}");
-                        ti.Value.incMatches();
+            foreach ( var player in Utilities.GetPlayers()) {
+                if (player.TeamNum == TEAM_T) {
+                    foreach (var ti in tList) {
+                        if ( ti.Value.isPlayerInTeam(player.SteamID)) {
+                            ti.Value.incMatches();
+                        }
                     }
                 }
             }
+            tTeam = findTeamWithMostMatches();
 
-            TeamInfo team = findTeamWithMostMatches();
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Team with most matches is {team.getTeamName()}");
-
-            if ( eventInfo.Team == TEAM_T ) {
-                tTeam = team != null ? team : new TeamInfo("Terrorists");
-            } else if ( eventInfo.Team == TEAM_CT ) {
-                ctTeam = team != null ? team : new TeamInfo("CounterTerrorists");
-            }
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Print Active Teams:");
-            Console.WriteLine($"[DEBUG] T:  TeamName: {tTeam.getTeamName()}");
-            Console.WriteLine($"[DEBUG] CT: TeamName: {ctTeam.getTeamName()}");
-            
-            if ( tTeam.playerCount() > 0 || ctTeam.playerCount() > 0 ) {
-                Teams.matchIsActive();
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Match is active");
-            } else {
-                Teams.matchIsNotActive();
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Match is NOT active");
-            }
-
+            // CT
             foreach (var ti in tList) {
-                ti.Value.printTeam();
+                ti.Value.resetMatches();
             }
+            foreach ( var player in Utilities.GetPlayers()) {
+                if (player.TeamNum == TEAM_CT) {
+                    foreach (var ti in tList) {
+                        if ( ti.Value.isPlayerInTeam(player.SteamID)) {
+                            ti.Value.incMatches();
+                        }
+                    }
+                }
+            }
+            ctTeam = findTeamWithMostMatches();
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: End of onPlayerTeam");
-            return HookResult.Continue;
+            // Print teams
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Teams:");
+            tTeam.printTeam();
+            ctTeam.printTeam();
+
         }
 
         private TeamInfo findTeamWithMostMatches () {
