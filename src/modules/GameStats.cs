@@ -78,6 +78,10 @@ namespace OSBase.Modules {
             // | datestr | datetime    | YES  |     | NULL    |       |
             // +---------+-------------+------+-----+---------+-------+
             // 4 rows in set (0.002 sec)
+            if ( playerList.Count < 10 ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Not enough players to write stats.");
+                return;
+            }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Map ended. Writing player stats to database.");
             foreach (var entry in playerList ) {
                 if ( entry.Value.steamid.Equals("0") || entry.Value.name.Length == 0 || entry.Value.rounds < 10 ) {

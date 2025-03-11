@@ -130,9 +130,11 @@ namespace OSBase.Modules {
             ctTeam = findTeamWithMostMatches();
 
             // Print teams
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Teams:");
-            tTeam.printTeam();
-            ctTeam.printTeam();
+            if ( isMatchActive() ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Teams:");
+                tTeam.printTeam();
+                ctTeam.printTeam();
+            }
 
         }
 
