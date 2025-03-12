@@ -122,6 +122,7 @@ public class Demos : IModule {
         string tName = "Terrorists";
         string ctName = "CounterTerrorists";
         bool isMatch = false;
+        Server.ExecuteCommand("tv_enable 1");
         try {
             isMatch = Teams.isMatchActive();
             if ( isMatch ) {
@@ -129,13 +130,13 @@ public class Demos : IModule {
                 TeamInfo ctTeam = Teams.getTeams().getCT();
                 tName = tTeam.getTeamName();
                 ctName = ctTeam.getTeamName();
+                Server.ExecuteCommand("tv_stoprecord");
             }
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to get teams -> {e.Message}");
             return;
         }
-        Server.ExecuteCommand("tv_enable 1");
-        Server.ExecuteCommand("tv_stoprecord");
+
         if (osbase != null) {
             if ( isMatch ) {
                 Server.ExecuteCommand($"tv_record {date}-{osbase.currentMap}-{ctName}_vs_{tName}.dem");
