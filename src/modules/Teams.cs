@@ -134,8 +134,8 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Teams:");
                 tTeam.printTeam();
                 ctTeam.printTeam();
-                Server.ExecuteCommand($"mp_teamname_1 {tTeam.getTeamName};");
-                Server.ExecuteCommand($"mp_teamname_2 {ctTeam.getTeamName};");
+                Server.ExecuteCommand($"mp_teamname_1 {tTeam.getTeamName()};");
+                Server.ExecuteCommand($"mp_teamname_2 {ctTeam.getTeamName()};");
             }
 
         }
