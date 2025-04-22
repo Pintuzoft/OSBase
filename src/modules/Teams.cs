@@ -83,7 +83,11 @@ namespace OSBase.Modules {
         private void loadEventHandlers() {
             if(osbase == null) return;
             osbase?.RegisterEventHandler<EventPlayerTeam>(onPlayerTeam);
+            osbase?.RegisterEventHandler<EventWarmupEnd>(OnEventWarmupEnd);
+            osbase?.RegisterEventHandler<EventBeginNewMatch>(OnMatchStart);
             osbase?.AddCommandListener("mp_teamname_1", OnTeamName, HookMode.Pre);
+            osbase?.AddCommandListener("mp_teamname_2", OnTeamName, HookMode.Pre);
+
         }
 
         private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
@@ -98,6 +102,16 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
+        private HookResult OnMatchStart (EventBeginNewMatch eventInfo, GameEventInfo gameEventInfo) {
+            checkTeams();
+            return HookResult.Continue;
+        }
+
+        private HookResult OnEventWarmupEnd (EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+            checkTeams();
+            return HookResult.Continue;
+        }
+        
         private void checkTeams ( ) {
             if (osbase == null) 
                 return;
