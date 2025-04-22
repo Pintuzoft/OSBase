@@ -83,32 +83,12 @@ namespace OSBase.Modules {
         private void loadEventHandlers() {
             if(osbase == null) return;
             osbase?.RegisterEventHandler<EventPlayerTeam>(onPlayerTeam);
-            osbase?.RegisterEventHandler<EventWarmupEnd>(OnEventWarmupEnd);
-            osbase?.RegisterEventHandler<EventBeginNewMatch>(OnMatchStart);
-            osbase?.AddCommandListener("mp_teamname_1", OnTeamName, HookMode.Pre);
-            osbase?.AddCommandListener("mp_teamname_2", OnTeamName, HookMode.Pre);
-
         }
 
         private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             osbase?.AddTimer(0.5f, () => {
                 checkTeams();
             });
-            return HookResult.Continue;
-        }
-
-        private HookResult OnTeamName (CCSPlayerController? player, CommandInfo command) {
-            checkTeams();
-            return HookResult.Continue;
-        }
-
-        private HookResult OnMatchStart (EventBeginNewMatch eventInfo, GameEventInfo gameEventInfo) {
-            checkTeams();
-            return HookResult.Continue;
-        }
-
-        private HookResult OnEventWarmupEnd (EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-            checkTeams();
             return HookResult.Continue;
         }
         
@@ -155,8 +135,10 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Teams:");
                 tTeam.printTeam();
                 ctTeam.printTeam();
-                Server.ExecuteCommand($"mp_teamname_1 {tTeam.getTeamName()};");
-                Server.ExecuteCommand($"mp_teamname_2 {ctTeam.getTeamName()};");
+                //Server.ExecuteCommand($"mp_teamname_1 {tTeam.getTeamName()};");
+                //Server.ExecuteCommand($"mp_teamname_2 {ctTeam.getTeamName()};");
+                osbase?.SendCommand($"css_team1 {ctTeam.getTeamName()};");
+                osbase?.SendCommand($"css_team2 {tTeam.getTeamName()};");
             }
 
         }
