@@ -133,7 +133,9 @@ namespace OSBase.Modules {
             if ( isMatchActive() ) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Teams:");
                 tTeam.printTeam();
+                Server.PrintToChatAll($".team1 {tTeam.getTeamName()}");
                 ctTeam.printTeam();
+                Server.PrintToChatAll($".team2 {ctTeam.getTeamName()}");
             }
 
         }
