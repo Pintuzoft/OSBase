@@ -4,7 +4,8 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
-
+using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Cvars;
 
 namespace OSBase.Modules {
     public class Teams : IModule {
@@ -82,12 +83,18 @@ namespace OSBase.Modules {
         private void loadEventHandlers() {
             if(osbase == null) return;
             osbase?.RegisterEventHandler<EventPlayerTeam>(onPlayerTeam);
+            osbase?.AddCommandListener("mp_teamname_1", OnTeamName, HookMode.Pre);
         }
 
         private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             osbase?.AddTimer(0.5f, () => {
                 checkTeams();
             });
+            return HookResult.Continue;
+        }
+
+        private HookResult OnTeamName (CCSPlayerController? player, CommandInfo command) {
+            checkTeams();
             return HookResult.Continue;
         }
 
