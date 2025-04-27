@@ -48,6 +48,12 @@ public class DemosMatch : IModule {
         if(osbase == null) return;
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
+
+        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
+        osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);
+        osbase.AddCommandListener("map", OnCommandMap, HookMode.Pre);
+        osbase.AddCommandListener("changelevel", OnCommandMap, HookMode.Pre);
+        osbase.AddCommandListener("ds_workshop_changelevel", OnCommandMap, HookMode.Pre);
     }
 
     /*
@@ -72,4 +78,26 @@ public class DemosMatch : IModule {
         return HookResult.Continue;
     }
 
+    public HookResult OnCommandMap(CCSPlayerController? player, CommandInfo command) {
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Changelevel detected.");
+        runMapEnd();
+        return HookResult.Continue;
+    }
+    
+    private HookResult OnMapTransition(EventMapTransition eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has transitioned.");
+        runMapEnd();
+        return HookResult.Continue;
+    }
+
+    private HookResult OnMapShutdown(EventMapShutdown eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has shutdown.");
+        runMapEnd();
+        return HookResult.Continue;
+    }
+    
+    private void runMapEnd() {
+        osbase?.SendCommand("tv_stoprecord");
+        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord is enabled. Stopped recording demo.");
+    }
 }
