@@ -100,7 +100,7 @@ public class DemosMatch : IModule {
 
     private void runMapEnd() {
         osbase?.SendCommand("tv_stoprecord");
-        osbase?.SendCommand("tv_enable 0");
+        //osbase?.SendCommand("tv_enable 0");
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord is enabled. Stopped recording demo.");
     }
 
