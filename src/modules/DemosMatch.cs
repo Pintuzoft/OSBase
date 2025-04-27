@@ -19,6 +19,7 @@ public class DemosMatch : IModule {
     public string ModuleName => "demosmatch";   
     private OSBase? osbase;
     private Config? config;
+    private float demoQuitDelay = 5.0f; // Default delay in seconds
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -46,13 +47,7 @@ public class DemosMatch : IModule {
     private void loadEventHandlers() {
         if(osbase == null) return;
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-        osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
-        osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
-        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
-        osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);
-        osbase.AddCommandListener("map", OnCommandMap, HookMode.Pre);
-        osbase.AddCommandListener("changelevel", OnCommandMap, HookMode.Pre);
-        osbase.AddCommandListener("ds_workshop_changelevel", OnCommandMap, HookMode.Pre);
+        osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
     }
 
     /*
@@ -65,42 +60,16 @@ public class DemosMatch : IModule {
             osbase.currentMap = mapName;
         }
     }
-    public HookResult OnCommandMap(CCSPlayerController? player, CommandInfo command) {
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Changelevel detected.");
-        runMapEnd();
-        return HookResult.Continue;
-    }
 
-    private void OnMapEnd() {
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has ended.");
-        runMapEnd();
-    }
-
-    private HookResult OnMapTransition(EventMapTransition eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has transitioned.");
-        runMapEnd();
-        return HookResult.Continue;
-    }
-
-    private HookResult OnMapShutdown(EventMapShutdown eventInfo, GameEventInfo gameEventInfo) {
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has shutdown.");
-        runMapEnd();
-        return HookResult.Continue;
-    }
-
-    private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Match has ended.");
-        runMapEnd();
-        return HookResult.Continue;
-    }
-
-    /*
-        METHODS
-    */
-
-    private void runMapEnd() {
         osbase?.SendCommand("tv_stoprecord");
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Autorecord is enabled. Stopped recording demo.");
+        osbase?.AddTimer(demoQuitDelay, () => {
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Quitting server now.");
+            osbase?.SendCommand("quit");
+        });
+        return HookResult.Continue;
     }
 
 }
