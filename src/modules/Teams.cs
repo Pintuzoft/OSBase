@@ -6,6 +6,7 @@ using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Cvars;
+using MySqlConnector;
 
 namespace OSBase.Modules {
     public class Teams : IModule {
@@ -19,6 +20,9 @@ namespace OSBase.Modules {
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
         private TeamInfo tTeam = new TeamInfo("Terrorists");
         private TeamInfo ctTeam = new TeamInfo("CounterTerrorists");
+
+        private Database db = null!;
+        private GameStats? gameStats;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
@@ -35,9 +39,13 @@ namespace OSBase.Modules {
                 return;
             }
 
+            this.db = new Database(this.osbase, this.config);
+
             if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
                 createCustomConfigs();
-                LoadConfig();
+                LoadConfig();                
+                gameStats = osbase.GetGameStats();
+                createTables();
                 loadEventHandlers();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
             } else {
@@ -80,9 +88,19 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Loaded {tList.Count} teams.");
         }
 
+        private void createTables ( ) {
+            string query = "TABLE IF NOT EXISTS teams_match_log (team1 varchar(32),team1_score int(11), team2 varchar(32), team2_score int(11), datestr datetime);";            
+            try {
+                this.db.create(query);
+            } catch (Exception e) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error creating table: {e.Message}");
+            }
+        }
+
         private void loadEventHandlers() {
             if(osbase == null) return;
             osbase?.RegisterEventHandler<EventPlayerTeam>(onPlayerTeam);
+            osbase?.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
         }
 
         private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
@@ -92,6 +110,29 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
         
+        private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
+            if ( ! isMatchActive() || gameStats == null ) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Match is not active. Not saving stats.");
+                return HookResult.Continue;
+            }
+            checkTeams();
+
+            string query = "INTO skill_log (team1, team1_score, team2, team2_score, datestr) VALUES (@team1, @team1_score, @team2, team2_score, NOW());";
+            var parameters = new MySqlParameter[] {
+                new MySqlParameter("@team1", tTeam.getTeamName()),
+                new MySqlParameter("@team1_score", gameStats.getTeam(TEAM_T).wins),
+                new MySqlParameter("@team2", ctTeam.getTeamName()),
+                new MySqlParameter("@team2_score", gameStats.getTeam(TEAM_CT).wins),
+            };
+            try {
+                this.db.insert(query, parameters);
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for match");
+            } catch (Exception e) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
+            }
+            return HookResult.Continue;
+        }
+
         private void checkTeams ( ) {
             if (osbase == null) 
                 return;
