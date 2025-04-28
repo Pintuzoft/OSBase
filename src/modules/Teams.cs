@@ -117,7 +117,7 @@ namespace OSBase.Modules {
             }
             checkTeams();
 
-            string query = "INTO skill_log (team1, team1_score, team2, team2_score, datestr) VALUES (@team1, @team1_score, @team2, team2_score, NOW());";
+            string query = "INTO teams_match_log (team1, team1_score, team2, team2_score, datestr) VALUES (@team1, @team1_score, @team2, team2_score, NOW());";
             var parameters = new MySqlParameter[] {
                 new MySqlParameter("@team1", tTeam.getTeamName()),
                 new MySqlParameter("@team1_score", gameStats.getTeam(TEAM_T).wins),
