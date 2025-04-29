@@ -91,7 +91,7 @@ namespace OSBase.Modules {
         }
 
         private void createTables ( ) {
-            string query = "TABLE IF NOT EXISTS teams_match_log (matchlog varchar(128), datestr datetime);";            
+            string query = "CREATE TABLE IF NOT EXISTS teams_match_log (matchlog varchar(128), datestr datetime);";            
             try {
                 this.db.create(query);
             } catch (Exception e) {
@@ -148,11 +148,18 @@ namespace OSBase.Modules {
         }
         
         private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
-            string logtext = $"{tTeam.getTeamName()} [{this.tWins}]:[{this.ctWins}] {ctTeam.getTeamName()}";
-            string query = "INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
+            // Spara teamnamn och poäng innan något hinner ändras
+            string teamTName = tTeam.getTeamName();
+            string teamCTName = ctTeam.getTeamName();
+            int teamTWins = tWins;
+            int teamCTWins = ctWins;
+
+            string logtext = $"{teamTName} [{teamTWins}]:[{teamCTWins}] {teamCTName}";
+            string query = "INSERT INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
             var parameters = new MySqlParameter[] {
-                new MySqlParameter("@logtext", logtext)                
+                new MySqlParameter("@logtext", logtext)
             };
+
             try {
                 this.db.insert(query, parameters);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for match: {logtext}");
@@ -161,7 +168,7 @@ namespace OSBase.Modules {
             }
             return HookResult.Continue;
         }
-        
+
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Warmup ended.");
             if (this.roundNum < 10) {
