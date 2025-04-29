@@ -22,9 +22,6 @@ namespace OSBase.Modules {
         private TeamInfo ctTeam = new TeamInfo("CounterTerrorists");
 
         private Database db = null!;
-        private int tWins = 0;
-        private int ctWins = 0;
-        private int roundNum = 0;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
@@ -85,7 +82,6 @@ namespace OSBase.Modules {
                 }
                 tList.Add(parts[0], team);
             }
-
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Loaded {tList.Count} teams.");
         }
 
@@ -106,26 +102,23 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
         }
 
-
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if (eventInfo.Winner == TEAM_T) tWins++;
-            else if (eventInfo.Winner == TEAM_CT) ctWins++;
+            if (eventInfo.Winner == TEAM_T) tTeam.incWins();
+            else if (eventInfo.Winner == TEAM_CT) ctTeam.incWins();
 
-            roundNum++;
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round: {roundNum} T: {tWins} CT: {ctWins}");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tTeam.getWins()} CT: {ctTeam.getWins()}");
 
             return HookResult.Continue;
         }
 
         private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
-            string logtext = $"{tTeam.getTeamName()} [{tWins}]:[{ctWins}] {ctTeam.getTeamName()}";
+            string logtext = $"{tTeam.getTeamName()} [{tTeam.getWins()}]:[{ctTeam.getWins()}] {ctTeam.getTeamName()}";
             string query = "INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
             var parameters = new MySqlParameter[] {
                 new MySqlParameter("@logtext", logtext)                
             };
             try {
-                Console.WriteLine($"[DEBUG] Writing to DB: T={tWins}, CT={ctWins}, TName={tTeam.getTeamName()}, CTName={ctTeam.getTeamName()}");
+                Console.WriteLine($"[DEBUG] Writing to DB: T={tTeam.getWins()}, CT={ctTeam.getWins()}, TName={tTeam.getTeamName()}, CTName={ctTeam.getTeamName()}");
                 this.db.insert(query, parameters);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for match: {logtext}");
             } catch (Exception e) {
@@ -136,31 +129,23 @@ namespace OSBase.Modules {
 
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime started.");
-        //    int buf = this.tWins;
-         //   this.tWins = this.ctWins;
-          //  this.ctWins = buf;
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tWins} CT: {ctWins}");
+
+            var tmp = tTeam;
+            tTeam = ctTeam;
+            ctTeam = tmp;
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tTeam.getWins()} CT: {ctTeam.getWins()}");
             return HookResult.Continue;
         }
         private HookResult OnPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
-            osbase?.AddTimer(0.5f, () => {
-                checkTeams();
-            });
-            return HookResult.Continue;
-        }
-        
-
-/*
-        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Warmup ended.");
-            if (this.roundNum < 10) {
-                this.tWins = 0;
-                this.ctWins = 0;
-                this.roundNum = 0;
+            if ( ! isMatchActive() ) {
+                osbase?.AddTimer(0.5f, () => {
+                    checkTeams();
+                });
             }
             return HookResult.Continue;
         }
-*/
+        
         private void checkTeams ( ) {
             if (osbase == null) 
                 return;
@@ -204,8 +189,6 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Teams:");
                 tTeam.printTeam();
                 ctTeam.printTeam();
-                //Server.ExecuteCommand($"mp_teamname_1 {tTeam.getTeamName()};");
-                //Server.ExecuteCommand($"mp_teamname_2 {ctTeam.getTeamName()};");
                 osbase?.SendCommand($"css_team1 {ctTeam.getTeamName()};");
                 osbase?.SendCommand($"css_team2 {tTeam.getTeamName()};");
             }
@@ -233,10 +216,6 @@ namespace OSBase.Modules {
             return teams;
         }
 
-        private bool isWarmup ( ) {
-            return this.roundNum == 0;
-        }
-
         public TeamInfo getT ( ) {
             return tTeam;
         }
@@ -260,6 +239,7 @@ namespace OSBase.Modules {
         private string TeamName { get; set; }
         private List<ulong> pList { get; set; }
         private int matched = 0;
+        private int wins = 0;
         public TeamInfo(string teamName) {
             TeamName = teamName;
             pList = new List<ulong>();
@@ -279,6 +259,14 @@ namespace OSBase.Modules {
 
         public void incMatches() {
             matched++;
+        }
+
+        public void incWins() {
+            wins++;
+        }
+
+        public int getWins() {
+            return wins;
         }
 
         public int getMatches() {
