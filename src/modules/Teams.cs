@@ -127,6 +127,7 @@ namespace OSBase.Modules {
                 new MySqlParameter("@logtext", logtext)                
             };
             try {
+                Console.WriteLine($"[DEBUG] Writing to DB: T={tWins}, CT={ctWins}, TName={tTeam.getTeamName()}, CTName={ctTeam.getTeamName()}");
                 this.db.insert(query, parameters);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for match: {logtext}");
             } catch (Exception e) {
