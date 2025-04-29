@@ -25,6 +25,8 @@ namespace OSBase.Modules {
         private int tWins;
         private int ctWins;
 
+        private bool isWarmup = true;
+
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
             config = inConfig;
@@ -100,7 +102,7 @@ namespace OSBase.Modules {
         private void loadEventHandlers() {
             if(osbase == null) return;
             osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-            osbase?.RegisterEventHandler<EventPlayerTeam>(onPlayerTeam);
+            osbase?.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
             osbase?.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
@@ -111,9 +113,14 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Map started: {mapName}");
             this.tWins = 0;
             this.ctWins = 0;
+            this.isWarmup = true;
         }
 
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+            if (isWarmup) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended during warmup. Ignoring.");
+                return HookResult.Continue;
+            }
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended. Winner: {eventInfo.Winner}");
             if (eventInfo.Winner == TEAM_T) {
                 tWins++;
@@ -132,7 +139,7 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tWins} CT: {ctWins}");
             return HookResult.Continue;
         }
-        private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
+        private HookResult OnPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             osbase?.AddTimer(0.5f, () => {
                 checkTeams();
             });
@@ -158,6 +165,7 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Warmup ended.");
             this.tWins = 0;
             this.ctWins = 0;
+            this.isWarmup = false;
             return HookResult.Continue;
         }
 
