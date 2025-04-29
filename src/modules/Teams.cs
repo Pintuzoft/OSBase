@@ -25,7 +25,7 @@ namespace OSBase.Modules {
         private int tWins;
         private int ctWins;
 
-        private bool isWarmup = true;
+        private int roundNum = 0;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
@@ -113,11 +113,11 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Map started: {mapName}");
             this.tWins = 0;
             this.ctWins = 0;
-            this.isWarmup = true;
+            this.roundNum = 0;
         }
 
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if (isWarmup) {
+            if (isWarmup()) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended during warmup. Ignoring.");
                 return HookResult.Continue;
             }
@@ -127,7 +127,8 @@ namespace OSBase.Modules {
             } else {
                 ctWins++;
             }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tWins} CT: {ctWins}");
+            roundNum++;
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round: {roundNum} T: {tWins} CT: {ctWins}");
             return HookResult.Continue;
         }
 
@@ -147,14 +148,14 @@ namespace OSBase.Modules {
         }
         
         private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
-            string logtext = $"{tTeam.getTeamName()} [{tWins}]:[{ctWins}] {ctTeam.getTeamName()}";
+            string logtext = $"{tTeam.getTeamName()} [{this.tWins}]:[{this.ctWins}] {ctTeam.getTeamName()}";
             string query = "INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
             var parameters = new MySqlParameter[] {
                 new MySqlParameter("@logtext", logtext)                
             };
             try {
                 this.db.insert(query, parameters);
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for match");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for match: {logtext}");
             } catch (Exception e) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
             }
@@ -163,9 +164,11 @@ namespace OSBase.Modules {
         
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Warmup ended.");
-            this.tWins = 0;
-            this.ctWins = 0;
-            this.isWarmup = false;
+            if (this.roundNum < 10) {
+                this.tWins = 0;
+                this.ctWins = 0;
+                this.roundNum = 0;
+            }
             return HookResult.Continue;
         }
 
@@ -239,6 +242,10 @@ namespace OSBase.Modules {
                 throw new InvalidOperationException("Teams module is not loaded.");
             }
             return teams;
+        }
+
+        private bool isWarmup ( ) {
+            return this.roundNum == 0;
         }
 
         public TeamInfo getT ( ) {

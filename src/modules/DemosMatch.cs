@@ -19,7 +19,7 @@ public class DemosMatch : IModule {
     public string ModuleName => "demosmatch";   
     private OSBase? osbase;
     private Config? config;
-    private float demoQuitDelay = 5.0f; // Default delay in seconds
+    private float demoQuitDelay = 10.0f; // Default delay in seconds
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
