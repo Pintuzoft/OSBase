@@ -23,6 +23,9 @@ namespace OSBase.Modules {
 
         private Database db = null!;
         private GameStats? gameStats;
+        private bool isWarmup = false;
+        private int tWins;
+        private int ctWins;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
@@ -99,10 +102,35 @@ namespace OSBase.Modules {
 
         private void loadEventHandlers() {
             if(osbase == null) return;
+            osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase?.RegisterEventHandler<EventPlayerTeam>(onPlayerTeam);
             osbase?.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
+            osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+            osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
+        }
+        private void OnMapStart(string mapName) {
+            this.isWarmup = true;
+            this.tWins = 0;
+            this.ctWins = 0;
+        }
+        private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+            if(isWarmup) {
+                return HookResult.Continue;
+            }
+            if (eventInfo.Winner == TEAM_T) {
+                tWins++;
+            } else {
+                ctWins++;
+            }
+            return HookResult.Continue;
         }
 
+        private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
+            int buf = tWins;
+            tWins = ctWins;
+            ctWins = buf;
+            return HookResult.Continue;
+        }
         private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             osbase?.AddTimer(0.5f, () => {
                 checkTeams();
@@ -120,9 +148,9 @@ namespace OSBase.Modules {
             string query = "INTO teams_match_log (team1, team1_score, team2, team2_score, datestr) VALUES (@team1, @team1_score, @team2, @team2_score, NOW());";
             var parameters = new MySqlParameter[] {
                 new MySqlParameter("@team1", tTeam.getTeamName()),
-                new MySqlParameter("@team1_score", gameStats.getTeam(TEAM_T).wins),
+                new MySqlParameter("@team1_score", tWins),
                 new MySqlParameter("@team2", ctTeam.getTeamName()),
-                new MySqlParameter("@team2_score", gameStats.getTeam(TEAM_CT).wins),
+                new MySqlParameter("@team2_score", ctWins),
             };
             try {
                 this.db.insert(query, parameters);
@@ -130,6 +158,13 @@ namespace OSBase.Modules {
             } catch (Exception e) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
             }
+            return HookResult.Continue;
+        }
+        
+        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+            isWarmup = false;
+            this.tWins = 0;
+            this.ctWins = 0;
             return HookResult.Continue;
         }
 
