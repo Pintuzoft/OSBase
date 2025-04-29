@@ -105,23 +105,30 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
         }
+
         private void OnMapStart(string mapName) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Map started: {mapName}");
             this.tWins = 0;
             this.ctWins = 0;
         }
+
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended. Winner: {eventInfo.Winner}");
             if (eventInfo.Winner == TEAM_T) {
                 tWins++;
             } else {
                 ctWins++;
             }
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tWins} CT: {ctWins}");
             return HookResult.Continue;
         }
 
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime started.");
             int buf = tWins;
             tWins = ctWins;
             ctWins = buf;
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tWins} CT: {ctWins}");
             return HookResult.Continue;
         }
         private HookResult onPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
@@ -147,6 +154,7 @@ namespace OSBase.Modules {
         }
         
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Warmup ended.");
             this.tWins = 0;
             this.ctWins = 0;
             return HookResult.Continue;
