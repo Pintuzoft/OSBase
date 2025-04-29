@@ -91,7 +91,7 @@ namespace OSBase.Modules {
         }
 
         private void createTables ( ) {
-            string query = "TABLE IF NOT EXISTS teams_match_log (team1 varchar(32),team1_score int(11), team2 varchar(32), team2_score int(11), datestr datetime);";            
+            string query = "TABLE IF NOT EXISTS teams_match_log (matchlog varchar(128), datestr datetime);";            
             try {
                 this.db.create(query);
             } catch (Exception e) {
@@ -140,12 +140,11 @@ namespace OSBase.Modules {
             }
             checkTeams();
 
-            string query = "INTO teams_match_log (team1, team1_score, team2, team2_score, datestr) VALUES (@team1, @team1_score, @team2, @team2_score, NOW());";
+            string logtext = $"{tTeam.getTeamName()} [{tWins}]:[{ctWins}] {ctTeam.getTeamName()}";
+
+            string query = "INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
             var parameters = new MySqlParameter[] {
-                new MySqlParameter("@team1", tTeam.getTeamName()),
-                new MySqlParameter("@team1_score", tWins),
-                new MySqlParameter("@team2", ctTeam.getTeamName()),
-                new MySqlParameter("@team2_score", ctWins),
+                new MySqlParameter("@logtext", logtext)                
             };
             try {
                 this.db.insert(query, parameters);
