@@ -130,7 +130,7 @@ namespace OSBase.Modules {
 
         private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
             string logtext = $"{tTeam.getTeamName()} [{tWins}]:[{ctWins}] {ctTeam.getTeamName()}";
-            string query = "INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
+            string query = "INSERT INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
             var parameters = new MySqlParameter[] {
                 new MySqlParameter("@logtext", logtext)                
             };
