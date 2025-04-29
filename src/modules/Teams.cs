@@ -23,7 +23,6 @@ namespace OSBase.Modules {
 
         private Database db = null!;
         private GameStats? gameStats;
-        private bool isWarmup = false;
         private int tWins;
         private int ctWins;
 
@@ -109,14 +108,10 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
         }
         private void OnMapStart(string mapName) {
-            this.isWarmup = true;
             this.tWins = 0;
             this.ctWins = 0;
         }
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if(isWarmup) {
-                return HookResult.Continue;
-            }
             if (eventInfo.Winner == TEAM_T) {
                 tWins++;
             } else {
@@ -162,7 +157,6 @@ namespace OSBase.Modules {
         }
         
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-            isWarmup = false;
             this.tWins = 0;
             this.ctWins = 0;
             return HookResult.Continue;
