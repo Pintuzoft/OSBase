@@ -136,9 +136,9 @@ namespace OSBase.Modules {
 
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime started.");
-            int buf = this.tWins;
-            this.tWins = this.ctWins;
-            this.ctWins = buf;
+        //    int buf = this.tWins;
+         //   this.tWins = this.ctWins;
+          //  this.ctWins = buf;
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tWins} CT: {ctWins}");
             return HookResult.Continue;
         }
