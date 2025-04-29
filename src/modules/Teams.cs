@@ -22,7 +22,6 @@ namespace OSBase.Modules {
         private TeamInfo ctTeam = new TeamInfo("CounterTerrorists");
 
         private Database db = null!;
-        private GameStats? gameStats;
         private int tWins;
         private int ctWins;
 
@@ -45,8 +44,7 @@ namespace OSBase.Modules {
 
             if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
                 createCustomConfigs();
-                LoadConfig();                
-                gameStats = osbase.GetGameStats();
+                LoadConfig();
                 createTables();
                 loadEventHandlers();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
@@ -134,14 +132,7 @@ namespace OSBase.Modules {
         }
         
         private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
-            if ( ! isMatchActive() || gameStats == null ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Match is not active. Not saving stats.");
-                return HookResult.Continue;
-            }
-            checkTeams();
-
             string logtext = $"{tTeam.getTeamName()} [{tWins}]:[{ctWins}] {ctTeam.getTeamName()}";
-
             string query = "INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
             var parameters = new MySqlParameter[] {
                 new MySqlParameter("@logtext", logtext)                
