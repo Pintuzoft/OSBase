@@ -22,9 +22,8 @@ namespace OSBase.Modules {
         private TeamInfo ctTeam = new TeamInfo("CounterTerrorists");
 
         private Database db = null!;
-        private int tWins;
-        private int ctWins;
-
+        private int tWins = 0;
+        private int ctWins = 0;
         private int roundNum = 0;
 
         public void Load(OSBase inOsbase, Config inConfig) {
@@ -101,19 +100,12 @@ namespace OSBase.Modules {
 
         private void loadEventHandlers() {
             if(osbase == null) return;
-            osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase?.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
             osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase?.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
         }
 
-        private void OnMapStart(string mapName) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Map started: {mapName}");
-            this.tWins = 0;
-            this.ctWins = 0;
-            this.roundNum = 0;
-        }
 
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
             if (isWarmup()) return HookResult.Continue;
