@@ -103,6 +103,7 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventPlayerTeam>(onPlayerTeam);
             osbase?.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+            osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
         }
 
@@ -125,9 +126,9 @@ namespace OSBase.Modules {
 
         private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime started.");
-            int buf = tWins;
-            tWins = ctWins;
-            ctWins = buf;
+            int buf = this.tWins;
+            this.tWins = this.ctWins;
+            this.ctWins = buf;
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tWins} CT: {ctWins}");
             return HookResult.Continue;
         }
