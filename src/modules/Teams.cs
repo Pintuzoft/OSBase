@@ -103,7 +103,6 @@ namespace OSBase.Modules {
             if(osbase == null) return;
             osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase?.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
-            osbase?.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
             osbase?.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
@@ -117,18 +116,31 @@ namespace OSBase.Modules {
         }
 
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if (isWarmup()) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended during warmup. Ignoring.");
-                return HookResult.Continue;
-            }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round ended. Winner: {eventInfo.Winner}");
-            if (eventInfo.Winner == TEAM_T) {
-                tWins++;
-            } else {
-                ctWins++;
-            }
+            if (isWarmup()) return HookResult.Continue;
+
+            if (eventInfo.Winner == TEAM_T) tWins++;
+            else if (eventInfo.Winner == TEAM_CT) ctWins++;
+
             roundNum++;
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Round: {roundNum} T: {tWins} CT: {ctWins}");
+
+            // Kolla om matchen är slut (efter 30 rundor t.ex. eller 16 vinster)
+            if (tWins >= 2 || ctWins >= 2 || roundNum >= 2) {
+                string logtext = $"{tTeam.getTeamName()} [{tWins}]:[{ctWins}] {ctTeam.getTeamName()}";
+                string query = "INSERT INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
+                var parameters = new MySqlParameter[] {
+                    new MySqlParameter("@logtext", logtext)
+                };
+
+                try {
+                    db.insert(query, parameters);
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Logged final result: {logtext}");
+                } catch (Exception e) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - DB insert failed: {e.Message}");
+                }
+            }
+
             return HookResult.Continue;
         }
 
@@ -147,27 +159,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
         
-        private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
-            // Spara teamnamn och poäng innan något hinner ändras
-            string teamTName = tTeam.getTeamName();
-            string teamCTName = ctTeam.getTeamName();
-            int teamTWins = tWins;
-            int teamCTWins = ctWins;
 
-            string logtext = $"{teamTName} [{teamTWins}]:[{teamCTWins}] {teamCTName}";
-            string query = "INSERT INTO teams_match_log (matchlog, datestr) VALUES (@logtext, NOW());";
-            var parameters = new MySqlParameter[] {
-                new MySqlParameter("@logtext", logtext)
-            };
-
-            try {
-                this.db.insert(query, parameters);
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Inserted stats for match: {logtext}");
-            } catch (Exception e) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
-            }
-            return HookResult.Continue;
-        }
 
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Warmup ended.");
