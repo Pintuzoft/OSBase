@@ -108,8 +108,6 @@ namespace OSBase.Modules {
 
 
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if (isWarmup()) return HookResult.Continue;
-
             if (eventInfo.Winner == TEAM_T) tWins++;
             else if (eventInfo.Winner == TEAM_CT) ctWins++;
 
