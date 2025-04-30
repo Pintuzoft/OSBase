@@ -20,7 +20,8 @@ namespace OSBase.Modules {
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
         private TeamInfo tTeam = new TeamInfo("Terrorists");
         private TeamInfo ctTeam = new TeamInfo("CounterTerrorists");
-
+        private bool halftimeSwapped = false;
+        
         private Database db = null!;
 
         public void Load(OSBase inOsbase, Config inConfig) {
@@ -99,14 +100,26 @@ namespace OSBase.Modules {
             osbase?.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
             osbase?.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase?.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
-            osbase?.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
         }
 
         private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            if (eventInfo.Winner == TEAM_T) tTeam.incWins();
-            else if (eventInfo.Winner == TEAM_CT) ctTeam.incWins();
+            if (eventInfo.Winner == TEAM_T)
+                tTeam.incWins();
+            else if (eventInfo.Winner == TEAM_CT)
+                ctTeam.incWins();
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tTeam.getWins()} CT: {ctTeam.getWins()}");
+
+            // Manuell halftime-swap efter 12 vinster totalt
+            if (!halftimeSwapped && (tTeam.getWins() + ctTeam.getWins() >= 12)) {
+                halftimeSwapped = true;
+
+                var tmp = tTeam;
+                tTeam = ctTeam;
+                ctTeam = tmp;
+
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime swap triggered.");
+            }
 
             return HookResult.Continue;
         }
@@ -127,16 +140,6 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime started.");
-
-            var tmp = tTeam;
-            tTeam = ctTeam;
-            ctTeam = tmp;
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T: {tTeam.getWins()} CT: {ctTeam.getWins()}");
-            return HookResult.Continue;
-        }
         private HookResult OnPlayerTeam (EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
             if ( ! isMatchActive() ) {
                 osbase?.AddTimer(0.5f, () => {
