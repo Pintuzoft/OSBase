@@ -43,7 +43,6 @@ public class TeamDamage : IModule {
     private void loadEventHandlers() {
         if(osbase == null) return;
         osbase.RegisterEventHandler<EventPlayerHurt>(onPlayerHurt);
-        osbase.RegisterEventHandler<EventPlayerDeath>(onPlayerDeath);
     }
 
     /* PLAYER HURT */
@@ -64,28 +63,6 @@ public class TeamDamage : IModule {
                 osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
                 Server.PrintToChatAll($"[TeamDamage] {attacker.PlayerName} hurt {victim.PlayerName}");
         }
-        
-        return HookResult.Continue;
-    }
-
-    /* PLAYER DEATH */  
-    private HookResult onPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-//      if (eventInfo.DmgHealth == 0) 
-//          return HookResult.Continue;
-        
-//        var attacker = eventInfo.Attacker;
-//      var victim = eventInfo.Userid;
-//
-//      if (attacker != null && 
-//          victim != null &&
-//          attacker.Team == victim.Team) {
-//              if ( attacker == victim ) {
-//                  return HookResult.Continue;
-//              }
-//              osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
-//              Server.PrintToChatAll($"[TeamKill] {attacker.PlayerName} killed {victim.PlayerName}");
-//              attacker.PrintToCenterAlert($"!![TeamKill] You killed {victim.PlayerName}!!");
-//      }
         
         return HookResult.Continue;
     }
