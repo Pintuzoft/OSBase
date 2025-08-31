@@ -61,7 +61,7 @@ public class TeamDamage : IModule {
                 if ( attacker == victim ) {
                     return HookResult.Continue;
                 }
-                osbase?.SendCommand($"css_slap #{attacker.UserId} {eventInfo.DmgHealth}");
+                osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
                 Server.PrintToChatAll($"[TeamDamage] {attacker.PlayerName} hurt {victim.PlayerName}");
         }
         
@@ -83,7 +83,7 @@ public class TeamDamage : IModule {
                 if ( attacker == victim ) {
                     return HookResult.Continue;
                 }
-                osbase?.SendCommand($"css_slap #{attacker.UserId} {eventInfo.DmgHealth}");
+                osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
                 Server.PrintToChatAll($"[TeamKill] {attacker.PlayerName} killed {victim.PlayerName}");
                 attacker.PrintToCenterAlert($"!![TeamKill] You killed {victim.PlayerName}!!");
         }
