@@ -73,21 +73,19 @@ public class TeamDamage : IModule {
         if (eventInfo.DmgHealth == 0) 
             return HookResult.Continue;
         
-        return HookResult.Continue;
-        
-        var attacker = eventInfo.Attacker;
-        var victim = eventInfo.Userid;
-
-        if (attacker != null && 
-            victim != null &&
-            attacker.Team == victim.Team) {
-                if ( attacker == victim ) {
-                    return HookResult.Continue;
-                }
-                osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
-                Server.PrintToChatAll($"[TeamKill] {attacker.PlayerName} killed {victim.PlayerName}");
-                attacker.PrintToCenterAlert($"!![TeamKill] You killed {victim.PlayerName}!!");
-        }
+//        var attacker = eventInfo.Attacker;
+//      var victim = eventInfo.Userid;
+//
+//      if (attacker != null && 
+//          victim != null &&
+//          attacker.Team == victim.Team) {
+//              if ( attacker == victim ) {
+//                  return HookResult.Continue;
+//              }
+//              osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
+//              Server.PrintToChatAll($"[TeamKill] {attacker.PlayerName} killed {victim.PlayerName}");
+//              attacker.PrintToCenterAlert($"!![TeamKill] You killed {victim.PlayerName}!!");
+//      }
         
         return HookResult.Continue;
     }
