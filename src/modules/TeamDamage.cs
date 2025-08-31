@@ -73,7 +73,8 @@ public class TeamDamage : IModule {
         if (eventInfo.DmgHealth == 0) 
             return HookResult.Continue;
         
-
+        return HookResult.Continue;
+        
         var attacker = eventInfo.Attacker;
         var victim = eventInfo.Userid;
 
