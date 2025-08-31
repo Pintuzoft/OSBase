@@ -70,8 +70,8 @@ public class TeamDamage : IModule {
 
     /* PLAYER DEATH */  
     private HookResult onPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        if (eventInfo.DmgHealth == 0) 
-            return HookResult.Continue;
+//      if (eventInfo.DmgHealth == 0) 
+//          return HookResult.Continue;
         
 //        var attacker = eventInfo.Attacker;
 //      var victim = eventInfo.Userid;
