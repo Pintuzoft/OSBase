@@ -47,22 +47,32 @@ public class TeamDamage : IModule {
 
     /* PLAYER HURT */
     private HookResult onPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 0:");
         if (eventInfo.DmgHealth == 0) 
             return HookResult.Continue;
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 1:");
         
 
         var attacker = eventInfo.Attacker;
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 2:");
         var victim = eventInfo.Userid;
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 3:");
 
         if (attacker != null && 
             victim != null &&
             attacker.Team == victim.Team) {
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 4:");
                 if ( attacker == victim ) {
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 5:");
                     return HookResult.Continue;
                 }
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 6:");
                 osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 7:");
                 Server.PrintToChatAll($"[TeamDamage] {attacker.PlayerName} hurt {victim.PlayerName}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 8:");
         }
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 9:");
         
         return HookResult.Continue;
     }
