@@ -67,7 +67,15 @@ public class TeamDamage : IModule {
                     return HookResult.Continue;
                 }
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 6:");
-                osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
+
+                // ONLY CHANGE: cap slap damage so attacker can't go below 0 HP
+                int attackerHp = System.Math.Max(0, attacker.Health);
+                int slapDmg = System.Math.Min(eventInfo.DmgHealth, attackerHp);
+                if (slapDmg <= 0)
+                    return HookResult.Continue;
+
+                osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {slapDmg}");
+
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 7:");
                 Server.PrintToChatAll($"[TeamDamage] {attacker.PlayerName} hurt {victim.PlayerName}");
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] 8:");
