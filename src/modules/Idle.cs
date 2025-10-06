@@ -2,139 +2,209 @@ using System;
 using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules;
 
 public class Idle : IModule {
     public string ModuleName => "idle";
+
     private OSBase? osbase;
     private Config? config;
 
-    // state
+    // --- state ---
+    private bool enabled = false;
     private readonly Dictionary<uint, PlayerData> tracked = new();
+
+    // --- config values (with defaults) ---
     private float checkInterval = 10f;
     private float moveThreshold = 5f;
-    private int warnAfter = 3;
-    private int moveAfter = 6;
+    private int   warnAfter     = 3;
+    private int   moveAfter     = 6;
+    private bool  debug         = true; // default verbose; can turn off in idle.cfg
 
     private class PlayerData { public Vector? Origin; public int StillCount; }
 
+    // ---------- helpers ----------
+    private void D(string msg) { if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {msg}"); }
+    private void E(string msg) { Console.WriteLine($"[ERROR] OSBase[{ModuleName}] {msg}"); }
+
+    // ---------- entry ----------
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
 
-        // Default OFF (mirrors your Welcome style)
-        config.RegisterGlobalConfigValue($"{ModuleName}", "0");
+        // Default OFF (do not touch anything unless explicitly enabled)
+        config.RegisterGlobalConfigValue(ModuleName, "0");
 
-        if (osbase == null) { Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null."); return; }
-        if (config == null) { Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null."); return; }
+        if (osbase == null || config == null) { E("null refs in Load()"); return; }
 
-        // Respect toggle exactly like Welcome does
-        if (config.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
-            createCustomConfigs();
-            loadEventHandlers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (interval={checkInterval}s).");
-        } else {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in OSBase.cfg.");
-        }
+        var toggle = config.GetGlobalConfigValue(ModuleName, "0");
+        D($"Load(): toggle='{toggle}' (expect '1' to enable)");
+
+        if (toggle != "1") { D("Disabled via OSBase.cfg → returning early. No handlers, no timers."); return; }
+        enabled = true;
+
+        CreateAndParseModuleConfig();
+        StartLoop();
+        D("Loaded successfully; loop scheduled.");
     }
 
-    private void createCustomConfigs() {
-        if (config == null) return;
+    // ---------- config ----------
+    private void CreateAndParseModuleConfig() {
+        if (config == null) { E("config null in CreateAndParseModuleConfig"); return; }
+
+        // Write a minimal cfg if missing
         config.CreateCustomConfig("idle.cfg",
             "// Idle module configuration\n" +
+            "// check_interval: seconds between checks\n" +
+            "// move_threshold: distance to count as movement\n" +
+            "// warn_after    : consecutive idle checks before warning\n" +
+            "// move_after    : consecutive idle checks before move to spec\n" +
+            "// debug         : 1=verbose logs, 0=silent\n" +
             "check_interval=10\n" +
             "move_threshold=5\n" +
             "warn_after=3\n" +
-            "move_after=6\n"
+            "move_after=6\n" +
+            "debug=1\n"
         );
+
+        D("Parsing idle.cfg...");
         foreach (var line in config.FetchCustomConfig("idle.cfg") ?? new List<string>()) {
-            if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("//")) continue;
-            var kv = line.Split('=', 2, StringSplitOptions.TrimEntries);
-            if (kv.Length != 2) continue;
-            switch (kv[0].ToLowerInvariant()) {
-                case "check_interval": float.TryParse(kv[1], out checkInterval); break;
-                case "move_threshold": float.TryParse(kv[1], out moveThreshold); break;
-                case "warn_after":     int.TryParse(kv[1], out warnAfter); break;
-                case "move_after":     int.TryParse(kv[1], out moveAfter); break;
+            var raw = line?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(raw) || raw.StartsWith("//")) continue;
+
+            var kv = raw.Split('=', 2, StringSplitOptions.TrimEntries);
+            if (kv.Length != 2) { D($"Skip unparsable line: '{raw}'"); continue; }
+
+            var k = kv[0].ToLowerInvariant();
+            var v = kv[1];
+
+            switch (k) {
+                case "check_interval":
+                    if (float.TryParse(v, out var ci)) { checkInterval = ci; D($"cfg check_interval={checkInterval}"); }
+                    else D($"cfg check_interval invalid '{v}', keep {checkInterval}");
+                    break;
+
+                case "move_threshold":
+                    if (float.TryParse(v, out var mt)) { moveThreshold = mt; D($"cfg move_threshold={moveThreshold}"); }
+                    else D($"cfg move_threshold invalid '{v}', keep {moveThreshold}");
+                    break;
+
+                case "warn_after":
+                    if (int.TryParse(v, out var wa)) { warnAfter = wa; D($"cfg warn_after={warnAfter}"); }
+                    else D($"cfg warn_after invalid '{v}', keep {warnAfter}");
+                    break;
+
+                case "move_after":
+                    if (int.TryParse(v, out var ma)) { moveAfter = ma; D($"cfg move_after={moveAfter}"); }
+                    else D($"cfg move_after invalid '{v}', keep {moveAfter}");
+                    break;
+
+                case "debug":
+                    debug = v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase);
+                    D($"cfg debug={(debug ? 1 : 0)}");
+                    break;
+
+                default:
+                    D($"cfg unknown key '{k}' (value '{v}')");
+                    break;
             }
+        }
+
+        if (moveAfter < warnAfter) {
+            D($"cfg move_after({moveAfter}) < warn_after({warnAfter}) → adjusting move_after=warn_after");
+            moveAfter = warnAfter;
         }
     }
 
-    private void loadEventHandlers() {
-        if (osbase == null) return;
-
-        osbase.RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
-        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
-
-        // Kick off the recurring loop AFTER server is ready
-        Server.NextFrame(() => osbase!.AddTimer(checkInterval, Tick));
-    }
-
-    private HookResult OnMapTransition(EventMapTransition _, GameEventInfo __) {
-        tracked.Clear();
-        return HookResult.Continue;
-    }
-
-    private HookResult OnPlayerSpawn(EventPlayerSpawn e, GameEventInfo __) {
-        var p = e.Userid;
-        if (p == null || !p.IsValid || p.IsBot) return HookResult.Continue;
-
-        // Defer to next frame so pawn/scene node exists
+    // ---------- loop ----------
+    private void StartLoop() {
+        if (osbase == null) { E("osbase null in StartLoop"); return; }
         Server.NextFrame(() => {
-            try {
-                if (p == null || !p.IsValid || p.IsBot || p.TeamNum < 2) return;
-                if (p.LifeState != (byte)LifeState_t.LIFE_ALIVE) return;
-
-                var origin = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
-                if (origin == null) return;
-
-                tracked[p.Index] = new PlayerData { Origin = origin, StillCount = 0 };
-            } catch (Exception ex) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] deferred spawn: {ex.Message}");
-            }
+            D("Scheduling first Tick()");
+            osbase.AddTimer(checkInterval, Tick);
         });
-
-        return HookResult.Continue;
     }
 
-    // Self-rescheduling heartbeat
     private void Tick() {
-        try { CheckPlayers(); }
-        catch (Exception ex) { Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Tick: {ex.Message}"); }
-        finally { osbase?.AddTimer(checkInterval, Tick); } // <- run again
+        try {
+            if (!enabled) { D("Tick(): not enabled; returning"); return; }
+            D("Tick(): begin");
+            CheckPlayers();
+            D("Tick(): end");
+        }
+        catch (Exception ex) {
+            E($"Tick exception: {ex}");
+        }
+        finally {
+            // re-schedule
+            osbase?.AddTimer(checkInterval, Tick);
+        }
     }
 
+    // ---------- main logic ----------
     private void CheckPlayers() {
-        if (tracked.Count == 0) return;
+        var toForget = new List<uint>();
 
-        var forget = new List<uint>();
-        foreach (var p in Utilities.GetPlayers()) {
-            if (p == null || !p.IsValid || p.IsBot || p.TeamNum < 2) continue;
-            if (!tracked.TryGetValue(p.Index, out var d)) continue;
+        var players = Utilities.GetPlayers();
+        D($"CheckPlayers(): players.Count={players.Count}, tracked.Count={tracked.Count}");
 
+        foreach (var p in players) {
+            if (p == null) { D(" player=null → skip"); continue; }
+            if (!p.IsValid) { D($" player[{p.Index}] invalid → skip"); continue; }
+            if (p.IsBot) { D($" player[{p.Index}] is bot → skip"); continue; }
+            if (p.TeamNum < 2) { D($" player[{p.Index}] team={p.TeamNum} (spec/unassigned) → skip"); continue; }
+
+            // Lazy init: capture baseline origin only when available & alive
+            if (!tracked.TryGetValue(p.Index, out var data)) {
+                var o0 = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
+                var alive = p.LifeState == (byte)LifeState_t.LIFE_ALIVE;
+                D($" player[{p.Index}] not tracked yet: origin={(o0==null?"null":"ok")}, alive={alive}");
+                if (o0 != null && alive) {
+                    tracked[p.Index] = new PlayerData { Origin = o0, StillCount = 0 };
+                    D($"  → tracked set: origin=({o0.X:F1},{o0.Y:F1},{o0.Z:F1}), StillCount=0");
+                }
+                continue;
+            }
+
+            // Compare current origin
             var o = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
-            if (o == null || d.Origin == null) { forget.Add(p.Index); continue; }
+            if (o == null || data.Origin == null) {
+                D($" player[{p.Index}] origin chain null → forget");
+                toForget.Add(p.Index);
+                continue;
+            }
 
-            var dx = d.Origin.X - o.X; var dy = d.Origin.Y - o.Y; var dz = d.Origin.Z - o.Z;
-            var dist = (float)Math.Sqrt(dx*dx + dy*dy + dz*dz);
+            var dx = data.Origin.X - o.X;
+            var dy = data.Origin.Y - o.Y;
+            var dz = data.Origin.Z - o.Z;
+            var dist = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            D($" player[{p.Index}] dist={dist:F2} (threshold={moveThreshold}) StillCount={data.StillCount}");
 
             if (dist < moveThreshold) {
-                d.StillCount++;
-                if (d.StillCount == warnAfter)
+                data.StillCount++;
+                D($"  → still: StillCount={data.StillCount}");
+
+                if (data.StillCount == warnAfter) {
+                    D("  → WARN");
                     p.PrintToChat($"{ChatColors.Red}[AFK] Move now or you'll be moved soon!");
-                else if (d.StillCount >= moveAfter) {
+                }
+                else if (data.StillCount >= moveAfter) {
+                    D("  → MOVE to spec");
                     Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{p.PlayerName}{ChatColors.Grey} moved to spectators.");
                     p.ChangeTeam(CsTeam.Spectator);
-                    forget.Add(p.Index);
+                    toForget.Add(p.Index); // done tracking
                 }
             } else {
-                // player moved → stop tracking until next spawn
-                forget.Add(p.Index);
+                D("  → moved since baseline → forget until next round/spawn");
+                toForget.Add(p.Index);
             }
         }
-        foreach (var id in forget) tracked.Remove(id);
+
+        if (toForget.Count > 0) {
+            D($"CheckPlayers(): forgetting {toForget.Count} players");
+            foreach (var id in toForget) tracked.Remove(id);
+        }
     }
 }
