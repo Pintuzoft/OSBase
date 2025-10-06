@@ -1,150 +1,36 @@
 using System;
-using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules;
-
 public class Idle : IModule {
     public string ModuleName => "idle";
-
-    private OSBase? osbase;
-    private Config? config;
-
-    // state
-    private readonly Dictionary<uint, int> pending = new();
-    private readonly Dictionary<uint, PlayerData> tracked = new();
-    
-    // config (defaults)
-    private float checkInterval = 10f; // seconds between checks
-    private float moveThreshold = 5f;  // distance to count as movement
-    private int   warnAfter     = 3;   // consecutive idle checks before warn
-    private int   moveAfter     = 6;   // consecutive idle checks before spec
-    private bool  debug         = false;
-
-    private class PlayerData {
-        public Vector? Origin = null;
-        public int StillCount = 0;
+    private OSBase? os;
+    public void Load(OSBase o, Config cfg) {
+        os = o; cfg.RegisterGlobalConfigValue(ModuleName, "0");
+        if (cfg.GetGlobalConfigValue(ModuleName, "0") != "1") return;
+        Server.NextFrame(() => os!.AddTimer(5f, Tick));
+        Console.WriteLine("[DEBUG] OSBase[idle] STEP3 timer scheduled");
     }
-
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-
-        // Default OFF; do nothing unless explicitly enabled
-        config.RegisterGlobalConfigValue(ModuleName, "0");
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1")
-            return;
-
-        // Create & parse idle.cfg
-        config.CreateCustomConfig("idle.cfg",
-            "// Idle module configuration\n" +
-            "check_interval=10\n" +
-            "move_threshold=5\n" +
-            "warn_after=3\n" +
-            "move_after=6\n" +
-            "debug=0\n"
-        );
-        foreach (var raw in config.FetchCustomConfig("idle.cfg") ?? new List<string>()) {
-            var line = raw?.Trim(); if (string.IsNullOrWhiteSpace(line) || line.StartsWith("//")) continue;
-            var kv = line.Split('=', 2, StringSplitOptions.TrimEntries); if (kv.Length != 2) continue;
-            switch (kv[0].ToLowerInvariant()) {
-                case "check_interval": float.TryParse(kv[1], out checkInterval); break;
-                case "move_threshold": float.TryParse(kv[1], out moveThreshold); break;
-                case "warn_after":     int.TryParse(kv[1],   out warnAfter);     break;
-                case "move_after":     int.TryParse(kv[1],   out moveAfter);     break;
-                case "debug":          debug = kv[1] == "1" || kv[1].Equals("true", StringComparison.OrdinalIgnoreCase); break;
-            }
-        }
-        if (moveAfter < warnAfter) moveAfter = warnAfter;
-
-        // Start recurring loop after server is ready
-        Server.NextFrame(() => osbase!.AddTimer(checkInterval, Tick));
-        if (debug) Console.WriteLine($"[DEBUG] OSBase[idle] enabled interval={checkInterval}s");
-    }
-
-    // recurring heartbeat
     private void Tick() {
-        try { CheckPlayers(); }
-        catch (Exception ex) { if (debug) Console.WriteLine($"[ERROR] OSBase[idle] {ex}"); }
-        finally { osbase?.AddTimer(checkInterval, Tick); } // re-schedule
-    }
+        try {
+            var list = Utilities.GetPlayers();
+            foreach (var p in list) {
+                if (p == null || !p.IsValid || p.IsBot || p.IsHLTV) continue;
+                if (p.Connected != PlayerConnectedState.PlayerConnected || p.TeamNum < 2) continue;
 
-    private void CheckPlayers() {
-        if (tracked.Count == 0 && !AnyEligiblePlayers()) return;
-
-        var forget = new List<uint>();
-
-        foreach (var p in Utilities.GetPlayers()) {
-            if (p == null || !p.IsValid) continue;
-            if (p.IsHLTV || p.IsBot) continue;
-            if (p.Connected != PlayerConnectedState.PlayerConnected) { 
-                // lose all state if they’re not fully connected
-                tracked.Remove(p.Index);
-                pending.Remove(p.Index);
-                continue;
+                var pawn = p.PlayerPawn?.Value;
+                var node = pawn?.CBodyComponent?.SceneNode;
+                var pos  = node?.AbsOrigin;
+                if (pos != null)
+                    Console.WriteLine($"[DEBUG] OSBase[idle] STEP3 {p.PlayerName} pos=({pos.X:F1},{pos.Y:F1},{pos.Z:F1})");
+                else
+                    Console.WriteLine($"[DEBUG] OSBase[idle] STEP3 {p.PlayerName} pos=null (skip)");
             }
-            if (p.TeamNum < 2) continue;
-            if (p.LifeState != (byte)LifeState_t.LIFE_ALIVE) continue;
-
-            // If not tracked yet, require 1–2 ticks of FULL before touching pawn chain.
-            if (!tracked.TryGetValue(p.Index, out var data)) {
-                var count = 0;
-                pending.TryGetValue(p.Index, out count);
-                if (count < 2) { // 2 ticks ~ 20s if your interval is 10s; tune as desired
-                    pending[p.Index] = count + 1;
-                    continue; // don't touch pawn yet
-                }
-
-                // safe baseline capture (after defer)
-                var origin0 = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
-                if (origin0 == null) continue; // still not safe; try next tick
-                tracked[p.Index] = new PlayerData { Origin = origin0, StillCount = 0 };
-                // once tracked, we can forget the pending counter
-                pending.Remove(p.Index);
-                continue;
-            }
-
-            // already tracked → compare
-            var pos = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
-            if (pos == null || data.Origin == null) { forget.Add(p.Index); continue; }
-
-            var dx = data.Origin.X - pos.X;
-            var dy = data.Origin.Y - pos.Y;
-            var dz = data.Origin.Z - pos.Z;
-            var dist = (float)Math.Sqrt(dx*dx + dy*dy + dz*dz);
-
-            if (dist < moveThreshold) {
-                data.StillCount++;
-                if (data.StillCount == warnAfter) {
-                    p.PrintToChat($"{ChatColors.Red}[AFK] Move now or you'll be moved soon!");
-                } else if (data.StillCount >= moveAfter) {
-                    Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{p.PlayerName}{ChatColors.Grey} moved to spectators.");
-                    p.ChangeTeam(CsTeam.Spectator);
-                    forget.Add(p.Index);
-                }
-            } else {
-                // moved → stop tracking until next spawn/round
-                forget.Add(p.Index);
-            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[idle] STEP3: {ex}");
+        } finally {
+            os?.AddTimer(5f, Tick);
         }
-
-        // cleanup (also clean pending for those we removed)
-        foreach (var id in forget) {
-            tracked.Remove(id);
-            pending.Remove(id);
-        }
-    }
-
-    private static bool AnyEligiblePlayers() {
-        foreach (var p in Utilities.GetPlayers()) {
-            if (p != null && p.IsValid && !p.IsHLTV && !p.IsBot &&
-                p.Connected == PlayerConnectedState.PlayerConnected &&
-                p.TeamNum >= 2 &&
-                p.LifeState == (byte)LifeState_t.LIFE_ALIVE)
-                return true;
-        }
-        return false;
     }
 }
