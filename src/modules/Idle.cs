@@ -10,14 +10,17 @@ namespace OSBase.Modules;
 public class Idle : IModule {
     public string ModuleName => "idle";
 
+    private const int TEAM_T  = (int)CsTeam.Terrorist;
+    private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
+
     private OSBase? osbase;
     private Config? config;
 
     // cfg
-    private float checkInterval = 10f;
-    private float moveThreshold = 5f;
-    private int   warnAfter     = 3;
-    private int   moveAfter     = 6;
+    private float checkInterval = 10f; // seconds between checks
+    private float moveThreshold = 5f;  // units; hashing is quantized by this
+    private int   warnAfter     = 3;   // equal-hash checks before warn
+    private int   moveAfter     = 6;   // equal-hash checks before move
     private bool  debug         = false;
 
     // state
@@ -25,7 +28,7 @@ public class Idle : IModule {
     private bool roundActive = false;
 
     private class PlayerData {
-        public Vector Origin { get; set; } = new Vector(); // initialized
+        public int LastHash { get; set; }
         public int StillCount { get; set; }
         public bool HasBaseline { get; set; }
     }
@@ -43,9 +46,7 @@ public class Idle : IModule {
 
         CreateCustomConfigs();
         LoadEventHandlers();
-
-        // start loop
-        Server.NextFrame(() => osbase!.AddTimer(checkInterval, Tick));
+        osbase!.AddTimer(checkInterval, Tick);
 
         if (debug)
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (interval={checkInterval}s thr={moveThreshold} warn={warnAfter} move={moveAfter})");
@@ -82,51 +83,19 @@ public class Idle : IModule {
 
     private void LoadEventHandlers() {
         if (osbase == null) return;
-
         osbase.RegisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEnd);
         osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-        osbase.RegisterEventHandler<EventMapTransition>((_, __) => {
-            tracked.Clear();
-            roundActive = false;
-            if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] map transition → cleared state");
-            return HookResult.Continue;
-        });
     }
 
     private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd _, GameEventInfo __) {
         roundActive = true;
         tracked.Clear();
-
-        var players = Utilities.GetPlayers();
-        foreach (var p in players) {
-            if (p == null || !p.IsValid || p.IsHLTV || p.IsBot) continue;
-            if (p.Connected != PlayerConnectedState.PlayerConnected) continue;
-            if (p.TeamNum < 2) continue;
-
-            var pawnHandle = p.PlayerPawn;
-            if (pawnHandle == null || !pawnHandle.IsValid) continue;
-
-            var pawn = pawnHandle.Value;
-            if (pawn == null) continue;
-            if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE) continue;
-
-            // AbsOrigin is valid for an alive pawn; use null-forgiving to silence analyzer.
-            var pos = pawn.AbsOrigin!;
-            tracked[p.Index] = new PlayerData {
-                Origin = new Vector(pos.X, pos.Y, pos.Z),
-                StillCount = 0,
-                HasBaseline = true
-            };
-        }
-
-        if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] baselines snapshotted: {tracked.Count}");
         return HookResult.Continue;
     }
 
     private HookResult OnRoundEnd(EventRoundEnd _, GameEventInfo __) {
         roundActive = false;
         tracked.Clear();
-        if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] round end → cleared baselines");
         return HookResult.Continue;
     }
 
@@ -140,55 +109,86 @@ public class Idle : IModule {
         }
     }
 
+    // Safe position getter with no nullable returns.
+    // Returns true + pos when player is a valid alive human on T/CT, else false.
+    private static bool TryGetPosition(CCSPlayerController player, out Vector pos) {
+        pos = new Vector();
+
+        if (player == null || !player.IsValid) return false;
+        if (player.IsHLTV || player.IsBot) return false;
+        if (player.Connected != PlayerConnectedState.PlayerConnected) return false;
+        if (player.TeamNum < 2) return false;
+
+        var pawnHandle = player.PlayerPawn;
+        if (pawnHandle == null || !pawnHandle.IsValid) return false;
+
+        var pawn = pawnHandle.Value;
+        if (pawn == null) return false;
+        if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE) return false;
+
+        // AbsOrigin is valid for an alive pawn; null-forgiving keeps the compiler happy.
+        var abs = pawn.AbsOrigin!;
+        pos = new Vector(abs.X, abs.Y, abs.Z);
+        return true;
+    }
+
+    // Integer spatial hash with quantization by moveThreshold
+    private int HashPosition(Vector v) {
+        float scale = moveThreshold <= 0f ? 1f : moveThreshold; // avoid div by zero
+        int qx = (int)MathF.Round(v.X / scale);
+        int qy = (int)MathF.Round(v.Y / scale);
+        int qz = (int)MathF.Round(v.Z / scale);
+
+        // mix with big primes
+        return (qx * 73856093) ^ (qy * 19349663) ^ (qz * 83492791);
+    }
+
     private void CheckPlayers() {
-        if (tracked.Count == 0) return;
+        var playersList = Utilities.GetPlayers();
+        if (playersList == null) return;
 
-        var forget = new List<uint>();
-        var players = Utilities.GetPlayers();
+        foreach (var player in playersList) {
+            if (player == null || !player.IsValid) continue;
+            if (player.IsHLTV || player.IsBot) continue;
+            if (player.Connected != PlayerConnectedState.PlayerConnected) continue;
+            if (player.TeamNum != TEAM_T && player.TeamNum != TEAM_CT) continue;
 
-        foreach (var p in players) {
-            if (p == null || !p.IsValid || p.IsHLTV || p.IsBot) continue;
-            if (p.Connected != PlayerConnectedState.PlayerConnected) continue;
-            if (p.TeamNum < 2) continue;
+            if (!TryGetPosition(player, out var pos)) {
+                // not alive/ready; stop tracking if we had them
+                tracked.Remove(player.Index);
+                continue;
+            }
 
-            var pawnHandle = p.PlayerPawn;
-            if (pawnHandle == null || !pawnHandle.IsValid) { forget.Add(p.Index); continue; }
+            int newHash = HashPosition(pos);
 
-            var pawn = pawnHandle.Value;
-            if (pawn == null) { forget.Add(p.Index); continue; }
-            if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE) { forget.Add(p.Index); continue; }
+            if (!tracked.TryGetValue(player.Index, out var data) || !data.HasBaseline) {
+                tracked[player.Index] = new PlayerData {
+                    LastHash = newHash,
+                    StillCount = 0,
+                    HasBaseline = true
+                };
+                if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] baseline set for {player.PlayerName ?? "Unknown"} h={newHash}");
+                continue;
+            }
 
-            if (!tracked.TryGetValue(p.Index, out var data)) continue;
-            if (!data.HasBaseline) continue;
-
-            var basePos = data.Origin;           // initialized
-            var curPos  = pawn.AbsOrigin!;       // assert non-null for alive pawn
-
-            var dx = basePos.X - curPos.X;
-            var dy = basePos.Y - curPos.Y;
-            var dz = basePos.Z - curPos.Z;
-            var dist = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
-
-            if (dist < moveThreshold) {
+            if (data.LastHash == newHash) {
                 data.StillCount++;
+                if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName ?? "Unknown"} still={data.StillCount} hash={newHash}");
 
                 if (data.StillCount == warnAfter) {
-                    p.PrintToChat($"{ChatColors.Red}[AFK]{ChatColors.Default} Move now or you'll be moved to spectators!");
+                    player.PrintToChat($"{ChatColors.Red}[AFK]{ChatColors.Default} Move now or you'll be moved!");
                 } else if (data.StillCount >= moveAfter) {
-                    var name = p.PlayerName ?? "Player";
+                    var name = player.PlayerName ?? "Player";
                     Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{name}{ChatColors.Grey} moved to spectators.");
-                    p.ChangeTeam(CsTeam.Spectator);
-                    forget.Add(p.Index);
+                    player.ChangeTeam(CsTeam.Spectator);
+                    tracked.Remove(player.Index); // forget after action
                 }
             } else {
-                // moved → stop tracking this round
-                forget.Add(p.Index);
+                // moved → reset baseline + counter
+                data.LastHash = newHash;
+                data.StillCount = 0;
+                if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName ?? "Unknown"} moved -> hash={newHash}");
             }
-        }
-
-        if (forget.Count > 0) {
-            foreach (var id in forget)
-                tracked.Remove(id);
         }
     }
 }
