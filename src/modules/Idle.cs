@@ -1,9 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Cvars;
+using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
+using System.Reflection;
 
 namespace OSBase.Modules;
 
@@ -11,28 +16,67 @@ public class Idle : IModule {
     public string ModuleName => "idle";
     private OSBase? osbase;
     private Config? config;
-    private readonly Dictionary<uint, PlayerData> tracked = new();
 
+    // state
+    private readonly Dictionary<uint, PlayerData> tracked = new();
     private float checkInterval = 10f;
     private float moveThreshold = 5f;
     private int warnAfter = 3;
     private int moveAfter = 6;
 
-    private class PlayerData { public Vector? Origin; public int StillCount; }
+    private class PlayerData {
+        public Vector? Origin;
+        public int StillCount;
+    }
 
-    public void Load(OSBase os, Config cfg) {
-        osbase = os; config = cfg;
-        cfg.RegisterGlobalConfigValue(ModuleName, "1");
-        if (cfg.GetGlobalConfigValue(ModuleName, "0") != "1") { Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled."); return; }
+    public void Load(OSBase inOsbase, Config inConfig) {
+        osbase = inOsbase;
+        config = inConfig;
 
-        // ensure config exists, then parse it
-        cfg.CreateCustomConfig($"{ModuleName}.cfg",
-            "// Idle configuration\ncheck_interval=10\nmove_threshold=5\nwarn_after=3\nmove_after=6\n");
-        var lines = cfg.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
-        foreach (var line in lines) {
-            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("//")) continue;
+        // Global toggle in OSBase.cfg
+        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
+
+        if (osbase == null) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
+            return;
+        } else if (config == null) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
+            return;
+        }
+
+        var raw = config.GetGlobalConfigValue($"{ModuleName}", "0")?.Trim().Trim('=', ' ');
+        if (!string.Equals(raw, "1", StringComparison.Ordinal)) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
+            return;
+        }
+
+        createCustomConfigs();
+        loadEventHandlers();
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully! (interval={checkInterval}s)");
+    }
+
+    private void createCustomConfigs() {
+        if (config == null) return;
+
+        // Own config file: idle.cfg
+        config.CreateCustomConfig("idle.cfg",
+            "// Idle module configuration\n" +
+            "// check_interval = seconds between checks\n" +
+            "// move_threshold = distance in units to count as movement\n" +
+            "// warn_after     = consecutive idle checks before warning\n" +
+            "// move_after     = consecutive idle checks before move to spec\n" +
+            "check_interval=10\n" +
+            "move_threshold=5\n" +
+            "warn_after=3\n" +
+            "move_after=6\n"
+        );
+
+        // Parse key=value pairs from idle.cfg
+        foreach (var line in config.FetchCustomConfig("idle.cfg") ?? new List<string>()) {
+            if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("//")) continue;
             var kv = line.Split('=', 2, StringSplitOptions.TrimEntries);
             if (kv.Length != 2) continue;
+
             switch (kv[0].ToLowerInvariant()) {
                 case "check_interval": if (!float.TryParse(kv[1], out checkInterval)) checkInterval = 10f; break;
                 case "move_threshold": if (!float.TryParse(kv[1], out moveThreshold)) moveThreshold = 5f; break;
@@ -40,23 +84,35 @@ public class Idle : IModule {
                 case "move_after":     if (!int.TryParse(kv[1], out moveAfter))       moveAfter = 6; break;
             }
         }
-
-        os.RegisterEventHandler<EventPlayerSpawn>(OnSpawn);
-        os.RegisterEventHandler<EventMapTransition>((_, __) => { tracked.Clear(); return HookResult.Continue; });
-
-        // IMPORTANT: start timer on next frame so the server is fully up
-        Server.NextFrame(() => os.AddTimer(checkInterval, CheckPlayers));
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (interval={checkInterval}s).");
     }
 
-    private HookResult OnSpawn(EventPlayerSpawn e, GameEventInfo _) {
-        var p = e.Userid;
-        if (p == null || !p.IsValid || p.IsBot) return HookResult.Continue;
-        tracked[p.Index] = new PlayerData {
-            Origin = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin,
-            StillCount = 0
-        };
+    private void loadEventHandlers() {
+        if (osbase == null) return;
+
+        osbase.RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
+        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
+
+        // Start timer on next frame (safer during init)
+        Server.NextFrame(() => osbase.AddTimer(checkInterval, CheckPlayers));
+    }
+
+    private HookResult OnMapTransition(EventMapTransition _, GameEventInfo __) {
+        tracked.Clear();
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerSpawn(EventPlayerSpawn e, GameEventInfo __) {
+        try {
+            var p = e.Userid;
+            if (p == null || !p.IsValid || p.IsBot || p.TeamNum < 2) return HookResult.Continue;
+
+            var origin = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
+            if (origin == null) return HookResult.Continue;
+
+            tracked[p.Index] = new PlayerData { Origin = origin, StillCount = 0 };
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] OnPlayerSpawn: {ex.Message}");
+        }
         return HookResult.Continue;
     }
 
@@ -77,22 +133,22 @@ public class Idle : IModule {
 
                 if (dist < moveThreshold) {
                     d.StillCount++;
-                    if (d.StillCount == warnAfter)
+
+                    if (d.StillCount == warnAfter) {
                         p.PrintToChat($"{ChatColors.Red}[AFK] Move now or you'll be moved soon!");
-                    else if (d.StillCount >= moveAfter) {
-                        Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{p.PlayerName}{ChatColors.Grey} moved to spectators.");
+                    } else if (d.StillCount >= moveAfter) {
+                        Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{p.PlayerName}{ChatColors.Grey} was moved to spectators.");
                         p.ChangeTeam(CsTeam.Spectator);
-                        forget.Add(p.Index);
+                        forget.Add(p.Index); // stop tracking after move
                     }
                 } else {
-                    // moved → stop tracking until next spawn
+                    // Player moved → stop tracking; they’ll be retracked next spawn
                     forget.Add(p.Index);
                 }
             }
             foreach (var id in forget) tracked.Remove(id);
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] CheckPlayers exception: {ex.Message}");
-            // swallow to avoid killing server
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] CheckPlayers: {ex.Message}");
         }
     }
 }

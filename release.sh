@@ -43,6 +43,10 @@ cp -r "$BUILD_DIR/"* "$RELEASE_DIR/$PLUGIN_NAME/"
 cp README.md "$RELEASE_DIR/$PLUGIN_NAME/" 2>/dev/null || true
 cp LICENSE "$RELEASE_DIR/$PLUGIN_NAME/" 2>/dev/null || true
 
+# Remove old zip packages
+echo "Removing old release packages..."
+rm -vf OSBase_v*
+
 # Create a zip package
 echo "Creating release package: $PACKAGE_NAME..."
 cd "$RELEASE_DIR"
