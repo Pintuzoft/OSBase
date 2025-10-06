@@ -17,14 +17,15 @@ public class Idle : IModule {
     private Config? config;
 
     // cfg
-    private float checkInterval = 10f; // seconds between checks
+    private float checkInterval = 10f; // seconds
     private float moveThreshold = 5f;  // units; hashing quantizes by this
     private int   warnAfter     = 3;   // equal-hash checks before warn
     private int   moveAfter     = 6;   // equal-hash checks before move
     private bool  debug         = false;
 
     // state
-    private readonly Dictionary<uint, PlayerData> tracked = new();
+    private readonly Dictionary<uint, PlayerData> tracked   = new();
+    private readonly Dictionary<uint, DateTimeOffset> readyAfter = new(); // per-player grace after FULL
     private bool roundActive = false;
     private CounterStrikeSharp.API.Modules.Timers.Timer? loopTimer;
 
@@ -89,8 +90,17 @@ public class Idle : IModule {
         osbase.RegisterEventHandler<EventMapTransition>((_, __) => {
             StopLoop();
             tracked.Clear();
+            readyAfter.Clear();
             roundActive = false;
             if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] map transition → cleared state");
+            return HookResult.Continue;
+        });
+
+        // 5s grace after a client reaches FULL
+        osbase.RegisterEventHandler<EventPlayerConnectFull>((e, __) => {
+            var p = e.Userid;
+            if (p != null && p.IsValid)
+                readyAfter[p.Index] = DateTimeOffset.UtcNow.AddSeconds(5);
             return HookResult.Continue;
         });
     }
@@ -98,7 +108,8 @@ public class Idle : IModule {
     private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd _, GameEventInfo __) {
         roundActive = true;
         tracked.Clear();
-        StartLoop(delay: 1.0f); // start a hair after freeze ends
+        readyAfter.Clear();
+        StartLoop(delay: 1.0f); // start just after freeze ends
         if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] FreezeEnd → loop armed");
         return HookResult.Continue;
     }
@@ -107,6 +118,7 @@ public class Idle : IModule {
         roundActive = false;
         StopLoop();
         tracked.Clear();
+        readyAfter.Clear();
         if (debug) Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] RoundEnd → loop stopped");
         return HookResult.Continue;
     }
@@ -127,9 +139,7 @@ public class Idle : IModule {
 
     private void Tick() {
         try {
-            if (roundActive) {
-                CheckPlayers();
-            }
+            if (roundActive) CheckPlayers();
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] {ex}");
         } finally {
@@ -143,7 +153,20 @@ public class Idle : IModule {
         }
     }
 
-    // Safe position getter with no nullable returns.
+    // Gate: only proceed if at least one alive human exists
+    private static bool AnyAliveHuman() {
+        foreach (var p in Utilities.GetPlayers()) {
+            if (p != null && p.IsValid && !p.IsHLTV && !p.IsBot &&
+                p.Connected == PlayerConnectedState.PlayerConnected &&
+                p.TeamNum >= 2 &&
+                p.PlayerPawn?.Value != null &&
+                p.PlayerPawn.Value.LifeState == (byte)LifeState_t.LIFE_ALIVE)
+                return true;
+        }
+        return false;
+    }
+
+    // Safe position getter with explicit null checks (no analyzer whining).
     private static bool TryGetPosition(CCSPlayerController player, out Vector pos) {
         pos = new Vector();
 
@@ -156,10 +179,11 @@ public class Idle : IModule {
         if (pawnHandle == null || !pawnHandle.IsValid) return false;
 
         var pawn = pawnHandle.Value;
-        if (pawn == null || pawn.AbsOrigin == null) return false;
+        if (pawn == null) return false;
         if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE) return false;
 
         var abs = pawn.AbsOrigin;
+        if (abs == null) return false;
 
         pos = new Vector(abs.X, abs.Y, abs.Z);
         return true;
@@ -167,7 +191,7 @@ public class Idle : IModule {
 
     // Integer spatial hash with quantization by moveThreshold
     private int HashPosition(in Vector v) {
-        float scale = moveThreshold <= 0f ? 1f : moveThreshold;
+        float scale = moveThreshold <= 0f ? 1f : moveThreshold; // avoid div by zero
         int qx = (int)MathF.Round(v.X / scale);
         int qy = (int)MathF.Round(v.Y / scale);
         int qz = (int)MathF.Round(v.Z / scale);
@@ -175,6 +199,9 @@ public class Idle : IModule {
     }
 
     private void CheckPlayers() {
+        // global gate: engine still settling? bail early.
+        if (!AnyAliveHuman()) return;
+
         var players = Utilities.GetPlayers();
         if (players == null || players.Count == 0) return;
 
@@ -184,6 +211,10 @@ public class Idle : IModule {
                 if (player.IsHLTV || player.IsBot) continue;
                 if (player.Connected != PlayerConnectedState.PlayerConnected) continue;
                 if (player.TeamNum != TEAM_T && player.TeamNum != TEAM_CT) continue;
+
+                // per-player grace after FULL
+                if (readyAfter.TryGetValue(player.Index, out var until) && DateTimeOffset.UtcNow < until)
+                    continue;
 
                 if (!TryGetPosition(player, out var pos)) {
                     tracked.Remove(player.Index);
@@ -213,6 +244,7 @@ public class Idle : IModule {
                         Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{name}{ChatColors.Grey} moved to spectators.");
                         player.ChangeTeam(CsTeam.Spectator);
                         tracked.Remove(player.Index);
+                        readyAfter.Remove(player.Index);
                     }
                 } else {
                     data.LastHash = newHash;
