@@ -13,11 +13,11 @@ public class Idle : IModule {
     private OSBase? osbase;
     private Config? config;
 
-    // cfg (idle.cfg)
-    private float checkInterval = 10f; // seconds
-    private float moveThreshold = 5f;  // units; hash quantization
-    private int   warnAfter     = 3;   // unchanged checks before warn
-    private int   moveAfter     = 6;   // unchanged checks before move
+    // cfg
+    private float checkInterval = 10f;
+    private float moveThreshold = 5f;
+    private int warnAfter = 3;
+    private int moveAfter = 6;
 
     // state
     private readonly Dictionary<uint, Tracked> tracked = new();
@@ -33,11 +33,11 @@ public class Idle : IModule {
         osbase = inOsbase;
         config = inConfig;
 
-        // enable/disable via OSBase.cfg; default OFF
+        // default OFF
         config.RegisterGlobalConfigValue(ModuleName, "0");
         if (config.GetGlobalConfigValue(ModuleName, "0") != "1") return;
 
-        // minimal per-module config
+        // per-module config
         config.CreateCustomConfig("idle.cfg",
             "// Idle module\n" +
             "check_interval=10\n" +
@@ -45,6 +45,7 @@ public class Idle : IModule {
             "warn_after=3\n" +
             "move_after=6\n"
         );
+
         foreach (var line in config.FetchCustomConfig("idle.cfg") ?? new List<string>()) {
             var s = line.Trim();
             if (s.Length == 0 || s.StartsWith("//")) continue;
@@ -53,8 +54,8 @@ public class Idle : IModule {
             switch (kv[0].ToLowerInvariant()) {
                 case "check_interval": if (float.TryParse(kv[1], out var ci)) checkInterval = MathF.Max(1f, ci); break;
                 case "move_threshold": if (float.TryParse(kv[1], out var mt)) moveThreshold = MathF.Max(0.1f, mt); break;
-                case "warn_after":     if (int.TryParse(kv[1],   out var wa)) warnAfter = Math.Max(1, wa); break;
-                case "move_after":     if (int.TryParse(kv[1],   out var ma)) moveAfter = Math.Max(warnAfter, ma); break;
+                case "warn_after":     if (int.TryParse(kv[1], out var wa)) warnAfter = Math.Max(1, wa); break;
+                case "move_after":     if (int.TryParse(kv[1], out var ma)) moveAfter = Math.Max(warnAfter, ma); break;
             }
         }
 
@@ -63,20 +64,17 @@ public class Idle : IModule {
         osbase.RegisterEventHandler<EventMapTransition>((_, __) => { StopLoop(); tracked.Clear(); roundActive=false; return HookResult.Continue; });
     }
 
-    // ——— events ———
-
     private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd _, GameEventInfo __) {
         roundActive = true;
         tracked.Clear();
 
-        // snapshot alive humans at freeze end
         foreach (var p in Utilities.GetPlayers()) {
             if (!IsAliveHuman(p)) continue;
             if (!TryGetPos(p!, out var pos)) continue;
             tracked[p!.Index] = new Tracked { BaselineHash = Hash(pos), StillCount = 0 };
         }
 
-        StartLoop(); // first tick after checkInterval
+        StartLoop();
         return HookResult.Continue;
     }
 
@@ -86,8 +84,6 @@ public class Idle : IModule {
         tracked.Clear();
         return HookResult.Continue;
     }
-
-    // ——— loop ———
 
     private void StartLoop() {
         StopLoop();
@@ -119,11 +115,8 @@ public class Idle : IModule {
         }
     }
 
-    // ——— core ———
-
     private void CheckTracked() {
         if (tracked.Count == 0) return;
-
         var players = Utilities.GetPlayers();
         if (players == null || players.Count == 0) return;
 
@@ -139,23 +132,20 @@ public class Idle : IModule {
             if (cur == data.BaselineHash) {
                 data.StillCount++;
                 if (data.StillCount == warnAfter) {
-                    p!.PrintToChat($"{ChatColors.Red}[AFK]{ChatColors.Default} Move now or you'll be moved!");
+                    p!.PrintToChat($"{ChatColors.Orange}[⚠ AFK Warning]{ChatColors.Default} You’re idle! Move now or you'll be {ChatColors.Red}moved to spectators{ChatColors.Default}!");
                 } else if (data.StillCount >= moveAfter) {
                     var name = p!.PlayerName ?? "Player";
-                    Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{name}{ChatColors.Grey} moved to spectators.");
+                    Server.PrintToChatAll($"{ChatColors.Grey}[AFK]{ChatColors.Red} {name} {ChatColors.Grey}was moved to spectators for being idle.");
                     p!.ChangeTeam(CsTeam.Spectator);
                     forget.Add(idx);
                 }
             } else {
-                // player moved ⇒ stop tracking this round
                 forget.Add(idx);
             }
         }
 
         foreach (var i in forget) tracked.Remove(i);
     }
-
-    // ——— helpers ———
 
     private static bool IsAliveHuman(CCSPlayerController? p) {
         if (p == null || !p.IsValid || p.IsHLTV || p.IsBot) return false;
