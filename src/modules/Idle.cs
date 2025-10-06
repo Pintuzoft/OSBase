@@ -13,8 +13,9 @@ public class Idle : IModule {
     private Config? config;
 
     // state
+    private readonly Dictionary<uint, int> pending = new();
     private readonly Dictionary<uint, PlayerData> tracked = new();
-
+    
     // config (defaults)
     private float checkInterval = 10f; // seconds between checks
     private float moveThreshold = 5f;  // distance to count as movement
@@ -78,43 +79,62 @@ public class Idle : IModule {
         foreach (var p in Utilities.GetPlayers()) {
             if (p == null || !p.IsValid) continue;
             if (p.IsHLTV || p.IsBot) continue;
-            if (p.Connected != PlayerConnectedState.PlayerConnected) continue;
+            if (p.Connected != PlayerConnectedState.PlayerConnected) { 
+                // lose all state if they’re not fully connected
+                tracked.Remove(p.Index);
+                pending.Remove(p.Index);
+                continue;
+            }
             if (p.TeamNum < 2) continue;
             if (p.LifeState != (byte)LifeState_t.LIFE_ALIVE) continue;
 
-            var pawn = p.PlayerPawn?.Value;
-            var node = pawn?.CBodyComponent?.SceneNode;
-            var pos  = node?.AbsOrigin;
-            if (pos == null) continue;
-
+            // If not tracked yet, require 1–2 ticks of FULL before touching pawn chain.
             if (!tracked.TryGetValue(p.Index, out var data)) {
-                tracked[p.Index] = new PlayerData { Origin = pos, StillCount = 0 };
+                var count = 0;
+                pending.TryGetValue(p.Index, out count);
+                if (count < 2) { // 2 ticks ~ 20s if your interval is 10s; tune as desired
+                    pending[p.Index] = count + 1;
+                    continue; // don't touch pawn yet
+                }
+
+                // safe baseline capture (after defer)
+                var origin0 = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
+                if (origin0 == null) continue; // still not safe; try next tick
+                tracked[p.Index] = new PlayerData { Origin = origin0, StillCount = 0 };
+                // once tracked, we can forget the pending counter
+                pending.Remove(p.Index);
                 continue;
             }
 
-            // manual distance (Vector.Distance doesn't exist)
-            var dx = data.Origin!.X - pos.X;
-            var dy = data.Origin!.Y - pos.Y;
-            var dz = data.Origin!.Z - pos.Z;
+            // already tracked → compare
+            var pos = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
+            if (pos == null || data.Origin == null) { forget.Add(p.Index); continue; }
+
+            var dx = data.Origin.X - pos.X;
+            var dy = data.Origin.Y - pos.Y;
+            var dz = data.Origin.Z - pos.Z;
             var dist = (float)Math.Sqrt(dx*dx + dy*dy + dz*dz);
 
             if (dist < moveThreshold) {
                 data.StillCount++;
-                if (data.StillCount == warnAfter)
+                if (data.StillCount == warnAfter) {
                     p.PrintToChat($"{ChatColors.Red}[AFK] Move now or you'll be moved soon!");
-                else if (data.StillCount >= moveAfter) {
+                } else if (data.StillCount >= moveAfter) {
                     Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{p.PlayerName}{ChatColors.Grey} moved to spectators.");
                     p.ChangeTeam(CsTeam.Spectator);
                     forget.Add(p.Index);
                 }
             } else {
-                // moved → stop tracking
+                // moved → stop tracking until next spawn/round
                 forget.Add(p.Index);
             }
         }
 
-        foreach (var id in forget)
+        // cleanup (also clean pending for those we removed)
+        foreach (var id in forget) {
             tracked.Remove(id);
+            pending.Remove(id);
+        }
     }
 
     private static bool AnyEligiblePlayers() {
