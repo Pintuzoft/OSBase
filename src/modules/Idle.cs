@@ -74,25 +74,29 @@ public class Idle : IModule {
         if (tracked.Count == 0 && !AnyEligiblePlayers()) return;
 
         var forget = new List<uint>();
+
         foreach (var p in Utilities.GetPlayers()) {
             if (p == null || !p.IsValid) continue;
             if (p.IsHLTV || p.IsBot) continue;
             if (p.Connected != PlayerConnectedState.PlayerConnected) continue;
             if (p.TeamNum < 2) continue;
+            if (p.LifeState != (byte)LifeState_t.LIFE_ALIVE) continue;
 
-            // lazy init baseline
+            var pawn = p.PlayerPawn?.Value;
+            var node = pawn?.CBodyComponent?.SceneNode;
+            var pos  = node?.AbsOrigin;
+            if (pos == null) continue;
+
             if (!tracked.TryGetValue(p.Index, out var data)) {
-                var o0 = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
-                if (o0 != null) tracked[p.Index] = new PlayerData { Origin = o0, StillCount = 0 };
+                tracked[p.Index] = new PlayerData { Origin = pos, StillCount = 0 };
                 continue;
             }
 
-            // compare to baseline
-            var o = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
-            if (o == null || data.Origin == null) { forget.Add(p.Index); continue; }
-
-            var dx = data.Origin.X - o.X; var dy = data.Origin.Y - o.Y; var dz = data.Origin.Z - o.Z;
-            var dist = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            // manual distance (Vector.Distance doesn't exist)
+            var dx = data.Origin!.X - pos.X;
+            var dy = data.Origin!.Y - pos.Y;
+            var dz = data.Origin!.Z - pos.Z;
+            var dist = (float)Math.Sqrt(dx*dx + dy*dy + dz*dz);
 
             if (dist < moveThreshold) {
                 data.StillCount++;
@@ -101,22 +105,24 @@ public class Idle : IModule {
                 else if (data.StillCount >= moveAfter) {
                     Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{p.PlayerName}{ChatColors.Grey} moved to spectators.");
                     p.ChangeTeam(CsTeam.Spectator);
-                    forget.Add(p.Index); // done tracking after move
+                    forget.Add(p.Index);
                 }
             } else {
-                forget.Add(p.Index); // moved → stop tracking until next spawn/round
+                // moved → stop tracking
+                forget.Add(p.Index);
             }
         }
 
-        // cleanup
-        if (forget.Count > 0)
-            foreach (var id in forget) tracked.Remove(id);
+        foreach (var id in forget)
+            tracked.Remove(id);
     }
 
     private static bool AnyEligiblePlayers() {
         foreach (var p in Utilities.GetPlayers()) {
             if (p != null && p.IsValid && !p.IsHLTV && !p.IsBot &&
-                p.Connected == PlayerConnectedState.PlayerConnected && p.TeamNum >= 2)
+                p.Connected == PlayerConnectedState.PlayerConnected &&
+                p.TeamNum >= 2 &&
+                p.LifeState == (byte)LifeState_t.LIFE_ALIVE)
                 return true;
         }
         return false;
