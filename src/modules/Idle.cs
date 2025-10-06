@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Utils;
+using CounterStrikeSharp.API.Modules.Admin;
 
 namespace OSBase.Modules;
 
@@ -146,64 +147,60 @@ public class Idle : IModule {
     // ---------- main logic ----------
     private void CheckPlayers() {
         var toForget = new List<uint>();
-
         var players = Utilities.GetPlayers();
         D($"CheckPlayers(): players.Count={players.Count}, tracked.Count={tracked.Count}");
 
         foreach (var p in players) {
-            if (p == null) { D(" player=null → skip"); continue; }
-            if (!p.IsValid) { D($" player[{p.Index}] invalid → skip"); continue; }
-            if (p.IsBot) { D($" player[{p.Index}] is bot → skip"); continue; }
-            if (p.TeamNum < 2) { D($" player[{p.Index}] team={p.TeamNum} (spec/unassigned) → skip"); continue; }
+            if (p == null) { D("  player=null → skip"); continue; }
+            if (!p.IsValid) { D($"  player[{p.Index}] invalid → skip"); continue; }
 
-            // Lazy init: capture baseline origin only when available & alive
+            // *** NEW: only process fully connected, non-HLTV humans ***
+            if (p.Connected != PlayerConnectedState.PlayerConnected) {
+                D($"  player[{p.Index}] state={p.Connected} → skip");
+                continue;
+            }
+            if (p.IsHLTV) { D($"  player[{p.Index}] is HLTV → skip"); continue; }
+            if (p.IsBot)  { D($"  player[{p.Index}] is bot → skip");  continue; }
+
+            if (p.TeamNum < 2) { D($"  player[{p.Index}] team={p.TeamNum} (spec/unassigned) → skip"); continue; }
+
+            // LAZY INIT
             if (!tracked.TryGetValue(p.Index, out var data)) {
                 var o0 = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
                 var alive = p.LifeState == (byte)LifeState_t.LIFE_ALIVE;
-                D($" player[{p.Index}] not tracked yet: origin={(o0==null?"null":"ok")}, alive={alive}");
+                D($"  player[{p.Index}] not tracked: origin={(o0==null?"null":"ok")}, alive={alive}");
                 if (o0 != null && alive) {
                     tracked[p.Index] = new PlayerData { Origin = o0, StillCount = 0 };
-                    D($"  → tracked set: origin=({o0.X:F1},{o0.Y:F1},{o0.Z:F1}), StillCount=0");
+                    D($"   → tracked: ({o0.X:F1},{o0.Y:F1},{o0.Z:F1})");
                 }
                 continue;
             }
 
-            // Compare current origin
             var o = p.PlayerPawn?.Value?.CBodyComponent?.SceneNode?.AbsOrigin;
-            if (o == null || data.Origin == null) {
-                D($" player[{p.Index}] origin chain null → forget");
-                toForget.Add(p.Index);
-                continue;
-            }
+            if (o == null || data.Origin == null) { D($"  player[{p.Index}] origin null → forget"); toForget.Add(p.Index); continue; }
 
-            var dx = data.Origin.X - o.X;
-            var dy = data.Origin.Y - o.Y;
-            var dz = data.Origin.Z - o.Z;
-            var dist = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            D($" player[{p.Index}] dist={dist:F2} (threshold={moveThreshold}) StillCount={data.StillCount}");
+            var dx = data.Origin.X - o.X; var dy = data.Origin.Y - o.Y; var dz = data.Origin.Z - o.Z;
+            var dist = (float)Math.Sqrt(dx*dx + dy*dy + dz*dz);
+            D($"  player[{p.Index}] dist={dist:F2} thr={moveThreshold} still={data.StillCount}");
 
             if (dist < moveThreshold) {
                 data.StillCount++;
-                D($"  → still: StillCount={data.StillCount}");
-
                 if (data.StillCount == warnAfter) {
-                    D("  → WARN");
+                    D("   → WARN");
                     p.PrintToChat($"{ChatColors.Red}[AFK] Move now or you'll be moved soon!");
-                }
-                else if (data.StillCount >= moveAfter) {
-                    D("  → MOVE to spec");
+                } else if (data.StillCount >= moveAfter) {
+                    D("   → MOVE to spec");
                     Server.PrintToChatAll($"{ChatColors.Grey}[AFK] {ChatColors.Red}{p.PlayerName}{ChatColors.Grey} moved to spectators.");
                     p.ChangeTeam(CsTeam.Spectator);
-                    toForget.Add(p.Index); // done tracking
+                    toForget.Add(p.Index);
                 }
             } else {
-                D("  → moved since baseline → forget until next round/spawn");
+                D("   → moved → forget");
                 toForget.Add(p.Index);
             }
         }
-
         if (toForget.Count > 0) {
-            D($"CheckPlayers(): forgetting {toForget.Count} players");
+            D($"CheckPlayers(): forgetting {toForget.Count}");
             foreach (var id in toForget) tracked.Remove(id);
         }
     }
