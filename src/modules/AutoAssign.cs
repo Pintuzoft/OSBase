@@ -11,134 +11,153 @@ namespace OSBase.Modules {
         public string ModuleName => "autoassign";
         private OSBase? osbase;
 
-        private const float AssignDelay = 0.20f;
+        private const float AssignDelay = 0.05f;       // small delay for stability
+        private const float CorrectionDelay = 0.12f;   // short correction window
         private static readonly object TeamAssignLock = new();
+
+        // Tracks if warmup is active
+        private bool _warmupActive = true;
 
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
 
-            // default OFF
+            // Default OFF in global config
             inConfig.RegisterGlobalConfigValue($"{ModuleName}", "0");
             if (inConfig.GetGlobalConfigValue($"{ModuleName}", "0") != "1") {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in global config.");
                 return;
             }
 
+            // Main handler
             osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+
+            // Track warmup state
+            osbase.RegisterEventHandler<EventRoundAnnounceWarmup>((ev, info) => {
+                _warmupActive = true;
+                return HookResult.Continue;
+            });
+
+            osbase.RegisterEventHandler<EventRoundStart>((ev, info) => {
+                _warmupActive = false;
+                return HookResult.Continue;
+            });
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (delay={AssignDelay}s).");
         }
 
-        private static bool IsOnPlayableTeam(byte teamNum) {
-            return teamNum == (byte)CsTeam.Terrorist || teamNum == (byte)CsTeam.CounterTerrorist;
+        private static bool Playable(byte t) {
+            return t == (byte)CsTeam.Terrorist || t == (byte)CsTeam.CounterTerrorist;
         }
 
         private HookResult OnPlayerConnectFull(EventPlayerConnectFull ev, GameEventInfo info) {
-            var player = ev.Userid;
-            if (player == null || !player.IsValid || player.IsHLTV || player.IsBot)
+            var p = ev.Userid;
+            if (p == null || !p.IsValid || p.IsHLTV || p.IsBot)
                 return HookResult.Continue;
 
             osbase!.AddTimer(AssignDelay, () => {
                 try {
-                    if (player == null || !player.IsValid || player.IsHLTV || player.IsBot)
+                    if (p == null || !p.IsValid || p.IsHLTV || p.IsBot)
                         return;
 
-                    // If engine already assigned, skip (avoid wrong spawn)
-                    if (IsOnPlayableTeam(player.TeamNum)) {
-                        if (!player.PawnIsAlive)
-                            TryForceSpawn(player);
-                        return;
-                    }
+                    CsTeam finalTeam;
 
                     lock (TeamAssignLock) {
-                        if (player == null || !player.IsValid || player.IsHLTV || player.IsBot) return;
+                        if (p == null || !p.IsValid || p.IsHLTV || p.IsBot)
+                            return;
 
-                        // If already on a team, allow one pre-spawn rebalance
-                        bool alreadyAssigned = IsOnPlayableTeam(player.TeamNum);
+                        // Count all players (include bots for balance)
+                        var all = Utilities.GetPlayers().Where(x => x != null && x.IsValid && !x.IsHLTV);
+                        int ct = all.Count(x => x.TeamNum == (byte)CsTeam.CounterTerrorist);
+                        int tt = all.Count(x => x.TeamNum == (byte)CsTeam.Terrorist);
 
-                        Func<(int ct,int tt)> countNow = () => {
-                            var all = Utilities.GetPlayers().Where(p => p != null && p.IsValid && !p.IsHLTV);
-                            return (all.Count(p => p.TeamNum == (byte)CsTeam.CounterTerrorist),
-                                    all.Count(p => p.TeamNum == (byte)CsTeam.Terrorist));
-                        };
+                        finalTeam = DecideTeam(p.TeamNum, ct, tt);
 
-                        (int ct, int tt) = countNow();
-
-                        CsTeam DecideTarget(byte currentTeam, int ct, int tt, bool treatAsOnTeam) {
-                            // if engine already put them on a team, simulate moving them to the other side
-                            if (treatAsOnTeam) {
-                                bool isCT = currentTeam == (byte)CsTeam.CounterTerrorist;
-                                int stay = Math.Abs(ct - tt);
-                                int swch = isCT ? Math.Abs((ct - 1) - (tt + 1)) : Math.Abs((ct + 1) - (tt - 1));
-                                if (swch < stay) return isCT ? CsTeam.Terrorist : CsTeam.CounterTerrorist;
-                                return isCT ? CsTeam.CounterTerrorist : CsTeam.Terrorist; // “no change” marker
-                            } else {
-                                int diffIfCT = Math.Abs((ct + 1) - tt);
-                                int diffIfT  = Math.Abs(ct - (tt + 1));
-                                if (diffIfCT < diffIfT) return CsTeam.CounterTerrorist;
-                                if (diffIfT  < diffIfCT) return CsTeam.Terrorist;
-                                return (Random.Shared.Next(2) == 0) ? CsTeam.CounterTerrorist : CsTeam.Terrorist;
-                            }
-                        }
-
-                        // Decide (pre-switch) with fresh counts
-                        var target = DecideTarget(player.TeamNum, ct, tt, alreadyAssigned);
-                        bool needSwitch =
-                            !alreadyAssigned ||                     // unassigned -> need a team
-                            (!player.PawnIsAlive &&                 // assigned but pre-spawn -> may rebalance
-                            ((player.TeamNum == (byte)CsTeam.CounterTerrorist && target == CsTeam.Terrorist) ||
-                            (player.TeamNum == (byte)CsTeam.Terrorist && target == CsTeam.CounterTerrorist)));
-
-                        if (needSwitch) {
-                            player.SwitchTeam(target);
-                            string color = (target == CsTeam.CounterTerrorist) ? "\x0B" : "\x02";
-                            player.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{target}\x01 team.");
-                        }
-
-                        // Post-switch verify once after 50 ms (only while pre-spawn)
-                        osbase!.AddTimer(0.05f, () => {
-                            if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) return;
-                            if (player.PawnIsAlive) return; // spawned -> leave it
-
-                            (int ct2, int tt2) = countNow();
-                            // simulate: if flipping again would strictly improve balance, do it once
-                            bool isCT = player.TeamNum == (byte)CsTeam.CounterTerrorist;
-                            int stay = Math.Abs(ct2 - tt2);
-                            int flip = isCT ? Math.Abs((ct2 - 1) - (tt2 + 1)) : Math.Abs((ct2 + 1) - (tt2 - 1));
-                            if (flip < stay) {
-                                var other = isCT ? CsTeam.Terrorist : CsTeam.CounterTerrorist;
-                                player.SwitchTeam(other);
-                                string color2 = (other == CsTeam.CounterTerrorist) ? "\x0B" : "\x02";
-                                player.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color2}{other}\x01 team.");
-                            } else if (!player.PawnIsAlive) {
-                                // still not alive? nudge spawn (warmup edge)
-                                TryForceSpawn(player);
-                            }
-                        });
+                        if ((byte)finalTeam != p.TeamNum)
+                            p.SwitchTeam(finalTeam);
                     }
+
+                    // Small correction pass (pre-spawn only)
+                    osbase!.AddTimer(CorrectionDelay, () => {
+                        try {
+                            if (p == null || !p.IsValid || p.IsHLTV || p.IsBot)
+                                return;
+
+                            if (!p.PawnIsAlive) {
+                                lock (TeamAssignLock) {
+                                    if (p == null || !p.IsValid || p.IsHLTV || p.IsBot)
+                                        return;
+
+                                    var all2 = Utilities.GetPlayers().Where(x => x != null && x.IsValid && !x.IsHLTV);
+                                    int ct2 = all2.Count(x => x.TeamNum == (byte)CsTeam.CounterTerrorist);
+                                    int tt2 = all2.Count(x => x.TeamNum == (byte)CsTeam.Terrorist);
+
+                                    var corrected = DecideTeam(p.TeamNum, ct2, tt2);
+                                    if ((byte)corrected != p.TeamNum)
+                                        p.SwitchTeam(corrected);
+                                }
+                            }
+
+                            // Print only once after correction window
+                            var teamNow = (CsTeam)p.TeamNum;
+                            string color = teamNow == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
+                            p.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{teamNow}\x01 team.");
+
+                            // Only force-spawn during warmup
+                            if (_warmupActive && !p.PawnIsAlive)
+                                TryForceSpawn(p);
+                        } catch { /* ignore */ }
+                    });
                 } catch (Exception ex) {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] team assign failed: {ex.Message}");
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] assign failed: {ex.Message}");
                 }
             });
 
             return HookResult.Continue;
         }
 
+        private static CsTeam DecideTeam(byte current, int ct, int tt) {
+            bool onTeam = Playable(current);
+
+            if (!onTeam) {
+                int dCT = Math.Abs((ct + 1) - tt);
+                int dT = Math.Abs(ct - (tt + 1));
+                if (dCT < dT) return CsTeam.CounterTerrorist;
+                if (dT < dCT) return CsTeam.Terrorist;
+                return (Random.Shared.Next(2) == 0)
+                    ? CsTeam.CounterTerrorist
+                    : CsTeam.Terrorist;
+            } else {
+                bool isCT = current == (byte)CsTeam.CounterTerrorist;
+                int stay = Math.Abs(ct - tt);
+                int swch = isCT
+                    ? Math.Abs((ct - 1) - (tt + 1))
+                    : Math.Abs((ct + 1) - (tt - 1));
+
+                if (swch < stay)
+                    return isCT ? CsTeam.Terrorist : CsTeam.CounterTerrorist;
+
+                return (CsTeam)current;
+            }
+        }
+
         private void TryForceSpawn(CCSPlayerController player) {
-            const int maxTries = 6;
+            if (!_warmupActive)
+                return;
+
+            const int tries = 8;
             const float step = 0.20f;
 
-            for (int i = 1; i <= maxTries; i++) {
-                float delay = i * step;
-                osbase!.AddTimer(delay, () => {
+            for (int i = 1; i <= tries; i++) {
+                float d = i * step;
+                osbase!.AddTimer(d, () => {
+                    if (!_warmupActive)
+                        return;
+
                     if (player == null || !player.IsValid || player.IsBot || player.IsHLTV)
                         return;
 
                     if (!player.PawnIsAlive) {
-                        try {
-                            player.Respawn();
-                        } catch {
-                            // ignore
-                        }
+                        try { player.Respawn(); } catch { /* ignore */ }
                     }
                 });
             }
