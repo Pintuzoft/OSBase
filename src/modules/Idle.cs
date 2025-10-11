@@ -13,11 +13,11 @@ public class Idle : IModule {
     private OSBase? osbase;
     private Config? config;
 
-    // cfg
-    private float checkInterval = 10f;
-    private float moveThreshold = 5f;
-    private int warnAfter = 3;
-    private int moveAfter = 6;
+    // cfg (idle.cfg)
+    private float checkInterval = 10f; // seconds
+    private float moveThreshold = 5f;  // units; hash quantization
+    private int   warnAfter     = 3;   // unchanged checks before warn
+    private int   moveAfter     = 6;   // unchanged checks before action
 
     // state
     private readonly Dictionary<uint, Tracked> tracked = new();
@@ -33,7 +33,7 @@ public class Idle : IModule {
         osbase = inOsbase;
         config = inConfig;
 
-        // default OFF
+        // toggle via OSBase.cfg (default OFF)
         config.RegisterGlobalConfigValue(ModuleName, "0");
         if (config.GetGlobalConfigValue(ModuleName, "0") != "1") return;
 
@@ -45,7 +45,6 @@ public class Idle : IModule {
             "warn_after=3\n" +
             "move_after=6\n"
         );
-
         foreach (var line in config.FetchCustomConfig("idle.cfg") ?? new List<string>()) {
             var s = line.Trim();
             if (s.Length == 0 || s.StartsWith("//")) continue;
@@ -59,22 +58,31 @@ public class Idle : IModule {
             }
         }
 
+        // events
         osbase.RegisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEnd);
         osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-        osbase.RegisterEventHandler<EventMapTransition>((_, __) => { StopLoop(); tracked.Clear(); roundActive=false; return HookResult.Continue; });
+        osbase.RegisterEventHandler<EventMapTransition>((_, __) => {
+            StopLoop();
+            tracked.Clear();
+            roundActive = false;
+            return HookResult.Continue;
+        });
     }
+
+    // === events ===
 
     private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd _, GameEventInfo __) {
         roundActive = true;
         tracked.Clear();
 
+        // snapshot alive humans at freeze end
         foreach (var p in Utilities.GetPlayers()) {
             if (!IsAliveHuman(p)) continue;
             if (!TryGetPos(p!, out var pos)) continue;
             tracked[p!.Index] = new Tracked { BaselineHash = Hash(pos), StillCount = 0 };
         }
 
-        StartLoop();
+        StartLoop(); // first tick after checkInterval
         return HookResult.Continue;
     }
 
@@ -84,6 +92,8 @@ public class Idle : IModule {
         tracked.Clear();
         return HookResult.Continue;
     }
+
+    // === loop ===
 
     private void StartLoop() {
         StopLoop();
@@ -115,8 +125,11 @@ public class Idle : IModule {
         }
     }
 
+    // === core ===
+
     private void CheckTracked() {
         if (tracked.Count == 0) return;
+
         var players = Utilities.GetPlayers();
         if (players == null || players.Count == 0) return;
 
@@ -124,28 +137,50 @@ public class Idle : IModule {
 
         foreach (var (idx, data) in tracked) {
             CCSPlayerController? p = null;
-            foreach (var c in players) { if (c != null && c.IsValid && c.Index == idx) { p = c; break; } }
+            foreach (var c in players) {
+                if (c != null && c.IsValid && c.Index == idx) { p = c; break; }
+            }
             if (!IsAliveHuman(p)) { forget.Add(idx); continue; }
             if (!TryGetPos(p!, out var pos)) { forget.Add(idx); continue; }
 
             var cur = Hash(pos);
             if (cur == data.BaselineHash) {
                 data.StillCount++;
+
                 if (data.StillCount == warnAfter) {
-                    p!.PrintToChat($"{ChatColors.Orange}[⚠ AFK Warning]{ChatColors.Default} You’re idle! Move now or you'll be {ChatColors.Red}moved to spectators{ChatColors.Default}!");
+                    // Yellow reads as "orange" in most HUDs
+                    p!.PrintToChat($"{ChatColors.Yellow}[⚠ AFK Warning]{ChatColors.Default} You’re idle! Move now or you will be {ChatColors.Red}moved to spectators{ChatColors.Default}.");
                 } else if (data.StillCount >= moveAfter) {
                     var name = p!.PlayerName ?? "Player";
-                    Server.PrintToChatAll($"{ChatColors.Grey}[AFK]{ChatColors.Red} {name} {ChatColors.Grey}was moved to spectators for being idle.");
-                    p!.ChangeTeam(CsTeam.Spectator);
+                    // Last-alive check on the player's current team
+                    var teamAlive = AliveHumansOnTeam(p.TeamNum);
+
+                    if (teamAlive <= 1) {
+                        // Last alive → slay AND move to spec (ensures round ends normally)
+                        var pawn = p.PlayerPawn?.Value;
+                        if (pawn != null && pawn.LifeState == (byte)LifeState_t.LIFE_ALIVE) {
+                            pawn.CommitSuicide(false, true);
+                        }
+                        p.ChangeTeam(CsTeam.Spectator);
+                        Server.PrintToChatAll($"{ChatColors.Grey}[AFK]{ChatColors.Yellow} {name}{ChatColors.Default} was last alive, {ChatColors.Red}slain{ChatColors.Default} and moved to spectators for being idle.");
+                    } else {
+                        // Not last alive → move to spectators only
+                        p.ChangeTeam(CsTeam.Spectator);
+                        Server.PrintToChatAll($"{ChatColors.Grey}[AFK]{ChatColors.Red} {name} {ChatColors.Grey}was moved to spectators for being idle.");
+                    }
+
                     forget.Add(idx);
                 }
             } else {
+                // player moved ⇒ stop tracking for the rest of the round
                 forget.Add(idx);
             }
         }
 
         foreach (var i in forget) tracked.Remove(i);
     }
+
+    // === helpers ===
 
     private static bool IsAliveHuman(CCSPlayerController? p) {
         if (p == null || !p.IsValid || p.IsHLTV || p.IsBot) return false;
@@ -173,5 +208,19 @@ public class Idle : IModule {
         int qy = (int)MathF.Round(v.Y / s);
         int qz = (int)MathF.Round(v.Z / s);
         return (qx * 73856093) ^ (qy * 19349663) ^ (qz * 83492791);
+    }
+
+    private static int AliveHumansOnTeam(int teamNum) {
+        int n = 0;
+        foreach (var pl in Utilities.GetPlayers()) {
+            if (pl == null || !pl.IsValid || pl.IsHLTV || pl.IsBot) continue;
+            if (pl.Connected != PlayerConnectedState.PlayerConnected) continue;
+            if (pl.TeamNum != teamNum) continue;
+
+            var ph = pl.PlayerPawn; if (ph == null || !ph.IsValid) continue;
+            var pawn = ph.Value;    if (pawn == null) continue;
+            if (pawn.LifeState == (byte)LifeState_t.LIFE_ALIVE) n++;
+        }
+        return n;
     }
 }
