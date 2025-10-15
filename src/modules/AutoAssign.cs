@@ -12,8 +12,8 @@ namespace OSBase.Modules {
         public string ModuleName => "autoassign";
         private OSBase? osbase;
 
-        private const float AssignDelay = 0.05f;
-        private const float CorrectionDelay = 0.12f;
+        private const float AssignDelay = 0.20f;
+        private const float CorrectionDelay = 0.25f;
         private static readonly object TeamAssignLock = new();
 
         private bool warmupActive = true;
