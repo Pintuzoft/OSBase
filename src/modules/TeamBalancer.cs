@@ -45,7 +45,7 @@ namespace OSBase.Modules {
         private readonly Dictionary<ulong, int> lastMoveRound = new();
 
         // Map metadata
-        private readonly Dictionary<string, int> mapSites = new(StringComparer.OrdinalIgnoreCase);          // de_dust2 -> 2
+        private readonly Dictionary<string, int> mapSites = new(StringComparer.OrdinalIgnoreCase);           // de_dust2 -> 2
         private readonly Dictionary<string, CsTeam> preferSideByMap = new(StringComparer.OrdinalIgnoreCase); // de_lake -> T
 
         // ===== Load / Unload =====
@@ -59,24 +59,27 @@ namespace OSBase.Modules {
                 return;
             }
 
-            // Local module config
+            // Ensure local configs exist (auto-create with sane defaults)
             var localPath = "configs/teambalancer.cfg";
+            EnsureLocalConfigExists(localPath);
+
+            // Local module config
             var kv = LoadLocalConfig(localPath);
-            if (kv.Count == 0) {
-                Console.WriteLine($"[WARN] OSBase[{ModuleName}] - Local config '{localPath}' not found or empty. Using defaults.");
-            } else {
-                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Using local config '{localPath}' ({kv.Count} keys).");
-            }
+            Console.WriteLine(kv.Count == 0
+                ? $"[WARN] OSBase[{ModuleName}] - Local config '{localPath}' not found or empty. Using defaults."
+                : $"[INFO] OSBase[{ModuleName}] - Using local config '{localPath}' ({kv.Count} keys).");
 
             mapConfigPath = kv.TryGetValue("teambalancer_map_config", out var vMap) ? vMap : "configs/teambalancer_maps.cfg";
+            EnsureMapConfigExists(mapConfigPath);
+
             intermissionBalanceDelay = kv.TryGetValue("teambalancer_intermission_delay", out var vDelay) && float.TryParse(vDelay, out var fDelay) ? Math.Max(0.1f, fDelay) : 0.8f;
-            suppressNearHalftime = kv.TryGetValue("teambalancer_suppress_near_halftime", out var vHf) ? (vHf == "1") : true;
-            suppressLastNRounds = kv.TryGetValue("teambalancer_suppress_last_n_rounds", out var vLast) && int.TryParse(vLast, out var iLast) ? iLast : 3;
-            swapSearchTopN = kv.TryGetValue("teambalancer_swap_search_top_n", out var vTop) && int.TryParse(vTop, out var iTop) ? iTop : 3;
-            moveCooldownRounds = kv.TryGetValue("teambalancer_move_cooldown_rounds", out var vCd) && int.TryParse(vCd, out var iCd) ? iCd : 4;
-            liveWarmupRounds = kv.TryGetValue("teambalancer_live_warmup_rounds", out var vWarm) && int.TryParse(vWarm, out var iWarm) ? iWarm : 2;
-            maxSwapsPerIntermission = kv.TryGetValue("teambalancer_max_swaps_per_intermission", out var vSw) && int.TryParse(vSw, out var iSw) ? Math.Max(0, iSw) : 2;
-            maxMovesPerIntermission = kv.TryGetValue("teambalancer_max_moves_per_intermission", out var vMv) && int.TryParse(vMv, out var iMv) ? Math.Max(0, iMv) : 3;
+            suppressNearHalftime     = kv.TryGetValue("teambalancer_suppress_near_halftime", out var vHf) ? (vHf == "1") : true;
+            suppressLastNRounds      = kv.TryGetValue("teambalancer_suppress_last_n_rounds", out var vLast) && int.TryParse(vLast, out var iLast) ? iLast : 3;
+            swapSearchTopN           = kv.TryGetValue("teambalancer_swap_search_top_n", out var vTop) && int.TryParse(vTop, out var iTop) ? iTop : 3;
+            moveCooldownRounds       = kv.TryGetValue("teambalancer_move_cooldown_rounds", out var vCd) && int.TryParse(vCd, out var iCd) ? iCd : 4;
+            liveWarmupRounds         = kv.TryGetValue("teambalancer_live_warmup_rounds", out var vWarm) && int.TryParse(vWarm, out var iWarm) ? iWarm : 2;
+            maxSwapsPerIntermission  = kv.TryGetValue("teambalancer_max_swaps_per_intermission", out var vSw) && int.TryParse(vSw, out var iSw) ? Math.Max(0, iSw) : 2;
+            maxMovesPerIntermission  = kv.TryGetValue("teambalancer_max_moves_per_intermission", out var vMv) && int.TryParse(vMv, out var iMv) ? Math.Max(0, iMv) : 3;
 
             // Live stats provider
             gameStats = GameStats.Current;
@@ -151,6 +154,52 @@ namespace OSBase.Modules {
 
         public void Unload ( bool hotReload ) {
             Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Unload: hotReload={hotReload}");
+        }
+
+        // ===== Auto-create configs =====
+        private void EnsureLocalConfigExists ( string path ) {
+            try {
+                if (File.Exists(path)) return;
+                Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+                File.WriteAllText(path,
+@"# TeamBalancer settings
+teambalancer_map_config configs/teambalancer_maps.cfg
+teambalancer_intermission_delay 0.8
+teambalancer_suppress_near_halftime 1
+teambalancer_suppress_last_n_rounds 3
+teambalancer_swap_search_top_n 3
+teambalancer_move_cooldown_rounds 4
+teambalancer_live_warmup_rounds 2
+teambalancer_max_swaps_per_intermission 2
+teambalancer_max_moves_per_intermission 3
+");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Created default {path}.");
+            } catch (Exception ex) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - EnsureLocalConfigExists: {ex.Message}");
+            }
+        }
+
+        private void EnsureMapConfigExists ( string path ) {
+            try {
+                if (File.Exists(path)) return;
+                Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+                File.WriteAllText(path,
+@"# mapname,sites,prefer
+de_inferno,2,CT
+de_dust2,2,CT
+de_mirage,2,CT
+de_nuke,2,CT
+de_ancient,2,CT
+de_vertigo,2,CT
+de_overpass,2,CT
+de_anubis,2,CT
+de_lake,1,T
+cs_office,1,T
+");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Created default {path}.");
+            } catch (Exception ex) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - EnsureMapConfigExists: {ex.Message}");
+            }
         }
 
         // ===== Local config loader (key value) =====
