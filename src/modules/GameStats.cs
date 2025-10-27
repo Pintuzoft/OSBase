@@ -1,4 +1,5 @@
 using System;
+using System.Data;
 using System.Collections.Generic;
 using System.Linq;
 using CounterStrikeSharp.API;
@@ -33,6 +34,11 @@ namespace OSBase.Modules {
 
         private Database db;
 
+        // === 90d cache for ALL players across DB ===
+        // key: steamid64 string, value: 90-day average skill; persists across maps unless refresh succeeds
+        private readonly Dictionary<string, float> avg90Cache = new Dictionary<string, float>(StringComparer.Ordinal);
+        private DateTime avg90LastRefreshUtc = DateTime.MinValue;
+
         public GameStats ( OSBase inOsbase, Config inConfig ) {
             Current = this;
             osbase = inOsbase;
@@ -52,7 +58,7 @@ namespace OSBase.Modules {
 
         private void createTables ( ) {
             string query =
-                "TABLE IF NOT EXISTS skill_log (" +
+                "CREATE TABLE IF NOT EXISTS skill_log (" +
                 "steamid varchar(32)," +
                 "name varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci," +
                 "skill int(11)," +
@@ -91,7 +97,10 @@ namespace OSBase.Modules {
             isWarmup = true;
             roundNumber = 0;
             clearStats();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapStart: {mapName}");
+
+            TryRefresh90dCacheAllPlayers(); // bulk refresh once per map (keeps old cache on failure)
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapStart: {mapName}, 90d cache size={avg90Cache.Count}");
         }
 
         private void OnMapEnd ( ) {
@@ -376,6 +385,135 @@ namespace OSBase.Modules {
             var /= (n - 1);
             double std = Math.Sqrt(Math.Max(var, 1e-6));
             return (mean, std, n);
+        }
+
+        // === 90d cache APIs ===
+
+        public string GetSteamIdString(int userId) =>
+            playerList.TryGetValue(userId, out var ps) ? (ps.steamid ?? "") : "";
+
+        // Per-user: cached 90d value; fallback to live calc if missing
+        public float GetCached90dByUserId(int userId) {
+            var sid = GetSteamIdString(userId);
+            if (!string.IsNullOrEmpty(sid) && avg90Cache.TryGetValue(sid, out var v) && v > 0f)
+                return v;
+            return playerList.TryGetValue(userId, out var ps) ? ps.calcSkill() : 0f;
+        }
+
+        public float GetCached90dBySteam(string steamid) {
+            if (!string.IsNullOrEmpty(steamid) && avg90Cache.TryGetValue(steamid, out var v) && v > 0f)
+                return v;
+            return 0f;
+        }
+
+        // Team mean from cached 90d (fallback to live if absent); preserve streak bias
+        public float TeamAverage90d(int team) {
+            if (!teamList.TryGetValue(team, out var ts) || ts.playerList.Count == 0) return 0f;
+
+            float sum = 0f; int n = 0;
+            foreach (var kv in ts.playerList) {
+                var ps = kv.Value;
+                float s;
+                if (!string.IsNullOrEmpty(ps.steamid) && avg90Cache.TryGetValue(ps.steamid, out var v) && v > 0f)
+                    s = v;
+                else
+                    s = ps.calcSkill();
+
+                sum += s; n++;
+            }
+            if (n == 0) return 0f;
+            return (sum / n) + ts.streak * 500f;
+        }
+
+        // Bulk refresh: build a new cache from one GROUP BY query; swap atomically on success.
+        // On failure, keep the existing cache intact.
+        private void TryRefresh90dCacheAllPlayers() {
+            var cutoff = DateTime.UtcNow.AddDays(-90);
+
+            const string sql = @"
+                SELECT steamid, AVG(skill) AS avg_skill
+                FROM skill_log
+                WHERE datestr >= @cutoff
+                GROUP BY steamid";
+
+            var newCache = new Dictionary<string, float>(StringComparer.Ordinal);
+
+            try {
+                // Try common Database read methods via reflection
+                var queryMethod =
+                    db.GetType().GetMethod("query", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) ??
+                    db.GetType().GetMethod("select", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) ??
+                    db.GetType().GetMethod("read", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+                if (queryMethod == null) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] - No SELECT-capable method on Database; skipping 90d refresh.");
+                    return; // keep old cache
+                }
+
+                object? result = queryMethod.GetParameters().Length switch {
+                    2 => queryMethod.Invoke(db, new object[] { sql, new MySqlParameter[] { new("@cutoff", cutoff) } }),
+                    1 => queryMethod.Invoke(db, new object[] { sql }),
+                    _ => null
+                };
+
+                if (result == null) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] - DB query returned null; keeping previous 90d cache.");
+                    return;
+                }
+
+                if (result is DataTable dt) {
+                    foreach (DataRow row in dt.Rows) {
+                        string sid = row["steamid"]?.ToString() ?? "";
+                        if (sid.Length == 0) continue;
+                        float avg = 0f;
+                        if (row["avg_skill"] != DBNull.Value) avg = Convert.ToSingle(row["avg_skill"]);
+                        newCache[sid] = avg;
+                    }
+                } else if (result is System.Collections.IEnumerable enumerable) {
+                    foreach (var row in enumerable) {
+                        if (row == null) continue;
+
+                        string sid = "";
+                        object? avgObj = null;
+
+                        if (row is System.Collections.IDictionary dict) {
+                            if (dict.Contains("steamid")) sid = dict["steamid"]?.ToString() ?? "";
+                            if (dict.Contains("avg_skill")) avgObj = dict["avg_skill"];
+                        } else if (row is IDataRecord rec) {
+                            try {
+                                int iSid = rec.GetOrdinal("steamid");
+                                int iAvg = rec.GetOrdinal("avg_skill");
+                                sid = rec.GetString(iSid);
+                                avgObj = rec.IsDBNull(iAvg) ? null : rec.GetValue(iAvg);
+                            } catch { /* ignore */ }
+                        } else {
+                            var t = row.GetType();
+                            var pSid = t.GetProperty("steamid");
+                            var pAvg = t.GetProperty("avg_skill") ?? t.GetProperty("avgSkill");
+                            sid = pSid?.GetValue(row)?.ToString() ?? "";
+                            avgObj = pAvg?.GetValue(row);
+                        }
+
+                        if (sid.Length == 0) continue;
+                        float avg = 0f;
+                        if (avgObj != null && avgObj != DBNull.Value) avg = Convert.ToSingle(avgObj);
+                        newCache[sid] = avg;
+                    }
+                } else {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] - Unhandled DB result type {result.GetType().Name}; keeping previous 90d cache.");
+                    return;
+                }
+
+                // Success: swap caches
+                avg90Cache.Clear();
+                foreach (var kv in newCache) avg90Cache[kv.Key] = kv.Value;
+                avg90LastRefreshUtc = DateTime.UtcNow;
+
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - 90d cache refreshed: {avg90Cache.Count} players.");
+            } catch (Exception e) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - 90d refresh failed: {e.Message}. Keeping previous cache.");
+                // keep old cache intact
+            }
         }
 
         // ===== Internals =====
