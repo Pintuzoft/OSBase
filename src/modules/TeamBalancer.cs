@@ -1,146 +1,406 @@
 using System;
-using System.Linq;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Events;
-using CounterStrikeSharp.API.Modules.Entities;
-using CounterStrikeSharp.API.Modules.Utils;
-using CounterStrikeSharp.API.Modules.Cvars;
-using CounterStrikeSharp.API.Modules.Config;
-
 using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Modules.Events;
+using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules {
-
     public class TeamBalancer : IModule {
-        public string ModuleName => "teambalancer";   
-        public string ModuleNameNice => "TeamBalancer";
+        public string ModuleName => "teambalancer";
+
         private OSBase? osbase;
-        private Config? config;
-        // Reference to the GameStats module.
+        private bool enabled;
+
+        // External: live stats provider
         private GameStats? gameStats;
-        // Capture the main thread's SynchronizationContext.
-        private System.Threading.SynchronizationContext? mainContext;
 
-        // Immunity set for skill balancing; stores UserIDs that were swapped this round.
-        private const int TEAM_T = (int)CsTeam.Terrorist;      // Expected value: 2
-        private const int TEAM_CT = (int)CsTeam.CounterTerrorist; // Expected value: 3
+        // ===== Config / knobs =====
+        private string mapConfigPath = "configs/teambalancer_maps.cfg";
 
-        private Dictionary<string, int> mapBombsites = new Dictionary<string, int>();
-        private string mapConfigFile = "teambalancer_mapinfo.cfg";
-        private int bombsites = 2;
+        // Run skill-balancing during intermission using a short delay after RoundEnd
+        private float intermissionBalanceDelay = 0.8f; // seconds (tweak per server tickrate)
 
-        private const float delay = 6.5f;
-        private const float warmupDelay = 0.0f;
-        private bool warmup = false;
+        // Suppress general skill-balancing near halftime / late (odd enforcement still runs)
+        private bool suppressNearHalftime = true;   // rounds 14..16
+        private int suppressLastNRounds = 3;        // last N rounds (e.g., 28..30)
 
-//        private int minPlayers = 4;
-//        private int maxPlayers = 16;
+        // Candidate search breadth + churn controls
+        private int swapSearchTopN = 3;
+        private int moveCooldownRounds = 4;
 
-        public void Load(OSBase inOsbase, Config inConfig) {
-            this.osbase = inOsbase;
-            this.config = inConfig;
-            // Capture the main thread's SynchronizationContext.
-            mainContext = System.Threading.SynchronizationContext.Current;
+        // Live blending → EffectiveMu (small influence)
+        private bool liveEnabled = true;
+        private int liveWarmupRounds = 2;
+        private double knownZScale = 50.0;
+        private double liveWeightKnown = 0.25;
+        private double liveDeltaCapKnown = 50.0;
+        private double unknownZScale = 120.0;
+        private double liveDeltaCapUnknown = 150.0;
+        private int minRoundsForUnknownMove = 3;
 
-            config.RegisterGlobalConfigValue($"{ModuleName}", "1");
+        // ===== State =====
+        private int currentRound = 0;
+        private int ctScore = 0;
+        private int tScore = 0;
+        private readonly Dictionary<ulong, int> lastMoveRound = new();
 
-            // Retrieve the GameStats module.
-            gameStats = osbase.GetGameStats();
+        // Per-map metadata
+        private readonly Dictionary<string, int> mapSites = new(StringComparer.OrdinalIgnoreCase);           // de_dust2 -> 2
+        private readonly Dictionary<string, CsTeam> preferSideByMap = new(StringComparer.OrdinalIgnoreCase);  // de_shortdust -> T
 
-            if (osbase == null) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
+        // ===== Module wiring =====
+        public void Load ( OSBase inOsbase, Config config ) {
+            osbase = inOsbase;
+
+            // Config defaults
+            config.RegisterGlobalConfigValue($"{ModuleName}_enabled", "1");
+            config.RegisterGlobalConfigValue($"{ModuleName}_map_config", mapConfigPath);
+            config.RegisterGlobalConfigValue($"{ModuleName}_intermission_delay", "0.8");
+            config.RegisterGlobalConfigValue($"{ModuleName}_suppress_near_halftime", "1");
+            config.RegisterGlobalConfigValue($"{ModuleName}_suppress_last_n_rounds", "3");
+            config.RegisterGlobalConfigValue($"{ModuleName}_swap_search_top_n", "3");
+            config.RegisterGlobalConfigValue($"{ModuleName}_move_cooldown_rounds", "4");
+            config.RegisterGlobalConfigValue($"{ModuleName}_live_warmup_rounds", "2");
+
+            enabled = config.GetGlobalConfigValue($"{ModuleName}_enabled", "1") == "1";
+            mapConfigPath = config.GetGlobalConfigValue($"{ModuleName}_map_config", mapConfigPath);
+
+            if (float.TryParse(config.GetGlobalConfigValue($"{ModuleName}_intermission_delay", "0.8"), out var d))
+                intermissionBalanceDelay = Math.Max(0.1f, d);
+
+            suppressNearHalftime = config.GetGlobalConfigValue($"{ModuleName}_suppress_near_halftime", "1") == "1";
+            if (!int.TryParse(config.GetGlobalConfigValue($"{ModuleName}_suppress_last_n_rounds", "3"), out suppressLastNRounds)) suppressLastNRounds = 3;
+            if (!int.TryParse(config.GetGlobalConfigValue($"{ModuleName}_swap_search_top_n", "3"), out swapSearchTopN)) swapSearchTopN = 3;
+            if (!int.TryParse(config.GetGlobalConfigValue($"{ModuleName}_move_cooldown_rounds", "4"), out moveCooldownRounds)) moveCooldownRounds = 4;
+            if (!int.TryParse(config.GetGlobalConfigValue($"{ModuleName}_live_warmup_rounds", "2"), out liveWarmupRounds)) liveWarmupRounds = 2;
+
+            if (!enabled) {
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Init: Module disabled in global config.");
                 return;
             }
-            if (config == null) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
-                return;
+
+            // Resolve live stats
+            gameStats = GameStats.Current;
+            if (gameStats == null) {
+                Console.WriteLine($"[WARN] OSBase[{ModuleName}] - Init: GameStats.Current is null. Live blending disabled.");
+                liveEnabled = false;
             }
 
-            var globalConfig = config.GetGlobalConfigValue($"{ModuleName}", "0");
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Global config value: {globalConfig}");
-            if (globalConfig == "1") {
-                loadEventHandlers();
-                LoadMapInfo();
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+            LoadMapConfig(mapConfigPath);
 
-            } else {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
-            }
+            osbase.RegisterEventHandler<EventRoundAnnounceWarmup>((ev, info) => {
+                currentRound = 0;
+                ctScore = 0; tScore = 0;
+                lastMoveRound.Clear();
+                liveEnabled = (gameStats != null);
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Warmup: LiveEnabled={liveEnabled}, map={Server.MapName}");
+                return HookResult.Continue;
+            });
+
+            // Enforce odd-player side at warmup end (immediate), then one pre-balance pass
+            osbase.RegisterEventHandler<EventWarmupEnd>((ev, info) => {
+                try {
+                    Console.WriteLine($"[INFO] OSBase[{ModuleName}] - WarmupEnd: enforcing odd-player policy.");
+                    EnforceOddPolicyForCurrentMap();   // immediate switch BEFORE pistol spawn
+                    MaybeBalanceNow(force: true);      // optional pre-balance (intermission context)
+                } catch (Exception ex) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - WarmupEndBalance: {ex.Message}");
+                }
+                return HookResult.Continue;
+            });
+
+            // Enforce odd-player side exactly at halftime (immediate), BEFORE post-half pistol
+            osbase.RegisterEventHandler<EventStartHalftime>((ev, info) => {
+                try {
+                    Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Halftime: enforcing odd-player policy.");
+                    EnforceOddPolicyForCurrentMap();   // immediate switch during intermission
+                } catch (Exception ex) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - HalftimeOddEnforce: {ex.Message}");
+                }
+                return HookResult.Continue;
+            });
+
+            osbase.RegisterEventHandler<EventRoundStart>((ev, info) => {
+                currentRound++;
+                return HookResult.Continue;
+            });
+
+            // For normal rounds, balance DURING intermission:
+            // schedule from RoundEnd with a short delay so we complete BEFORE next spawn
+            osbase.RegisterEventHandler<EventRoundEnd>((ev, info) => {
+                try {
+                    // keep score counters in sync (optional, useful for gating on big gaps)
+                    if (ev.Winner == (int)CsTeam.CounterTerrorist) {
+                        ctScore++;
+                    } else if (ev.Winner == (int)CsTeam.Terrorist) {
+                        tScore++;
+                    }
+
+                    var delay = intermissionBalanceDelay;
+                    osbase.AddTimer(delay, () => {
+                        try {
+                            // Re-enforce odd policy (players may have joined/quit in intermission)
+                            EnforceOddPolicyForCurrentMap();   // immediate
+                            // Then (optionally) do skill balancing, unless we're in a suppression window
+                            MaybeBalanceNow(force: false);     // immediate
+                        } catch (Exception ex) {
+                            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - IntermissionBalance: {ex.Message}");
+                        }
+                    });
+                } catch (Exception ex) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - RoundEnd: {ex.Message}");
+                }
+                return HookResult.Continue;
+            });
+
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Init: Loaded.");
         }
 
-        private void loadEventHandlers() {
-            if(osbase == null) return;
+        public void Unload ( bool hotReload ) {
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Unload: hotReload={hotReload}");
+        }
+
+        // ===== Map config =====
+        private void LoadMapConfig ( string path ) {
+            mapSites.Clear();
+            preferSideByMap.Clear();
+
             try {
-                osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-                osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-                osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Event handlers registered successfully.");
+                if (!File.Exists(path)) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] - MapConfig: '{path}' not found. Using defaults.");
+                    return;
+                }
 
-            } catch(Exception ex) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Failed to register event handlers: {ex.Message}");
+                var lines = File.ReadAllLines(path);
+                foreach (var raw in lines) {
+                    var line = raw.Trim();
+                    if (line.Length == 0 || line.StartsWith("#")) continue;
+
+                    // CSV: mapname,sites,prefer
+                    var parts = line.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2) {
+                        var map = parts[0].Trim();
+                        if (int.TryParse(parts[1].Trim(), out int sites) && sites >= 1) {
+                            mapSites[map] = sites;
+                        }
+                        if (parts.Length >= 3) {
+                            var sideStr = parts[2].Trim().ToUpperInvariant();
+                            preferSideByMap[map] = (sideStr == "T") ? CsTeam.Terrorist : CsTeam.CounterTerrorist;
+                        }
+                    }
+                }
+
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapConfig: Loaded {mapSites.Count} entries from '{path}'.");
+            } catch (Exception ex) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - MapConfig: {ex.Message}");
             }
         }
 
-        private void LoadMapInfo() {
-            config?.CreateCustomConfig($"{mapConfigFile}", "// Map info\nde_dust2 2\n");
-            List<string> maps = config?.FetchCustomConfig($"{mapConfigFile}") ?? new List<string>();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Loaded {maps.Count} line(s) from {mapConfigFile}.");
+        private int GetSitesForMap ( string mapName ) {
+            return mapSites.TryGetValue(mapName, out var n) ? n : 2; // default: 2 bomb sites
+        }
 
-            foreach (var line in maps) {
-                string trimmedLine = line.Trim();
-                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//"))
-                    continue;
-                var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length == 2 && int.TryParse(parts[1], out int bs)) {
-                    mapBombsites[parts[0]] = bs;
-                    Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Loaded map info: {parts[0]} = {bs}");
+        private CsTeam GetPreferredSideForMap ( string mapName ) {
+            if (preferSideByMap.TryGetValue(mapName, out var side)) return side;
+            // Heuristic fallback: 1-site/hostage -> T+1, multi-site bomb -> CT+1
+            return GetSitesForMap(mapName) <= 1 ? CsTeam.Terrorist : CsTeam.CounterTerrorist;
+        }
 
-                } else {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse bombsites for map {parts[0]}");
+        // ===== Odd-player enforcement (used at warmup end, halftime, and intermission after each round) =====
+        private void EnforceOddPolicyForCurrentMap ( ) {
+            var players = Utilities.GetPlayers().Where(IsHumanOnTeam).ToList();
+            var ct = players.Where(p => p.TeamNum == (byte)CsTeam.CounterTerrorist).ToList();
+            var tt = players.Where(p => p.TeamNum == (byte)CsTeam.Terrorist).ToList();
+
+            int total = ct.Count + tt.Count;
+            if (total == 0) return;
+
+            var preferSideOnOdd = GetPreferredSideForMap(Server.MapName);
+
+            if ((total % 2) == 1) {
+                // which side currently has +1?
+                var extraSide =
+                    ct.Count > tt.Count ? CsTeam.CounterTerrorist :
+                    tt.Count > ct.Count ? CsTeam.Terrorist :
+                    CsTeam.Spectator;
+
+                if (extraSide != CsTeam.Spectator && extraSide != preferSideOnOdd) {
+                    // Move one from surplus to deficit: pick least damaging (lowest EffectiveMu)
+                    var surplus = extraSide == CsTeam.CounterTerrorist ? ct : tt;
+                    var target = extraSide == CsTeam.CounterTerrorist ? CsTeam.Terrorist : CsTeam.CounterTerrorist;
+
+                    var candidate = surplus
+                        .OrderBy(p => EffectiveMu(p.SteamID))
+                        .FirstOrDefault();
+
+                    if (candidate != null) {
+                        candidate.SwitchTeam(target); // immediate during intermission
+                        try { gameStats?.movePlayer(candidate.UserId!.Value, (int)target); } catch { }
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OddPolicy: moved {candidate.PlayerName} → {target} to enforce {preferSideOnOdd}+1 on {Server.MapName} ({GetSitesForMap(Server.MapName)} site(s)).");
+                        PrintToAll($"{candidate.PlayerName} moved to {target}");
+                    }
                 }
             }
         }
 
-        private void OnMapStart(string mapName) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnMapStart triggered for map: {mapName}");
-            warmup = true;
-            if (mapBombsites.ContainsKey(mapName)) {
-                bombsites = mapBombsites[mapName];
-                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Bombsites: {bombsites}");
+        // ===== Main skill balancing (swap-first, then single) =====
+        private void MaybeBalanceNow ( bool force ) {
+            var players = Utilities.GetPlayers().Where(IsHumanOnTeam).ToList();
+            if (players.Count < 2) return;
 
+            var ct = players.Where(p => p.TeamNum == (byte)CsTeam.CounterTerrorist).ToList();
+            var tt = players.Where(p => p.TeamNum == (byte)CsTeam.Terrorist).ToList();
+            if (ct.Count == 0 || tt.Count == 0) return;
+
+            // Respect suppression windows for skill balancing (odd enforcement runs elsewhere)
+            if (!force) {
+                if (suppressNearHalftime && currentRound >= 14 && currentRound <= 16) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Suppress: near halftime (round {currentRound}).");
+                    return;
+                }
+                if (suppressLastNRounds > 0 && currentRound >= 30 - suppressLastNRounds) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Suppress: late game (round {currentRound}).");
+                    return;
+                }
+            }
+
+            // Strength via EffectiveMu (objective for balancing)
+            double ctStrMu = TeamStrengthMu(ct);
+            double ttStrMu = TeamStrengthMu(tt);
+            double diffMu = ctStrMu - ttStrMu; // >0 ⇒ CT stronger
+
+            // Control metric: LIVE skill diff, threshold via your round table
+            double ctLive = TeamStrengthLive(ct);
+            double ttLive = TeamStrengthLive(tt);
+            double controlDiff = Math.Abs(ctLive - ttLive);
+            double threshold = GetDynamicThreshold();
+
+            if (!force && controlDiff < threshold) {
+                return;
+            }
+
+            bool ctIsStronger = diffMu > 0;
+            var stronger = ctIsStronger ? ct : tt;
+            var weaker = ctIsStronger ? tt : ct;
+            var toTeam = ctIsStronger ? CsTeam.Terrorist : CsTeam.CounterTerrorist;
+
+            // --- SWAP first ---
+            var topStrong = stronger
+                .OrderByDescending(p => EffectiveMu(p.SteamID))
+                .Take(Math.Min(swapSearchTopN, stronger.Count))
+                .ToList();
+
+            var topWeak = weaker
+                .OrderByDescending(p => EffectiveMu(p.SteamID))
+                .Take(Math.Min(swapSearchTopN, weaker.Count))
+                .ToList();
+
+            (CCSPlayerController a, CCSPlayerController b)? bestSwap = null;
+            double bestAfterAbs = Math.Abs(diffMu);
+
+            foreach (var s in topStrong) {
+                foreach (var w in topWeak) {
+                    if (!CanMoveNow(s.SteamID) || !CanMoveNow(w.SteamID)) continue;
+
+                    double muS = EffectiveMu(s.SteamID);
+                    double muW = EffectiveMu(w.SteamID);
+
+                    int sign = ((CsTeam)s.TeamNum == CsTeam.CounterTerrorist) ? +1 : -1;
+                    double after = Math.Abs(diffMu - 2.0 * sign * (muS - muW));
+
+                    if (after + 1e-6 < bestAfterAbs) {
+                        bestAfterAbs = after;
+                        bestSwap = (s, w);
+                        if (after <= Math.Max(20.0, 0.25 * bestAfterAbs)) goto haveSwap;
+                    }
+                }
+            }
+
+            haveSwap:
+            if (bestSwap.HasValue) {
+                var s = bestSwap.Value.a;
+                var w = bestSwap.Value.b;
+
+                // Intermission context: switch immediately
+                if (IsHumanOnTeam(s) && IsHumanOnTeam(w)) {
+                    var sTeam = (CsTeam)s.TeamNum;
+                    var wTeam = (CsTeam)w.TeamNum;
+
+                    s.SwitchTeam(wTeam);
+                    w.SwitchTeam(sTeam);
+
+                    lastMoveRound[s.SteamID] = currentRound;
+                    lastMoveRound[w.SteamID] = currentRound;
+
+                    PrintToAll($"{s.PlayerName}[{TeamTag(sTeam)}] <-> {w.PlayerName}[{TeamTag(wTeam)}]");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Swap: {s.PlayerName}({EffectiveMu(s.SteamID):F0}) ↔ {w.PlayerName}({EffectiveMu(w.SteamID):F0}) | after |diffMu|={bestAfterAbs:F1}");
+                    try { gameStats?.movePlayer(s.UserId!.Value, (int)wTeam); gameStats?.movePlayer(w.UserId!.Value, (int)sTeam); } catch { }
+                } else {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] - Swap: candidates invalid during intermission.");
+                }
+                return;
+            }
+
+            // --- Single move fallback ---
+            var single = stronger
+                .Where(p => CanMoveNow(p.SteamID))
+                .OrderBy(p => EffectiveMu(p.SteamID)) // least damaging first
+                .FirstOrDefault();
+
+            if (single != null) {
+                single.SwitchTeam(toTeam);
+                lastMoveRound[single.SteamID] = currentRound;
+
+                PrintToAll($"{single.PlayerName} moved to {toTeam}");
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Single: {single.PlayerName} → {toTeam} (diffMu={diffMu:F1})");
+                try { gameStats?.movePlayer(single.UserId!.Value, (int)toTeam); } catch { }
+            }
+        }
+
+        // ===== EffectiveMu & team sums =====
+        private double EffectiveMu ( ulong steamId ) {
+            // Live-driven (no 90d baseline in this version)
+            double liveSkill = 0;
+            int rounds = 0;
+            bool hasLive = (gameStats != null) && gameStats.TryGetLiveSkillBySteam(steamId, out liveSkill, out rounds);
+
+            if (!hasLive || rounds < liveWarmupRounds) return 1000.0;
+
+            var (mean, std, _) = gameStats!.GetLiveSkillMomentsActive();
+            double z = (liveSkill - mean) / Math.Max(std, 1e-6);
+
+            if (rounds < Math.Max(liveWarmupRounds + 1, 4)) {
+                double deltaU = Math.Clamp(z * unknownZScale, -liveDeltaCapUnknown, liveDeltaCapUnknown);
+                return 1000.0 + deltaU;
             } else {
-                bombsites = mapName.Contains("cs_") ? 1 : 2;
-                config?.AddCustomConfigLine($"{mapConfigFile}", $"{mapName} {bombsites}");
-                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} started. Default bombsites: {bombsites}");
+                if (!liveEnabled) return 1000.0;
+                double deltaK = Math.Clamp(z * knownZScale, -liveDeltaCapKnown, liveDeltaCapKnown);
+                return 1000.0 + (liveWeightKnown * deltaK);
             }
         }
 
-        [GameEventHandler(HookMode.Post)]
-        private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnRoundEnd triggered.");
-            osbase?.AddTimer(delay, () => {
-                BalanceTeams();
-            });
-            return HookResult.Continue;
+        private double TeamStrengthMu ( IEnumerable<CCSPlayerController> team ) {
+            return team.Sum(p => EffectiveMu(p.SteamID));
         }
 
-        [GameEventHandler(HookMode.Pre)]
-        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - OnWarmupEnd triggered.");
-            if ( gameStats == null ) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - OnWarmupEnd: Game stats is null.");
-                return HookResult.Continue;
+        private double TeamStrengthLive ( IEnumerable<CCSPlayerController> team ) {
+            if (gameStats == null) return 0.0;
+            double sum = 0.0;
+            foreach (var p in team) {
+                double s; int r;
+                if (gameStats.TryGetLiveSkillBySteam(p.SteamID, out s, out r)) sum += s;
             }
-            BalanceTeams();
-            warmup = false;
-            return HookResult.Continue;
+            return sum;
         }
 
-        float GetDynamicThreshold ( ) {
-            int round = gameStats?.roundNumber ?? 0;
-            switch(round) {
+        // ===== Your round-based dynamic threshold =====
+        private double GetDynamicThreshold ( ) {
+            int round = gameStats?.roundNumber ?? currentRound;
+            switch (round) {
                 case 1:   return 10000f;
                 case 2:   return 10000f;
                 case 3:   return 8000f;
@@ -161,186 +421,41 @@ namespace OSBase.Modules {
                 case 18:  return 7000f;
                 case 19:  return 8000f;
                 case 20:  return 9000f;
-                default: 
-                    // For rounds beyond 6, you can keep increasing slowly or cap the threshold.
-                    return 8000f + (round - 20) * 200f;
-            }
-        }
-
-        private void BalanceTeams() {
-            // Retrieve game stats and connected players.
-            var gameStats = osbase?.GetGameStats();
-            if (gameStats == null) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Game stats is null.");
-                return;
-            }
-
-            TeamStats tStats = gameStats.getTeam(TEAM_T);   
-            TeamStats ctStats = gameStats.getTeam(TEAM_CT);
-
-            if (tStats == null || ctStats == null) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - BalanceTeams: Team stats is null.");
-                return; 
-            }
-
-            int winner = tStats.streak > 0 ? TEAM_T : TEAM_CT;
-            int loser = winner == TEAM_T ? TEAM_CT : TEAM_T;
-            int tCount = tStats.numPlayers();
-            int ctCount = ctStats.numPlayers();
-            int totalCount = tCount + ctCount;
-
-            int idealT;
-            int idealCT;
-
-            switch (bombsites) {
-                case 2:
-                    idealT = totalCount / 2;
-                    idealCT = totalCount / 2 + totalCount % 2;
-                    break;
                 default:
-                    idealT = totalCount / 2 + totalCount % 2;
-                    idealCT = totalCount / 2;
-                    break;
-            }
-
-            bool sizesBalanced = tCount == idealT && ctCount == idealCT;
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: T: {tCount} CT: {ctCount} Ideal T: {idealT} Ideal CT: {idealCT}");
-
-            float tSkill = tStats.getAverageSkill();
-            float ctSkill = ctStats.getAverageSkill();
-            int playersToMove = 0;
-
-            // team sizes are balanced.
-            if ( ! sizesBalanced ) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - BalanceTeams: Team sizes are not balanced.");
-                bool moveFromT = tCount > idealT;
-                bool moveFromCT = ctCount > idealCT;
-                playersToMove = Math.Abs(moveFromT ? tCount - idealT : ctCount - idealCT);
-
-                // T has more players than ideal
-                evenTeamSizes(moveFromT, tSkill, ctSkill, playersToMove, tStats, ctStats);
-            }
-
-            if ( ! warmup ) {
-                float skillDiff = Math.Abs(tSkill - ctSkill);
-                if ( skillDiff > this.GetDynamicThreshold() ) {
-                    doSkillBalance(tStats, ctStats);
-                }
+                    return 8000f + Math.Max(0, round - 20) * 200f;
             }
         }
 
-        // Skill balance algorithm. Swap 2 players based on skill difference.
-        private void doSkillBalance(TeamStats tStats, TeamStats ctStats) {
-            float tSkill = tStats.getAverageSkill();
-            float ctSkill = ctStats.getAverageSkill();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - doSkillBalance: Skill difference: {Math.Abs(tSkill - ctSkill)}");
-            float diff = Math.Abs(tSkill - ctSkill);
-            if(diff < this.GetDynamicThreshold()) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - doSkillBalance: Skill difference is below threshold.");
-                return;
+        // ===== Helpers =====
+        private bool CanMoveNow ( ulong steamId ) {
+            if (lastMoveRound.TryGetValue(steamId, out var r) && currentRound - r < moveCooldownRounds)
+                return false;
+
+            // unknowns must have enough live rounds before we dare move them
+            if (gameStats != null) {
+                double s; int rounds;
+                if (!gameStats.TryGetLiveSkillBySteam(steamId, out s, out rounds))
+                    return false; // no live yet -> don’t move
+                if (rounds < minRoundsForUnknownMove)
+                    return false; // too volatile -> wait
             }
 
-            // Determine which team is stronger.
-            bool tIsStrong = tSkill > ctSkill;
-            // For the strong team, target deviation = full difference; for the weak team, half that.
-            float strongTarget = diff;
-            float weakTarget = diff / 2;
-
-            // Select candidate from the strong team (to remove) and from the weak team (to add)
-            CCSPlayerController? candidateStrong = tIsStrong ? tStats.GetPlayerByDeviation(strongTarget, true) : ctStats.GetPlayerByDeviation(strongTarget, true);
-            CCSPlayerController? candidateWeak   = tIsStrong ? ctStats.GetPlayerByDeviation(weakTarget, false) : tStats.GetPlayerByDeviation(weakTarget, false);
-
-            if(candidateStrong == null || candidateWeak == null) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - doSkillBalance: Candidate swap not found.");
-                return;
-            }
-            if(gameStats == null || !candidateStrong.UserId.HasValue || !candidateWeak.UserId.HasValue) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - doSkillBalance: Invalid candidate(s).");
-                return;
-            }
-
-            // Now, candidateStrong should be from the strong team and candidateWeak from the weak team.
-            float strongCandidateSkill = gameStats.GetPlayerStats(candidateStrong.UserId.Value).calcSkill();
-            float weakCandidateSkill   = gameStats.GetPlayerStats(candidateWeak.UserId.Value).calcSkill();
-            if (strongCandidateSkill < weakCandidateSkill) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - doSkillBalance: Candidate from strong team ({strongCandidateSkill}) is not stronger than candidate from weak team ({weakCandidateSkill}). Swap skipped.");
-                return;
-            }
-            // Execute the swap
-            movePlayer(candidateStrong, tIsStrong ? TEAM_CT : TEAM_T, tStats, ctStats);
-            movePlayer(candidateWeak, tIsStrong ? TEAM_T : TEAM_CT, tStats, ctStats);
-            Server.PrintToChatAll($"[TeamBalancer] Swapped: {candidateStrong.PlayerName}[{(candidateStrong.TeamNum == TEAM_T ? "CT" : "T")}] <-> [{(candidateWeak.TeamNum == TEAM_T ? "CT" : "T")}]{candidateWeak.PlayerName}");
+            return true;
         }
 
-        private void evenTeamSizes ( bool moveFromT, float tSkill, float ctSkill, int playersToMove, TeamStats tStats, TeamStats ctStats ) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Try Moving {playersToMove} players to {(moveFromT ? "CT" : "T")}.");
-            float targetSkill = (moveFromT ? tSkill - ctSkill : ctSkill - tSkill) / 2;
-            float targetSkillPerPlayer = targetSkill / playersToMove;
-            for (int i = 0; i < playersToMove; i++) {
-                // Find the player nearest target skill
-                TeamStats sourceTeamStats = moveFromT ? tStats : ctStats;
-                CCSPlayerController? player;
-                
-                if (gameStats != null && gameStats.playerList.Count < 10) {
-                    player = sourceTeamStats.getPlayerBySkillNonImmune(targetSkillPerPlayer);
-                } else {
-                    player = sourceTeamStats.getPlayerBySkill(targetSkillPerPlayer);
-                }
-                
-                if (player == null) {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Failed to find player to move.");
-                    break;
-                }
-
-                // Move the player to CT
-                if (player.UserId.HasValue) {
-                    movePlayer(player, moveFromT ? TEAM_CT : TEAM_T, tStats, ctStats);
-                    Server.PrintToChatAll($"[TeamBalancer] Moved: {player.PlayerName} {(moveFromT ? "T -> CT" : "CT -> T")}.");
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - evenTeamSizes: Moved player {player.PlayerName} to {(moveFromT ? "CT" : "T")}.");
-                } else {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - evenTeamSizes: Player {player.PlayerName} has null UserId.");
-                }
-            }
+        private static bool IsHumanOnTeam ( CCSPlayerController p ) {
+            return p != null && p.IsValid && !p.IsHLTV && !p.IsBot &&
+                   (p.TeamNum == (byte)CsTeam.CounterTerrorist || p.TeamNum == (byte)CsTeam.Terrorist);
         }
 
-        private void movePlayer (CCSPlayerController player, int targetTeam, TeamStats tStats, TeamStats ctStats) {
-            bool isTargetT = targetTeam == TEAM_T;
-            if (player == null || !player.UserId.HasValue) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - movePlayer: Failed to find player to move.");
-                return;
-            }
-
-            // print teams
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T:");
-            tStats.printPlayers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - CT:");
-            ctStats.printPlayers();
-
-            // Move the player
-            player.SwitchTeam((CsTeam)targetTeam);
-
-            gameStats?.movePlayer(player.UserId.Value, targetTeam);
-            if (player.UserId.HasValue) {
-                if (gameStats != null) {
-                    gameStats.GetPlayerStats(player.UserId.Value).immune += 2;
-                } else {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: gameStats is null.");
-                }
-                player.PrintToCenterAlert($"!! YOU HAVE BEEN MOVED TO {(isTargetT ? "T" : "CT")}!!");
-                //Server.PrintToChatAll($"[TeamBalancer] {player.PlayerName} moved: {(isTargetT ? "CT -> T" : "T -> CT")}.");
-
-            } else {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - movePlayer: Player {player.PlayerName} has null UserId.");
-            }
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - movePlayer: Moved player {player.PlayerName} to {(isTargetT ? "T" : "CT")}.");
-            
-            // print teams
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - T:");
-            tStats.printPlayers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - CT:");
-            ctStats.printPlayers();
+        private static string TeamTag ( CsTeam t ) {
+            return t == CsTeam.CounterTerrorist ? "CT" : "T";
         }
 
+        private void PrintToAll ( string msg ) {
+            foreach (var p in Utilities.GetPlayers().Where(x => x != null && x.IsValid && !x.IsHLTV)) {
+                try { p.PrintToChat(msg); } catch { }
+            }
+        }
     }
 }

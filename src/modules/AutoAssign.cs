@@ -17,7 +17,13 @@ namespace OSBase.Modules {
         private static readonly object TeamAssignLock = new();
 
         private bool warmupActive = true;
+
+        // Guard recent team to fight engine SPEC fallback
         private readonly Dictionary<ulong, (CsTeam team, DateTime until)> teamGuards = new();
+
+        // Track who we actually auto-assigned from SPEC/UNASSIGNED.
+        // Only these are eligible for the post-assign correction pass.
+        private readonly HashSet<ulong> justAutoAssigned = new();
 
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
@@ -39,15 +45,15 @@ namespace OSBase.Modules {
             osbase.RegisterEventHandler<EventRoundStart>((ev, info) => {
                 warmupActive = false;
                 teamGuards.Clear();
+                justAutoAssigned.Clear();
                 return HookResult.Continue;
             });
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (delay={AssignDelay}s).");
         }
 
-        private static bool IsPlayable(byte teamNum) {
-            return teamNum == (byte)CsTeam.Terrorist || teamNum == (byte)CsTeam.CounterTerrorist;
-        }
+        private static bool IsPlayable(byte teamNum)
+            => teamNum == (byte)CsTeam.Terrorist || teamNum == (byte)CsTeam.CounterTerrorist;
 
         private HookResult OnPlayerConnectFull(EventPlayerConnectFull ev, GameEventInfo info) {
             var player = ev.Userid;
@@ -59,33 +65,50 @@ namespace OSBase.Modules {
                     if (player == null || !player.IsValid || player.IsHLTV || player.IsBot)
                         return;
 
-                    CsTeam finalTeam;
+                    // If the engine already placed them on a playable team, DO NOT MOVE THEM.
+                    // This avoids cross-team spawns caused by late swaps.
+                    if (IsPlayable(player.TeamNum)) {
+                        var teamNow = (CsTeam)player.TeamNum;
+                        teamGuards[player.SteamID] = (teamNow, DateTime.UtcNow.AddSeconds(1));
+                        // Warmup-only respawn if they happen to be dead for some reason
+                        if (warmupActive && !player.PawnIsAlive)
+                            TryForceSpawn(player);
+                        return;
+                    }
 
+                    // Only assign if currently non-playable (Unassigned/Spectator)
+                    CsTeam finalTeam;
                     lock (TeamAssignLock) {
                         var all = Utilities.GetPlayers().Where(x => x != null && x.IsValid && !x.IsHLTV);
                         int ct = all.Count(x => x.TeamNum == (byte)CsTeam.CounterTerrorist);
                         int tt = all.Count(x => x.TeamNum == (byte)CsTeam.Terrorist);
 
-                        finalTeam = DecideTeam(player.TeamNum, ct, tt);
-                        if ((byte)finalTeam != player.TeamNum)
-                            player.SwitchTeam(finalTeam);
+                        finalTeam = DecideTeamForJoin(ct, tt);
+                        player.SwitchTeam(finalTeam);
                     }
 
-                    // Correction pass
+                    // Mark that we auto-assigned this player from non-playable → eligible for correction
+                    justAutoAssigned.Add(player.SteamID);
+
+                    // Correction pass ONLY for those we just assigned (still pre-spawn)
                     osbase!.AddTimer(CorrectionDelay, () => {
                         try {
                             if (player == null || !player.IsValid || player.IsHLTV || player.IsBot)
                                 return;
 
-                            if (!player.PawnIsAlive) {
+                            // If they already spawned, do NOT switch anymore.
+                            if (!player.PawnIsAlive && justAutoAssigned.Contains(player.SteamID)) {
                                 lock (TeamAssignLock) {
                                     var all2 = Utilities.GetPlayers().Where(x => x != null && x.IsValid && !x.IsHLTV);
                                     int ct2 = all2.Count(x => x.TeamNum == (byte)CsTeam.CounterTerrorist);
                                     int tt2 = all2.Count(x => x.TeamNum == (byte)CsTeam.Terrorist);
 
-                                    var corrected = DecideTeam(player.TeamNum, ct2, tt2);
-                                    if ((byte)corrected != player.TeamNum)
+                                    // Re-decide as if joining fresh (still non-playable context)
+                                    var corrected = DecideTeamForJoin(ct2, tt2);
+                                    if ((byte)corrected != player.TeamNum) {
+                                        // Safe to swap because still not alive (spawn not finalized)
                                         player.SwitchTeam(corrected);
+                                    }
                                 }
                             }
 
@@ -93,10 +116,8 @@ namespace OSBase.Modules {
                             string color = teamNow == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
                             player.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{teamNow}\x01 team.");
 
-                            // Guard against engine SPEC fallback
                             teamGuards[player.SteamID] = (teamNow, DateTime.UtcNow.AddSeconds(1));
 
-                            // Warmup-only respawn
                             if (warmupActive && !player.PawnIsAlive)
                                 TryForceSpawn(player);
                         } catch { }
@@ -126,6 +147,7 @@ namespace OSBase.Modules {
                     return HookResult.Continue;
                 }
 
+                // If engine bounces them to SPEC right after join, push them back
                 if (player.TeamNum == (byte)CsTeam.Spectator && !player.PawnIsAlive) {
                     player.SwitchTeam(guard.team);
                 }
@@ -134,23 +156,13 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private static CsTeam DecideTeam(byte current, int ct, int tt) {
-            bool onTeam = IsPlayable(current);
-
-            if (!onTeam) {
-                int dCT = Math.Abs((ct + 1) - tt);
-                int dT = Math.Abs(ct - (tt + 1));
-                if (dCT < dT) return CsTeam.CounterTerrorist;
-                if (dT < dCT) return CsTeam.Terrorist;
-                return Random.Shared.Next(2) == 0 ? CsTeam.CounterTerrorist : CsTeam.Terrorist;
-            } else {
-                bool isCT = current == (byte)CsTeam.CounterTerrorist;
-                int stay = Math.Abs(ct - tt);
-                int swch = isCT ? Math.Abs((ct - 1) - (tt + 1)) : Math.Abs((ct + 1) - (tt - 1));
-                if (swch < stay)
-                    return isCT ? CsTeam.Terrorist : CsTeam.CounterTerrorist;
-                return (CsTeam)current;
-            }
+        // New: joining decision ONLY (never used for switching a live player)
+        private static CsTeam DecideTeamForJoin(int ct, int tt) {
+            int dCT = Math.Abs((ct + 1) - tt);
+            int dT  = Math.Abs(ct - (tt + 1));
+            if (dCT < dT) return CsTeam.CounterTerrorist;
+            if (dT  < dCT) return CsTeam.Terrorist;
+            return Random.Shared.Next(2) == 0 ? CsTeam.CounterTerrorist : CsTeam.Terrorist;
         }
 
         private void TryForceSpawn(CCSPlayerController player) {
