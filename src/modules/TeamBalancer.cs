@@ -13,12 +13,12 @@ using CounterStrikeSharp.API.Core.Attributes.Registration;
 namespace OSBase.Modules {
 
     public class TeamBalancer : IModule {
-        public string ModuleName => "teambalancer";
+        public string ModuleName     => "teambalancer";
         public string ModuleNameNice => "TeamBalancer";
 
         private OSBase? osbase;
         private Config? config;
-        private GameStats? gameStats; // provided by OSBase
+        private GameStats? gameStats;
 
         // Teams
         private const int TEAM_S  = (int)CsTeam.Spectator;
@@ -28,23 +28,27 @@ namespace OSBase.Modules {
         // Map bombsite info
         private readonly Dictionary<string, int> mapBombsites = new();
         private const string mapConfigFile = "teambalancer_mapinfo.cfg";
-        private int bombsites = 2; // default 2-site
+        private int bombsites = 2; // default
         private string currentMap = "";
 
-        // Warmup policy (single deterministic pass at WarmupEnd)
+        // Warmup policy
         private const float WARMUP_TARGET_DEVIATION = 1500f;
         private const int   WARMUP_MAX_SWAPS        = 2;
-        private DateTime mapStartUtc;
+
+        // Warmup "burst" scheduling (single burst just before warmup ends)
+        private const float WARMUP_BURST_AT       = 40f; // seconds after map start (warmup ~45s)
+        private const int   WARMUP_BURST_PASSES   = 3;   // immediate passes in same tick
+        private const int   WARMUP_SWAPS_PER_PASS = 1;   // max swaps attempted per pass
 
         // Game structure (you run 10 + 10)
         private const int HALF_ROUNDS = 10;
         private const int MAX_ROUNDS  = 20;
 
-        // Live blending / outlier & clamps
-        private const float OUTLIER_PCT     = 0.50f;  // ±50% vs 90d → ignore live
-        private const float OUTLIER_ABS     = 4000f;  // ±4000  vs 90d → ignore live
-        private const float LATE_ABS_CLAMP  = 2500f;  // clamp live around 90d late
-        private const float LATE_PCT_CLAMP  = 0.35f;  // ±35% of 90d late
+        // Live blending / outliers & clamps
+        private const float OUTLIER_PCT     = 0.50f; // ±50% vs 90d → ignore live
+        private const float OUTLIER_ABS     = 4000f; // ±4000  vs 90d → ignore live
+        private const float LATE_ABS_CLAMP  = 2500f; // clamp live around 90d late
+        private const float LATE_PCT_CLAMP  = 0.35f; // ±35% of 90d late
 
         // Swap thresholds (mid/late)
         private const float MID_SWAP_THRESHOLD  = 1500f;
@@ -56,7 +60,7 @@ namespace OSBase.Modules {
         private const int MIN_ROUNDS_BETWEEN_SWAPS = 3;
         private const int NO_SWAP_LAST_N_ROUNDS    = 3;
         private const int MAX_LATE_SWAPS           = 1;  // per half
-        private const int MAX_SWAPS_PER_MAP        = 3;  // whole map limit
+        private const int MAX_SWAPS_PER_MAP        = 3;  // whole map
         private const float EMERGENCY_GAP          = 3500f;
 
         private int lastSwapRound = -999;
@@ -88,12 +92,11 @@ namespace OSBase.Modules {
                 return;
             }
 
-            // Events
             try {
                 osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
                 osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
 
-                osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd, HookMode.Pre);
+                osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd, HookMode.Post);
                 osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd, HookMode.Post);
                 osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime, HookMode.Post);
 
@@ -106,12 +109,10 @@ namespace OSBase.Modules {
 
         private void OnMapStart(string mapName) {
             currentMap = mapName;
-            mapStartUtc = DateTime.UtcNow;
             swapsThisMap = 0;
             lateSwapsThisHalf = 0;
             currentHalfIndex = 0;
 
-            // detect bombsite count (1 = cs_* hostages; otherwise check file/cache)
             if (mapBombsites.TryGetValue(mapName, out int bs)) {
                 bombsites = bs;
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} bombsites={bombsites}");
@@ -120,10 +121,13 @@ namespace OSBase.Modules {
                 config?.AddCustomConfigLine(mapConfigFile, $"{mapName} {bombsites}");
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} defaulted bombsites={bombsites}");
             }
+
+            // Schedule one warmup burst close to warmup end
+            osbase?.AddTimer(WARMUP_BURST_AT, WarmupBalanceBurst);
         }
 
         private void OnMapEnd() {
-            // nothing special; counters reset on next start
+            // counters reset on next start
         }
 
         private void LoadMapInfo() {
@@ -141,10 +145,9 @@ namespace OSBase.Modules {
 
         // ===== Event handlers =====
 
-        [GameEventHandler(HookMode.Pre)]
+        [GameEventHandler(HookMode.Post)]
         private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
-            TryBalanceWarmupToDeviation(); // sizes + up to N swaps using 90d only
-            // Clear immunity so warmup moves don't penalize players
+            // Only clear immunity; do not move after warmup
             var gs = osbase?.GetGameStats();
             if (gs != null) {
                 foreach (var kv in gs.getTeam(TEAM_T).playerList)  kv.Value.immune = 0;
@@ -156,7 +159,6 @@ namespace OSBase.Modules {
 
         [GameEventHandler(HookMode.Post)]
         private HookResult OnStartHalftime(EventStartHalftime ev, GameEventInfo info) {
-            // entering second half
             lateSwapsThisHalf = 0;
             currentHalfIndex = 1;
             return HookResult.Continue;
@@ -164,54 +166,77 @@ namespace OSBase.Modules {
 
         [GameEventHandler(HookMode.Post)]
         private HookResult OnRoundEnd(EventRoundEnd ev, GameEventInfo info) {
-            osbase?.AddTimer(6.5f, () => {
-                BalanceAtRoundEnd();
-            });
+            osbase?.AddTimer(6.5f, () => BalanceAtRoundEnd());
             return HookResult.Continue;
         }
 
-        // ===== Warmup deterministic pass =====
+        // ===== Warmup burst (before warmup ends) =====
 
-        private void TryBalanceWarmupToDeviation() {
+        private void WarmupBalanceBurst() {
             var gs = osbase?.GetGameStats();
             if (gs == null) return;
+
+            // Only run during warmup (GameStats keeps roundNumber == 0 in warmup)
+            if (gs.roundNumber != 0) {
+                Console.WriteLine("[DEBUG] OSBase[teambalancer] WarmupBurst skipped: not in warmup.");
+                return;
+            }
 
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
 
-            // 1) sizes first (odd → CT if 2-site; odd → T if 1-site)
-            var (idealT, idealCT) = ComputeIdealSizes(tStats.numPlayers(), cStats.numPlayers());
-            int currT = tStats.numPlayers();
-            int currCT = cStats.numPlayers();
-            if (currT != idealT || currCT != idealCT) {
-                int moves = Math.Abs(currT - idealT);
-                bool moveFromT = currT > idealT;
-                EvenTeamSizesWarmup(gs, tStats, cStats, moveFromT, moves);
+            if (tStats.numPlayers() + cStats.numPlayers() < 6) {
+                Console.WriteLine("[DEBUG] OSBase[teambalancer] WarmupBurst: too few players.");
+                return;
             }
 
-            // 2) swap loop up to cap
-            for (int i = 0; i < WARMUP_MAX_SWAPS; i++) {
+            // 1) Fix odd-player side first (uses bombsite rule)
+            var (idealT, idealCT) = ComputeIdealSizes(tStats.numPlayers(), cStats.numPlayers());
+            if (tStats.numPlayers() != idealT || cStats.numPlayers() != idealCT) {
+                int moves = Math.Abs(tStats.numPlayers() - idealT);
+                bool moveFromT = tStats.numPlayers() > idealT;
+                EvenTeamSizesWarmup(gs, tStats, cStats, moveFromT, moves);
+                tStats = gs.getTeam(TEAM_T);
+                cStats = gs.getTeam(TEAM_CT);
+            }
+
+            // 2) Run N passes back-to-back (90d-only) to pull averages within target deviation
+            for (int pass = 0; pass < WARMUP_BURST_PASSES; pass++) {
+                int did = TryBalanceWarmupToDeviationWithBudget(WARMUP_SWAPS_PER_PASS);
+                if (did == 0) break;
+                tStats = gs.getTeam(TEAM_T);
+                cStats = gs.getTeam(TEAM_CT);
+            }
+        }
+
+        private int TryBalanceWarmupToDeviationWithBudget(int budget) {
+            var gs = osbase?.GetGameStats();
+            if (gs == null || budget <= 0) return 0;
+
+            var tStats = gs.getTeam(TEAM_T);
+            var cStats = gs.getTeam(TEAM_CT);
+
+            int swaps = 0;
+            for (int i = 0; i < budget; i++) {
                 float tAvg = TeamWarmupAverage90d(gs, tStats);
                 float cAvg = TeamWarmupAverage90d(gs, cStats);
                 float gap  = MathF.Abs(tAvg - cAvg);
-
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Warmup target: gap={gap:F0} target={WARMUP_TARGET_DEVIATION} swap#{i+1}/{WARMUP_MAX_SWAPS}");
                 if (gap <= WARMUP_TARGET_DEVIATION) break;
 
-                if (!FindBestSwapPairWithGain_Warmup(gs, tStats, cStats, out int uA, out int uB, out float gain)) {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Warmup: no improving swap found.");
+                if (!FindBestSwapPairWithGain_Warmup(gs, tStats, cStats, out int uA, out int uB, out float gain))
                     break;
-                }
 
                 var pA = Utilities.GetPlayerFromUserid(uA);
                 var pB = Utilities.GetPlayerFromUserid(uB);
-                if (pA == null || pB == null || !pA.UserId.HasValue || !pB.UserId.HasValue) break;
+                if (pA == null || pB == null || !pA.UserId.HasValue || !pB.UserId.HasValue)
+                    break;
 
-                // Warmup moves: no immunity
                 RawMove(gs, pA, (pA.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T);
                 RawMove(gs, pB, (pB.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T);
                 AnnounceSwap(pA, pB);
+                swaps++;
             }
+            return swaps;
         }
 
         // ===== Live round-end balancing (low-churn) =====
@@ -223,16 +248,15 @@ namespace OSBase.Modules {
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
 
-            // if sizes off, fix first (use live signals to choose good candidate)
+            // If sizes off, fix first using live signals
             var (idealT, idealCT) = ComputeIdealSizes(tStats.numPlayers(), cStats.numPlayers());
             if (tStats.numPlayers() != idealT || cStats.numPlayers() != idealCT) {
                 int moves = Math.Abs(tStats.numPlayers() - idealT);
                 bool moveFromT = tStats.numPlayers() > idealT;
                 EvenTeamSizesLive(gs, tStats, cStats, moveFromT, moves);
-                return; // do not also do a swap same tick; let it settle
+                return; // let it settle; avoid swap same tick
             }
 
-            // consider swap based on blended averages and low-churn gates
             float tAvg = TeamSignalAverage(gs, tStats);
             float cAvg = TeamSignalAverage(gs, cStats);
             float gap  = MathF.Abs(tAvg - cAvg);
@@ -240,12 +264,13 @@ namespace OSBase.Modules {
             if (!ShouldSwapThisRound(gs, gap)) return;
             if (swapsThisMap >= MAX_SWAPS_PER_MAP) return;
 
-            if (FindBestSwapPairWithGain_Live(gs, tStats, cStats, out int uA, out int uB, out float gain) && gain >= MIN_PROJECTED_GAIN) {
+            if (FindBestSwapPairWithGain_Live(gs, tStats, cStats, out int uA, out int uB, out float gain) &&
+                gain >= MIN_PROJECTED_GAIN)
+            {
                 var pA = Utilities.GetPlayerFromUserid(uA);
                 var pB = Utilities.GetPlayerFromUserid(uB);
                 if (pA == null || pB == null || !pA.UserId.HasValue || !pB.UserId.HasValue) return;
 
-                // Respect per-player cooldown
                 if (PlayerOnCooldown(uA, gs.roundNumber) || PlayerOnCooldown(uB, gs.roundNumber)) return;
 
                 MoveWithImmunity(gs, pA, (pA.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T);
@@ -263,26 +288,24 @@ namespace OSBase.Modules {
         private bool ShouldSwapThisRound(GameStats gs, float gap) {
             int round = gs.roundNumber;
 
-            // Track current half automatically
+            // Track current half automatically to use warning-free
             currentHalfIndex = (round > HALF_ROUNDS) ? 1 : 0;
 
             // Quiet final rounds unless catastrophic
             if (round >= (MAX_ROUNDS - NO_SWAP_LAST_N_ROUNDS) && gap < EMERGENCY_GAP)
                 return false;
 
-            // Cooldown check
+            // Cooldown
             if (round - lastSwapRound < MIN_ROUNDS_BETWEEN_SWAPS)
                 return false;
 
-            // Threshold selection
+            // Threshold & late-half limits
             float thr = (currentHalfIndex == 0) ? MID_SWAP_THRESHOLD : LATE_SWAP_THRESHOLD;
             float startBand = thr + LATE_HYSTERESIS;
 
-            // Late-half limits
             if (currentHalfIndex == 1 && lateSwapsThisHalf >= MAX_LATE_SWAPS)
                 return false;
 
-            // Decide if swap is needed
             return (gap > ((currentHalfIndex == 0) ? thr : startBand));
         }
 
@@ -298,7 +321,7 @@ namespace OSBase.Modules {
                 // CT get the odd on 2-site maps
                 return (total / 2, total / 2 + total % 2);
             } else {
-                // T get the odd on 1-site (hostage or single point) maps
+                // T get the odd on 1-site (hostage/single) maps
                 return (total / 2 + total % 2, total / 2);
             }
         }
@@ -317,8 +340,6 @@ namespace OSBase.Modules {
                     int uid = kv.Key;
                     var ps  = kv.Value;
                     float sig = WarmupSignalForPlayer(gs, uid, ps);
-
-                    // we want a player whose move reduces the avg gap; pick near target
                     float diff = MathF.Abs(sig - targetDeltaPer);
                     if (diff < bestDelta) { bestDelta = diff; bestUser = uid; }
                 }
@@ -328,8 +349,7 @@ namespace OSBase.Modules {
                 if (player == null || !player.UserId.HasValue) break;
 
                 int toTeam = moveFromT ? TEAM_CT : TEAM_T;
-                RawMove(gs, player, toTeam);
-                AnnounceMove(player, moveFromT ? TEAM_T : TEAM_CT, toTeam);
+                RawMove(gs, player, toTeam); // announces inside
             }
         }
 
@@ -351,14 +371,9 @@ namespace OSBase.Modules {
                     int tn = tStats.numPlayers();
                     int cn = cStats.numPlayers();
 
-                    // simulate moving this player
-                    if (moveFromT) {
-                        tSum -= sig; tn--;
-                        cSum += sig; cn++;
-                    } else {
-                        cSum -= sig; cn--;
-                        tSum += sig; tn++;
-                    }
+                    if (moveFromT) { tSum -= sig; tn--; cSum += sig; cn++; }
+                    else           { cSum -= sig; cn--; tSum += sig; tn++; }
+
                     float newGap = MathF.Abs((tSum / Math.Max(1, tn)) - (cSum / Math.Max(1, cn)));
                     if (newGap < bestScore) { bestScore = newGap; bestUser = uid; }
                 }
@@ -368,8 +383,7 @@ namespace OSBase.Modules {
                 if (player == null || !player.UserId.HasValue) break;
 
                 int toTeam = moveFromT ? TEAM_CT : TEAM_T;
-                MoveWithImmunity(gs, player, toTeam);
-                AnnounceMove(player, moveFromT ? TEAM_T : TEAM_CT, toTeam);
+                MoveWithImmunity(gs, player, toTeam); // announces inside
                 lastSwapRound = gs.roundNumber;
                 swapsThisMap++;
                 playerSwapRound[player.UserId.Value] = gs.roundNumber;
@@ -378,14 +392,12 @@ namespace OSBase.Modules {
 
         // ===== Swap selection (composition-aware) =====
 
-        // Warmup: use 90d/provisional only
         private bool FindBestSwapPairWithGain_Warmup(GameStats gs, TeamStats tStats, TeamStats cStats,
             out int uA, out int uB, out float bestGain)
         {
             return FindBestSwapPairCore(gs, tStats, cStats, useWarmupSignals: true, out uA, out uB, out bestGain);
         }
 
-        // Live: use blended SignalSkill and anti-churn
         private bool FindBestSwapPairWithGain_Live(GameStats gs, TeamStats tStats, TeamStats cStats,
             out int uA, out int uB, out float bestGain)
         {
@@ -397,7 +409,6 @@ namespace OSBase.Modules {
         {
             uA = -1; uB = -1; bestGain = 0f;
 
-            // Build per-player signals
             var all = new List<(int uid, float sig, bool isT)>();
             foreach (var kv in tStats.playerList) {
                 float sig = useWarmupSignals ? WarmupSignalForPlayer(gs, kv.Key, kv.Value) : SignalSkill(gs, kv.Key, kv.Value);
@@ -413,19 +424,17 @@ namespace OSBase.Modules {
             float baseScore = ScoreState(all, tStats, cStats);
             float bestScore = float.MaxValue;
 
-            // classify strong/weak using global quartiles
             var sorted = all.OrderByDescending(x => x.sig).ToList();
             int quart = Math.Max(1, sorted.Count / 4);
             var strongSet = new HashSet<int>(sorted.Take(quart).Select(x => x.uid));
             var weakSet   = new HashSet<int>(sorted.Skip(Math.Max(0, sorted.Count - quart)).Select(x => x.uid));
 
             foreach (var s in all) {
-                if (useWarmupSignals == false && PlayerOnCooldown(s.uid, gs.roundNumber)) continue; // live only
+                if (!useWarmupSignals && PlayerOnCooldown(s.uid, gs.roundNumber)) continue;
                 foreach (var w in all) {
-                    if (s.isT == w.isT) continue; // must be across teams
-                    if (useWarmupSignals == false && PlayerOnCooldown(w.uid, gs.roundNumber)) continue;
+                    if (s.isT == w.isT) continue;
+                    if (!useWarmupSignals && PlayerOnCooldown(w.uid, gs.roundNumber)) continue;
 
-                    // simulate swap s ↔ w
                     float score = ScoreStateSwapSim(all, tStats, cStats, s.uid, w.uid, strongSet, weakSet);
                     if (score < bestScore) {
                         bestScore = score;
@@ -438,7 +447,6 @@ namespace OSBase.Modules {
             return (uA != -1 && uB != -1);
         }
 
-        // Score = mean gap + composition penalty (difference of strong/weak counts)
         private float ScoreState(List<(int uid, float sig, bool isT)> all, TeamStats tStats, TeamStats cStats) {
             float tSum = 0, cSum = 0; int tn = 0, cn = 0;
             foreach (var x in all) {
@@ -446,7 +454,6 @@ namespace OSBase.Modules {
             }
             float meanGap = MathF.Abs((tn > 0 ? tSum/tn : 0) - (cn > 0 ? cSum/cn : 0));
 
-            // composition
             var sorted = all.OrderByDescending(x => x.sig).ToList();
             int quart = Math.Max(1, sorted.Count / 4);
             var strongSet = new HashSet<int>(sorted.Take(quart).Select(x => x.uid));
@@ -457,7 +464,6 @@ namespace OSBase.Modules {
                 if (strongSet.Contains(x.uid)) { if (x.isT) strongT++; else strongCT++; }
                 if (weakSet.Contains(x.uid))   { if (x.isT) weakT++;   else weakCT++;   }
             }
-            // we want strong/weak counts as even as possible
             float compPenalty = 300f * (MathF.Abs(strongT - strongCT) + MathF.Abs(weakT - weakCT));
             return meanGap + compPenalty;
         }
@@ -470,8 +476,8 @@ namespace OSBase.Modules {
 
             foreach (var x in all) {
                 bool isT = x.isT;
-                if (x.uid == uidA) isT = !isT; // swapped
-                if (x.uid == uidB) isT = !isT; // swapped
+                if (x.uid == uidA) isT = !isT;
+                if (x.uid == uidB) isT = !isT;
 
                 if (isT) { tSum += x.sig; tn++; } else { cSum += x.sig; cn++; }
 
@@ -488,7 +494,6 @@ namespace OSBase.Modules {
 
         // ===== Signals & averaging =====
 
-        // Warmup per-player signal: 90d, else provisional
         private float WarmupSignalForPlayer(GameStats gs, int userId, PlayerStats ps) {
             float s90 = gs.GetCached90dByUserId(userId);
             if (s90 > 0f) return s90;
@@ -515,13 +520,10 @@ namespace OSBase.Modules {
 
         private float SumTeamSignal(GameStats gs, TeamStats team) {
             double sum = 0;
-            foreach (var kv in team.playerList) {
-                sum += SignalSkill(gs, kv.Key, kv.Value);
-            }
+            foreach (var kv in team.playerList) sum += SignalSkill(gs, kv.Key, kv.Value);
             return (float)sum;
         }
 
-        // Blended per-player (90d + guarded live)
         private float SignalSkill(GameStats gs, int userId, PlayerStats ps) {
             int round = gs.roundNumber;
             float s90  = gs.GetCached90dByUserId(userId);
@@ -536,18 +538,16 @@ namespace OSBase.Modules {
                 float wLive;
                 if (round <= 6)        wLive = 0.35f;
                 else if (round <= 15)  wLive = 0.45f;
-                else                   wLive = 0.30f; // taper back late
+                else                   wLive = 0.30f;
 
                 if (round >= 16) {
                     float upper = s90 + Math.Max(LATE_ABS_CLAMP, LATE_PCT_CLAMP * s90);
                     float lower = s90 - Math.Max(LATE_ABS_CLAMP, LATE_PCT_CLAMP * s90);
                     live = Math.Clamp(live, lower, upper);
                 }
-
                 return s90 * (1f - wLive) + live * wLive;
             }
 
-            // No 90d
             if (ps.rounds == 0) return ProvisionalSkill(ps);
             return live;
         }
@@ -596,7 +596,6 @@ namespace OSBase.Modules {
             int from = player.TeamNum;
             player.SwitchTeam((CsTeam)targetTeam);
             gs.movePlayer(player.UserId.Value, targetTeam);
-            // bump immunity to avoid re-targeting this player soon
             var ps = gs.GetPlayerStats(player.UserId.Value);
             ps.immune += 3;
             AnnounceMove(player, from, targetTeam);
