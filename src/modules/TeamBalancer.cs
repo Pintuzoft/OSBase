@@ -185,12 +185,7 @@ namespace OSBase.Modules {
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
 
-            if (tStats.numPlayers() + cStats.numPlayers() < 6) {
-                Console.WriteLine("[DEBUG] OSBase[teambalancer] WarmupBurst: too few players.");
-                return;
-            }
-
-            // 1) Fix odd-player side first (uses bombsite rule)
+            // --- Always fix team sizes (odd player) even with few players ---
             var (idealT, idealCT) = ComputeIdealSizes(tStats.numPlayers(), cStats.numPlayers());
             if (tStats.numPlayers() != idealT || cStats.numPlayers() != idealCT) {
                 int moves = Math.Abs(tStats.numPlayers() - idealT);
@@ -200,7 +195,13 @@ namespace OSBase.Modules {
                 cStats = gs.getTeam(TEAM_CT);
             }
 
-            // 2) Run N passes back-to-back (90d-only) to pull averages within target deviation
+            // --- Swaps only if a sensible lobby (prevents chaos in 2v2/3v2) ---
+            if (tStats.numPlayers() + cStats.numPlayers() < 6 || tStats.numPlayers() == 0 || cStats.numPlayers() == 0) {
+                Console.WriteLine("[DEBUG] OSBase[teambalancer] WarmupBurst: skip swaps (too few players).");
+                return;
+            }
+
+            // Run N passes back-to-back (90d-only) to pull averages within target deviation
             for (int pass = 0; pass < WARMUP_BURST_PASSES; pass++) {
                 int did = TryBalanceWarmupToDeviationWithBudget(WARMUP_SWAPS_PER_PASS);
                 if (did == 0) break;
@@ -231,8 +232,9 @@ namespace OSBase.Modules {
                 if (pA == null || pB == null || !pA.UserId.HasValue || !pB.UserId.HasValue)
                     break;
 
-                RawMove(gs, pA, (pA.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T);
-                RawMove(gs, pB, (pB.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T);
+                // Silence individual move messages; announce only the combined swap
+                RawMove(gs, pA, (pA.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T, announce:false);
+                RawMove(gs, pB, (pB.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T, announce:false);
                 AnnounceSwap(pA, pB);
                 swaps++;
             }
@@ -273,8 +275,9 @@ namespace OSBase.Modules {
 
                 if (PlayerOnCooldown(uA, gs.roundNumber) || PlayerOnCooldown(uB, gs.roundNumber)) return;
 
-                MoveWithImmunity(gs, pA, (pA.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T);
-                MoveWithImmunity(gs, pB, (pB.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T);
+                // Silence individual move messages; announce only the combined swap
+                MoveWithImmunity(gs, pA, (pA.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T, announce:false);
+                MoveWithImmunity(gs, pB, (pB.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T, announce:false);
                 AnnounceSwap(pA, pB);
 
                 lastSwapRound = gs.roundNumber;
@@ -288,7 +291,7 @@ namespace OSBase.Modules {
         private bool ShouldSwapThisRound(GameStats gs, float gap) {
             int round = gs.roundNumber;
 
-            // Track current half automatically to use warning-free
+            // Track current half automatically
             currentHalfIndex = (round > HALF_ROUNDS) ? 1 : 0;
 
             // Quiet final rounds unless catastrophic
@@ -349,7 +352,7 @@ namespace OSBase.Modules {
                 if (player == null || !player.UserId.HasValue) break;
 
                 int toTeam = moveFromT ? TEAM_CT : TEAM_T;
-                RawMove(gs, player, toTeam); // announces inside
+                RawMove(gs, player, toTeam); // announce single move
             }
         }
 
@@ -383,7 +386,7 @@ namespace OSBase.Modules {
                 if (player == null || !player.UserId.HasValue) break;
 
                 int toTeam = moveFromT ? TEAM_CT : TEAM_T;
-                MoveWithImmunity(gs, player, toTeam); // announces inside
+                MoveWithImmunity(gs, player, toTeam); // announce single move
                 lastSwapRound = gs.roundNumber;
                 swapsThisMap++;
                 playerSwapRound[player.UserId.Value] = gs.roundNumber;
@@ -583,22 +586,22 @@ namespace OSBase.Modules {
             } catch { }
         }
 
-        private void RawMove(GameStats gs, CCSPlayerController player, int targetTeam) {
+        private void RawMove(GameStats gs, CCSPlayerController player, int targetTeam, bool announce = true) {
             if (player == null || !player.UserId.HasValue) return;
             int from = player.TeamNum;
             player.SwitchTeam((CsTeam)targetTeam);
             gs.movePlayer(player.UserId.Value, targetTeam);
-            AnnounceMove(player, from, targetTeam);
+            if (announce) AnnounceMove(player, from, targetTeam);
         }
 
-        private void MoveWithImmunity(GameStats gs, CCSPlayerController player, int targetTeam) {
+        private void MoveWithImmunity(GameStats gs, CCSPlayerController player, int targetTeam, bool announce = true) {
             if (player == null || !player.UserId.HasValue) return;
             int from = player.TeamNum;
             player.SwitchTeam((CsTeam)targetTeam);
             gs.movePlayer(player.UserId.Value, targetTeam);
             var ps = gs.GetPlayerStats(player.UserId.Value);
             ps.immune += 3;
-            AnnounceMove(player, from, targetTeam);
+            if (announce) AnnounceMove(player, from, targetTeam);
         }
     }
 }
