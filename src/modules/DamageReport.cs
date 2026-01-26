@@ -39,7 +39,7 @@ public class DamageReport : IModule {
     private static string[] BuildHitgroupLabels() {
         var a = new string[256];
         for (int i = 0; i < a.Length; i++) {
-            a[i] = "U";
+            a[i] = $"U{i}";
         }
 
         // Common Source/CS hitgroups
@@ -306,7 +306,8 @@ public class DamageReport : IModule {
             int hgDmg = dmgByGroup?.GetValueOrDefault(hitgroup, 0) ?? 0;
 
             calc += hgDmg;
-            s += $"{HG(hitgroup)} {hitCount}:{hgDmg}, ";
+            s += $"{HG(hitgroup)}({(byte)hitgroup}) {hitCount}:{hgDmg}, ";
+//            s += $"{HG(hitgroup)} {hitCount}:{hgDmg}, ";
         }
 
         s = s.TrimEnd(' ', ',') + "]";
@@ -340,7 +341,8 @@ public class DamageReport : IModule {
             int hgDmg = dmgByGroup?.GetValueOrDefault(hitgroup, 0) ?? 0;
 
             calc += hgDmg;
-            s += $"{HG(hitgroup)} {hitCount}:{hgDmg}, ";
+            s += $"{HG(hitgroup)}({(byte)hitgroup}) {hitCount}:{hgDmg}, ";
+//            s += $"{HG(hitgroup)} {hitCount}:{hgDmg}, ";
         }
 
         s = s.TrimEnd(' ', ',') + "]";
