@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
@@ -16,14 +15,8 @@ public class DamageReport : IModule {
     private const int ENVIRONMENT = -1;
     private const float DELAY_SECONDS = 3.0f;
 
-    // Hard logging throttles
-    private DateTime _lastHurtLog = DateTime.MinValue;
-    private const int HURT_LOG_INTERVAL_MS = 250;
-
-    private DateTime _lastEventDump = DateTime.MinValue;
-    private const int EVENT_DUMP_COOLDOWN_MS = 5000;
-
     private readonly Dictionary<int, HashSet<int>> killedPlayer = new();
+
     private readonly Dictionary<int, Dictionary<int, int>> damageGiven = new();
     private readonly Dictionary<int, Dictionary<int, int>> damageTaken = new();
     private readonly Dictionary<int, Dictionary<int, int>> hitsGiven = new();
@@ -37,7 +30,7 @@ public class DamageReport : IModule {
     private readonly Dictionary<int, string> playerNames = new();
     private readonly HashSet<int> reportedPlayers = new();
 
-    // 0..255 hitgroup labels; unknown -> U{n}
+    // 0..255 labels; unknown -> U{n}
     private static readonly string[] HitgroupLabel = BuildHitgroupLabels();
 
     private static string[] BuildHitgroupLabels() {
@@ -46,6 +39,7 @@ public class DamageReport : IModule {
             a[i] = $"U{i}";
         }
 
+        // Common Source/CS hitgroups
         a[0]  = "Generic";
         a[1]  = "Head";
         a[2]  = "Chest";
@@ -62,6 +56,10 @@ public class DamageReport : IModule {
 
     private static string HG(int hitgroup) {
         return HitgroupLabel[(byte)hitgroup];
+    }
+
+    private static bool IsPlausibleHitgroup(int hg) {
+        return hg >= 0 && hg <= 11;
     }
 
     public void Load(OSBase inOsbase, Config inConfig) {
@@ -106,50 +104,22 @@ public class DamageReport : IModule {
                 return HookResult.Continue;
             }
 
-            int victimId = e.Userid.UserId ?? -1;
+            if (e.DmgHealth <= 0) {
+                return HookResult.Continue;
+            }
+
             int attackerId = e.Attacker.UserId ?? ENVIRONMENT;
+            int victimId = e.Userid.UserId ?? -1;
             if (victimId < 0) {
                 return HookResult.Continue;
             }
 
-            // Typed values (fallback)
-            int dmgHealthTyped = e.DmgHealth;
-            int dmgArmorTyped = e.DmgArmor;
-            int hgTyped = e.Hitgroup;
-            string weaponTyped = e.Weapon ?? "";
-
-            // Raw values via reflection (preferred when wrappers go bananas)
-            int? hgRaw = TryGetEventInt(e, "hitgroup");
-            int? dmgHealthRaw = TryGetEventInt(e, "dmg_health");
-            int? dmgArmorRaw = TryGetEventInt(e, "dmg_armor");
-            string? weaponRaw = TryGetEventString(e, "weapon");
-
-            int hitgroup = hgRaw ?? hgTyped;
-            int damage = dmgHealthRaw ?? dmgHealthTyped;
-            int armorDamage = dmgArmorRaw ?? dmgArmorTyped;
-            string weapon = !string.IsNullOrEmpty(weaponRaw) ? weaponRaw! : weaponTyped;
-
-            if (damage <= 0) {
-                return HookResult.Continue;
-            }
-
-            if (attackerId == victimId && weapon == "world") {
+            if (attackerId == victimId && e.Weapon == "world") {
                 attackerId = ENVIRONMENT;
             }
 
-            // Hard log (rate-limited)
-            var now = DateTime.UtcNow;
-            if ((now - _lastHurtLog).TotalMilliseconds >= HURT_LOG_INTERVAL_MS) {
-                _lastHurtLog = now;
-                Console.WriteLine($"[DR] a={attackerId} v={victimId} dmgH={damage} dmgA={armorDamage} hg={hitgroup}({HG(hitgroup)}) typedHG={hgTyped} rawHG={(hgRaw.HasValue ? hgRaw.Value : -1)} weapon={weapon}");
-            }
-
-            // Dump full raw fields when mismatch or suspicious values
-            if (hgRaw.HasValue && hgRaw.Value != hgTyped) {
-                DumpPlayerHurtEvent(e, $"HITGROUP MISMATCH typed={hgTyped} raw={hgRaw.Value} weapon={weapon} dmgH={damage} dmgA={armorDamage}");
-            } else if (hitgroup < 0 || hitgroup > 50) {
-                DumpPlayerHurtEvent(e, $"SUSPECT HITGROUP used={hitgroup} label={HG(hitgroup)} typed={hgTyped} raw={(hgRaw.HasValue ? hgRaw.Value : -1)} weapon={weapon}");
-            }
+            int damage = e.DmgHealth;
+            int hitgroup = e.Hitgroup;
 
             // Totals
             var dG = GetOrCreate(damageGiven, attackerId);
@@ -163,16 +133,18 @@ public class DamageReport : IModule {
             hG[victimId] = hG.GetValueOrDefault(victimId, 0) + 1;
             hT[attackerId] = hT.GetValueOrDefault(attackerId, 0) + 1;
 
-            // Hitbox stats (store whatever ID we used)
-            var hbG = GetOrCreateNested(hitboxGiven, attackerId, victimId);
-            var hbT = GetOrCreateNested(hitboxTaken, victimId, attackerId);
-            hbG[hitgroup] = hbG.GetValueOrDefault(hitgroup, 0) + 1;
-            hbT[hitgroup] = hbT.GetValueOrDefault(hitgroup, 0) + 1;
+            // Hitbox details only if plausible (CSS bug workaround)
+            if (IsPlausibleHitgroup(hitgroup)) {
+                var hbG = GetOrCreateNested(hitboxGiven, attackerId, victimId);
+                var hbT = GetOrCreateNested(hitboxTaken, victimId, attackerId);
+                hbG[hitgroup] = hbG.GetValueOrDefault(hitgroup, 0) + 1;
+                hbT[hitgroup] = hbT.GetValueOrDefault(hitgroup, 0) + 1;
 
-            var hbGD = GetOrCreateNested(hitboxGivenDamage, attackerId, victimId);
-            var hbTD = GetOrCreateNested(hitboxTakenDamage, victimId, attackerId);
-            hbGD[hitgroup] = hbGD.GetValueOrDefault(hitgroup, 0) + damage;
-            hbTD[hitgroup] = hbTD.GetValueOrDefault(hitgroup, 0) + damage;
+                var hbGD = GetOrCreateNested(hitboxGivenDamage, attackerId, victimId);
+                var hbTD = GetOrCreateNested(hitboxTakenDamage, victimId, attackerId);
+                hbGD[hitgroup] = hbGD.GetValueOrDefault(hitgroup, 0) + damage;
+                hbTD[hitgroup] = hbTD.GetValueOrDefault(hitgroup, 0) + damage;
+            }
 
             return HookResult.Continue;
         } catch (Exception ex) {
@@ -289,6 +261,10 @@ public class DamageReport : IModule {
                 string killedText = (killedPlayer.TryGetValue(userId, out var ks) && ks.Contains(victimId)) ? " (Killed)" : "";
 
                 string hitInfo = BuildHitInfoGiven(userId, victimId, dmg);
+                if (string.IsNullOrEmpty(hitInfo)) {
+                    hitInfo = " [Hitgroups unavailable]";
+                }
+
                 player.PrintToChat($" - {victimName}{killedText}: {hits} hits, {dmg} damage{hitInfo}");
             }
         }
@@ -308,6 +284,10 @@ public class DamageReport : IModule {
                 string killedByText = (killedPlayer.TryGetValue(attackerId, out var ks) && ks.Contains(userId)) ? " (Killed by)" : "";
 
                 string hitInfo = BuildHitInfoTaken(userId, attackerId, dmg);
+                if (string.IsNullOrEmpty(hitInfo)) {
+                    hitInfo = " [Hitgroups unavailable]";
+                }
+
                 player.PrintToChat($" - {attackerName}{killedByText}: {hits} hits, {dmg} damage{hitInfo}");
             }
         }
@@ -335,7 +315,7 @@ public class DamageReport : IModule {
             int hgDmg = dmgByGroup?.GetValueOrDefault(hitgroup, 0) ?? 0;
 
             calc += hgDmg;
-            s += $"{HG(hitgroup)}({(byte)hitgroup}) {hitCount}:{hgDmg}, ";
+            s += $"{HG(hitgroup)} {hitCount}:{hgDmg}, ";
         }
 
         s = s.TrimEnd(' ', ',') + "]";
@@ -369,7 +349,7 @@ public class DamageReport : IModule {
             int hgDmg = dmgByGroup?.GetValueOrDefault(hitgroup, 0) ?? 0;
 
             calc += hgDmg;
-            s += $"{HG(hitgroup)}({(byte)hitgroup}) {hitCount}:{hgDmg}, ";
+            s += $"{HG(hitgroup)} {hitCount}:{hgDmg}, ";
         }
 
         s = s.TrimEnd(' ', ',') + "]";
@@ -425,72 +405,6 @@ public class DamageReport : IModule {
         }
         return null;
     }
-
-    // ---- Reflection raw access (works even if GetInt/GetString are non-public) ----
-
-    private static int? TryGetEventInt(object ev, string key) {
-        object? r = TryInvoke(ev, "GetInt", key);
-        if (r is int i) return i;
-        if (r is short s) return (int)s;
-        if (r is byte b) return (int)b;
-        return null;
-    }
-
-    private static string? TryGetEventString(object ev, string key) {
-        object? r = TryInvoke(ev, "GetString", key);
-        return r as string;
-    }
-
-    private static object? TryInvoke(object target, string methodName, string key) {
-        try {
-            var t = target.GetType();
-            var mi = t.GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (mi == null) return null;
-            return mi.Invoke(target, new object[] { key });
-        } catch {
-            return null;
-        }
-    }
-
-    // ---- Event dump (via reflection) ----
-
-    private void DumpPlayerHurtEvent(EventPlayerHurt e, string reason) {
-        var now = DateTime.UtcNow;
-        if ((now - _lastEventDump).TotalMilliseconds < EVENT_DUMP_COOLDOWN_MS) {
-            return;
-        }
-        _lastEventDump = now;
-
-        Console.WriteLine($"[DR-DUMP] ===== {reason} =====");
-        DumpKey(e, "userid");
-        DumpKey(e, "attacker");
-        DumpKey(e, "health");
-        DumpKey(e, "armor");
-        DumpKey(e, "weapon");
-        DumpKey(e, "dmg_health");
-        DumpKey(e, "dmg_armor");
-        DumpKey(e, "hitgroup");
-        DumpKey(e, "userid_pawn");
-        DumpKey(e, "attacker_pawn");
-        Console.WriteLine("[DR-DUMP] ===== end =====");
-    }
-
-    private void DumpKey(object ev, string key) {
-        int? i = TryGetEventInt(ev, key);
-        string? s = TryGetEventString(ev, key);
-
-        if (i == null && s == null) {
-            Console.WriteLine($"[DR-DUMP] {key}: <unreadable>");
-            return;
-        }
-
-        string line = $"[DR-DUMP] {key}:";
-        if (i != null) line += $" int={i.Value}";
-        if (!string.IsNullOrEmpty(s)) line += $" str='{s}'";
-        Console.WriteLine(line);
-    }
-
-    // ---- Dict helpers ----
 
     private static Dictionary<int, int> GetOrCreate(Dictionary<int, Dictionary<int, int>> dict, int key) {
         if (!dict.TryGetValue(key, out var inner)) {
