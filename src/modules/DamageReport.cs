@@ -15,13 +15,12 @@ public class DamageReport : IModule {
     private const int ENVIRONMENT = -1;
     private const float DELAY_SECONDS = 3.0f;
 
-    // Accept only classic hitgroups for hitbox stats (protects against schema/offset breakage).
-    private const int MIN_HITGROUP = 0;
-    private const int MAX_HITGROUP = 11;
-
-    // Hard logging (rate-limited to avoid log spam storms)
+    // Hard logging throttles (avoid nuking logs)
     private DateTime _lastHurtLog = DateTime.MinValue;
     private const int HURT_LOG_INTERVAL_MS = 250;
+
+    private DateTime _lastEventDump = DateTime.MinValue;
+    private const int EVENT_DUMP_COOLDOWN_MS = 5000;
 
     private readonly Dictionary<int, HashSet<int>> killedPlayer = new();
     private readonly Dictionary<int, Dictionary<int, int>> damageGiven = new();
@@ -65,10 +64,6 @@ public class DamageReport : IModule {
         return HitgroupLabel[(byte)hitgroup];
     }
 
-    private static bool IsValidHitgroup(int hitgroup) {
-        return hitgroup >= MIN_HITGROUP && hitgroup <= MAX_HITGROUP;
-    }
-
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
@@ -105,7 +100,7 @@ public class DamageReport : IModule {
         osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
     }
 
-    private HookResult OnPlayerHurt(EventPlayerHurt e, GameEventInfo _) {
+    private HookResult OnPlayerHurt(EventPlayerHurt e, GameEventInfo gameEventInfo) {
         try {
             if (e.Attacker == null || e.Userid == null) {
                 return HookResult.Continue;
@@ -135,6 +130,11 @@ public class DamageReport : IModule {
                 Console.WriteLine($"[DR] a={attackerId} v={victimId} dmgH={damage} dmgA={e.DmgArmor} hg={hitgroup}({HG(hitgroup)}) hp={e.Health} armor={e.Armor} weapon={e.Weapon}");
             }
 
+            // Dump full event when hitgroup looks suspicious
+            if (hitgroup < 0 || hitgroup > 20) {
+                DumpGameEvent(gameEventInfo, $"suspect hitgroup typed={hitgroup} label={HG(hitgroup)} weapon={e.Weapon} dmgH={e.DmgHealth} dmgA={e.DmgArmor}");
+            }
+
             var dG = GetOrCreate(damageGiven, attackerId);
             var dT = GetOrCreate(damageTaken, victimId);
             var hG = GetOrCreate(hitsGiven, attackerId);
@@ -146,18 +146,16 @@ public class DamageReport : IModule {
             hG[victimId] = hG.GetValueOrDefault(victimId, 0) + 1;
             hT[attackerId] = hT.GetValueOrDefault(attackerId, 0) + 1;
 
-            // Hitbox stats only if hitgroup is plausible (protects against schema mismatch)
-            if (IsValidHitgroup(hitgroup)) {
-                var hbG = GetOrCreateNested(hitboxGiven, attackerId, victimId);
-                var hbT = GetOrCreateNested(hitboxTaken, victimId, attackerId);
-                hbG[hitgroup] = hbG.GetValueOrDefault(hitgroup, 0) + 1;
-                hbT[hitgroup] = hbT.GetValueOrDefault(hitgroup, 0) + 1;
+            // Always store raw hitgroups (0..255) safely
+            var hbG = GetOrCreateNested(hitboxGiven, attackerId, victimId);
+            var hbT = GetOrCreateNested(hitboxTaken, victimId, attackerId);
+            hbG[hitgroup] = hbG.GetValueOrDefault(hitgroup, 0) + 1;
+            hbT[hitgroup] = hbT.GetValueOrDefault(hitgroup, 0) + 1;
 
-                var hbGD = GetOrCreateNested(hitboxGivenDamage, attackerId, victimId);
-                var hbTD = GetOrCreateNested(hitboxTakenDamage, victimId, attackerId);
-                hbGD[hitgroup] = hbGD.GetValueOrDefault(hitgroup, 0) + damage;
-                hbTD[hitgroup] = hbTD.GetValueOrDefault(hitgroup, 0) + damage;
-            }
+            var hbGD = GetOrCreateNested(hitboxGivenDamage, attackerId, victimId);
+            var hbTD = GetOrCreateNested(hitboxTakenDamage, victimId, attackerId);
+            hbGD[hitgroup] = hbGD.GetValueOrDefault(hitgroup, 0) + damage;
+            hbTD[hitgroup] = hbTD.GetValueOrDefault(hitgroup, 0) + damage;
 
             return HookResult.Continue;
         } catch (Exception ex) {
@@ -409,6 +407,74 @@ public class DamageReport : IModule {
             }
         }
         return null;
+    }
+
+    private void DumpGameEvent(GameEventInfo info, string reason) {
+        var now = DateTime.UtcNow;
+        if ((now - _lastEventDump).TotalMilliseconds < EVENT_DUMP_COOLDOWN_MS) {
+            return;
+        }
+        _lastEventDump = now;
+
+        Console.WriteLine($"[DR-DUMP] ===== {reason} =====");
+
+        try {
+            dynamic d = info;
+            dynamic ev = d.Event;
+
+            try {
+                Console.WriteLine($"[DR-DUMP] name={ev.Name}");
+            } catch { }
+
+            // Preferred: enumerate keys
+            try {
+                foreach (var key in ev.GetKeys()) {
+                    DumpKey(ev, key?.ToString() ?? "");
+                }
+                Console.WriteLine($"[DR-DUMP] ===== end (GetKeys) =====");
+                return;
+            } catch { }
+
+            // Fallback: common player_hurt keys
+            string[] keys = new[] {
+                "userid", "attacker", "health", "armor", "weapon",
+                "dmg_health", "dmg_armor", "hitgroup",
+                "userid_pawn", "attacker_pawn"
+            };
+
+            foreach (var key in keys) {
+                DumpKey(ev, key);
+            }
+
+            Console.WriteLine($"[DR-DUMP] ===== end (fallback keys) =====");
+        } catch (Exception ex) {
+            Console.WriteLine($"[DR-DUMP] dump failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void DumpKey(dynamic ev, string key) {
+        if (string.IsNullOrWhiteSpace(key)) {
+            return;
+        }
+
+        bool hasI = false, hasF = false, hasS = false, hasL = false;
+        int i = 0;
+        float f = 0;
+        string? s = null;
+        long l = 0;
+
+        try { i = (int)ev.GetInt(key); hasI = true; } catch { }
+        try { f = (float)ev.GetFloat(key); hasF = true; } catch { }
+        try { s = (string)ev.GetString(key); hasS = true; } catch { }
+        try { l = (long)ev.GetUint64(key); hasL = true; } catch { }
+
+        string outLine = $"[DR-DUMP] {key}:";
+        if (hasI) outLine += $" int={i}";
+        if (hasF) outLine += $" float={f}";
+        if (hasL) outLine += $" u64={l}";
+        if (hasS && !string.IsNullOrEmpty(s)) outLine += $" str='{s}'";
+
+        Console.WriteLine(outLine);
     }
 
     private static Dictionary<int, int> GetOrCreate(Dictionary<int, Dictionary<int, int>> dict, int key) {
