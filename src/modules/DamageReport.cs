@@ -13,27 +13,31 @@ public class DamageReport : IModule {
     private Config? config;
 
     private const int ENVIRONMENT = -1;
-    private readonly float delay = 3.0f;
+    private const float DELAY_SECONDS = 3.0f;
 
-    // Round data
+    // Accept only classic hitgroups for hitbox stats (protects against schema/offset breakage).
+    private const int MIN_HITGROUP = 0;
+    private const int MAX_HITGROUP = 11;
+
+    // Hard logging (rate-limited to avoid log spam storms)
+    private DateTime _lastHurtLog = DateTime.MinValue;
+    private const int HURT_LOG_INTERVAL_MS = 250;
+
     private readonly Dictionary<int, HashSet<int>> killedPlayer = new();
-
     private readonly Dictionary<int, Dictionary<int, int>> damageGiven = new();
     private readonly Dictionary<int, Dictionary<int, int>> damageTaken = new();
-
     private readonly Dictionary<int, Dictionary<int, int>> hitsGiven = new();
     private readonly Dictionary<int, Dictionary<int, int>> hitsTaken = new();
 
     private readonly Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxGiven = new();
     private readonly Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxTaken = new();
-
     private readonly Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxGivenDamage = new();
     private readonly Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitboxTakenDamage = new();
 
     private readonly Dictionary<int, string> playerNames = new();
     private readonly HashSet<int> reportedPlayers = new();
 
-    // Hitgroup 0..255 mapping, unknown => "U"
+    // 0..255 hitgroup labels; unknown -> U{n}
     private static readonly string[] HitgroupLabel = BuildHitgroupLabels();
 
     private static string[] BuildHitgroupLabels() {
@@ -59,6 +63,10 @@ public class DamageReport : IModule {
 
     private static string HG(int hitgroup) {
         return HitgroupLabel[(byte)hitgroup];
+    }
+
+    private static bool IsValidHitgroup(int hitgroup) {
+        return hitgroup >= MIN_HITGROUP && hitgroup <= MAX_HITGROUP;
     }
 
     public void Load(OSBase inOsbase, Config inConfig) {
@@ -113,7 +121,6 @@ public class DamageReport : IModule {
                 return HookResult.Continue;
             }
 
-            // Environmental self/world damage edge-case
             if (attackerId == victimId && e.Weapon == "world") {
                 attackerId = ENVIRONMENT;
             }
@@ -121,26 +128,36 @@ public class DamageReport : IModule {
             int damage = e.DmgHealth;
             int hitgroup = e.Hitgroup;
 
-            // totals
-            GetOrCreate(damageGiven, attackerId)[victimId] = GetOrCreate(damageGiven, attackerId).GetValueOrDefault(victimId, 0) + damage;
-            GetOrCreate(damageTaken, victimId)[attackerId] = GetOrCreate(damageTaken, victimId).GetValueOrDefault(attackerId, 0) + damage;
+            // Hard log (rate-limited)
+            var now = DateTime.UtcNow;
+            if ((now - _lastHurtLog).TotalMilliseconds >= HURT_LOG_INTERVAL_MS) {
+                _lastHurtLog = now;
+                Console.WriteLine($"[DR] a={attackerId} v={victimId} dmgH={damage} dmgA={e.DmgArmor} hg={hitgroup}({HG(hitgroup)}) hp={e.Health} armor={e.Armor} weapon={e.Weapon}");
+            }
 
-            GetOrCreate(hitsGiven, attackerId)[victimId] = GetOrCreate(hitsGiven, attackerId).GetValueOrDefault(victimId, 0) + 1;
-            GetOrCreate(hitsTaken, victimId)[attackerId] = GetOrCreate(hitsTaken, victimId).GetValueOrDefault(attackerId, 0) + 1;
+            var dG = GetOrCreate(damageGiven, attackerId);
+            var dT = GetOrCreate(damageTaken, victimId);
+            var hG = GetOrCreate(hitsGiven, attackerId);
+            var hT = GetOrCreate(hitsTaken, victimId);
 
-            // hitbox counts
-            GetOrCreateNested(hitboxGiven, attackerId, victimId)[hitgroup] =
-                GetOrCreateNested(hitboxGiven, attackerId, victimId).GetValueOrDefault(hitgroup, 0) + 1;
+            dG[victimId] = dG.GetValueOrDefault(victimId, 0) + damage;
+            dT[attackerId] = dT.GetValueOrDefault(attackerId, 0) + damage;
 
-            GetOrCreateNested(hitboxTaken, victimId, attackerId)[hitgroup] =
-                GetOrCreateNested(hitboxTaken, victimId, attackerId).GetValueOrDefault(hitgroup, 0) + 1;
+            hG[victimId] = hG.GetValueOrDefault(victimId, 0) + 1;
+            hT[attackerId] = hT.GetValueOrDefault(attackerId, 0) + 1;
 
-            // hitbox damage
-            GetOrCreateNested(hitboxGivenDamage, attackerId, victimId)[hitgroup] =
-                GetOrCreateNested(hitboxGivenDamage, attackerId, victimId).GetValueOrDefault(hitgroup, 0) + damage;
+            // Hitbox stats only if hitgroup is plausible (protects against schema mismatch)
+            if (IsValidHitgroup(hitgroup)) {
+                var hbG = GetOrCreateNested(hitboxGiven, attackerId, victimId);
+                var hbT = GetOrCreateNested(hitboxTaken, victimId, attackerId);
+                hbG[hitgroup] = hbG.GetValueOrDefault(hitgroup, 0) + 1;
+                hbT[hitgroup] = hbT.GetValueOrDefault(hitgroup, 0) + 1;
 
-            GetOrCreateNested(hitboxTakenDamage, victimId, attackerId)[hitgroup] =
-                GetOrCreateNested(hitboxTakenDamage, victimId, attackerId).GetValueOrDefault(hitgroup, 0) + damage;
+                var hbGD = GetOrCreateNested(hitboxGivenDamage, attackerId, victimId);
+                var hbTD = GetOrCreateNested(hitboxTakenDamage, victimId, attackerId);
+                hbGD[hitgroup] = hbGD.GetValueOrDefault(hitgroup, 0) + damage;
+                hbTD[hitgroup] = hbTD.GetValueOrDefault(hitgroup, 0) + damage;
+            }
 
             return HookResult.Continue;
         } catch (Exception ex) {
@@ -172,10 +189,9 @@ public class DamageReport : IModule {
 
     private HookResult OnRoundEnd(EventRoundEnd _, GameEventInfo __) {
         foreach (var p in Utilities.GetPlayers()) {
-            if (!IsReportablePlayer(p)) {
-                continue;
+            if (IsReportablePlayer(p) && p!.UserId.HasValue) {
+                ScheduleDamageReport(p.UserId.Value);
             }
-            ScheduleDamageReport(p!.UserId!.Value);
         }
         return HookResult.Continue;
     }
@@ -219,7 +235,7 @@ public class DamageReport : IModule {
             return;
         }
 
-        osbase.AddTimer(delay, () => {
+        osbase.AddTimer(DELAY_SECONDS, () => {
             try {
                 DisplayDamageReport(userId);
             } finally {
@@ -258,7 +274,6 @@ public class DamageReport : IModule {
                 string killedText = (killedPlayer.TryGetValue(userId, out var ks) && ks.Contains(victimId)) ? " (Killed)" : "";
 
                 string hitInfo = BuildHitInfoGiven(userId, victimId, dmg);
-
                 player.PrintToChat($" - {victimName}{killedText}: {hits} hits, {dmg} damage{hitInfo}");
             }
         }
@@ -278,7 +293,6 @@ public class DamageReport : IModule {
                 string killedByText = (killedPlayer.TryGetValue(attackerId, out var ks) && ks.Contains(userId)) ? " (Killed by)" : "";
 
                 string hitInfo = BuildHitInfoTaken(userId, attackerId, dmg);
-
                 player.PrintToChat($" - {attackerName}{killedByText}: {hits} hits, {dmg} damage{hitInfo}");
             }
         }
@@ -307,7 +321,6 @@ public class DamageReport : IModule {
 
             calc += hgDmg;
             s += $"{HG(hitgroup)}({(byte)hitgroup}) {hitCount}:{hgDmg}, ";
-//            s += $"{HG(hitgroup)} {hitCount}:{hgDmg}, ";
         }
 
         s = s.TrimEnd(' ', ',') + "]";
@@ -342,7 +355,6 @@ public class DamageReport : IModule {
 
             calc += hgDmg;
             s += $"{HG(hitgroup)}({(byte)hitgroup}) {hitCount}:{hgDmg}, ";
-//            s += $"{HG(hitgroup)} {hitCount}:{hgDmg}, ";
         }
 
         s = s.TrimEnd(' ', ',') + "]";
@@ -377,12 +389,10 @@ public class DamageReport : IModule {
         damageTaken.Remove(playerId);
         hitsGiven.Remove(playerId);
         hitsTaken.Remove(playerId);
-
         hitboxGiven.Remove(playerId);
         hitboxTaken.Remove(playerId);
         hitboxGivenDamage.Remove(playerId);
         hitboxTakenDamage.Remove(playerId);
-
         killedPlayer.Remove(playerId);
         playerNames.Remove(playerId);
         reportedPlayers.Remove(playerId);
