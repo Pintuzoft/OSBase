@@ -77,6 +77,9 @@ namespace OSBase.Modules {
         private const int PROV_MIN = 5000;
         private const int PROV_MAX = 7000;
 
+        // 3-player halftime latch (prevents pendulum on 1-bombsite maps)
+        private bool threePlayerHalftimeMode = false;
+
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase  = inOsbase;
             config  = inConfig;
@@ -119,6 +122,7 @@ namespace OSBase.Modules {
             currentHalfIndex = 0;
             warmupBalancedThisMap = false;
             firstRoundSizeFixDone = false;
+            threePlayerHalftimeMode = false;
 
             if (mapBombsites.TryGetValue(mapName, out int bs)) {
                 bombsites = bs;
@@ -150,6 +154,35 @@ namespace OSBase.Modules {
             }
         }
 
+        // ===== Team snapshot + halftime latch helpers =====
+
+        private void SyncTeams(GameStats gs) {
+            // Keep snapshot fresh before any reads during warmup/roundend timers.
+            gs.SyncTeamsNow();
+            UpdateThreePlayerHalftimeMode(gs);
+        }
+
+        private void UpdateThreePlayerHalftimeMode(GameStats gs) {
+            // Self-healing: if playercount changes away from 3, drop immediately.
+            int total = gs.getTeam(TEAM_T).numPlayers() + gs.getTeam(TEAM_CT).numPlayers();
+
+            if (total != 3) {
+                if (threePlayerHalftimeMode) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] threePlayerHalftimeMode OFF (total={total})");
+                }
+                threePlayerHalftimeMode = false;
+                return;
+            }
+
+            // Never active on 2-bombsite maps.
+            if (bombsites != 1) {
+                threePlayerHalftimeMode = false;
+                return;
+            }
+
+            // Do not auto-enable here; we only latch it at halftime.
+        }
+
         // ===== Event handlers =====
 
         [GameEventHandler(HookMode.Post)]
@@ -157,10 +190,13 @@ namespace OSBase.Modules {
             // Only clear immunity; do not move after warmup to avoid spawn bugs
             var gs = osbase?.GetGameStats();
             if (gs != null) {
+                gs.SyncTeamsNow();
+
                 foreach (var kv in gs.getTeam(TEAM_T).playerList)  kv.Value.immune = 0;
                 foreach (var kv in gs.getTeam(TEAM_CT).playerList) kv.Value.immune = 0;
                 foreach (var kv in gs.getTeam(TEAM_S).playerList)  kv.Value.immune = 0;
             }
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupEnd fired. (No moves here)");
             return HookResult.Continue;
         }
@@ -169,6 +205,19 @@ namespace OSBase.Modules {
         private HookResult OnStartHalftime(EventStartHalftime ev, GameEventInfo info) {
             lateSwapsThisHalf = 0;
             currentHalfIndex  = 1;
+
+            var gs = osbase?.GetGameStats();
+            if (gs != null) {
+                gs.SyncTeamsNow();
+                int total = gs.getTeam(TEAM_T).numPlayers() + gs.getTeam(TEAM_CT).numPlayers();
+
+                // Latch ONLY if we truly had 3 players at halftime and map has 1 bombsite
+                threePlayerHalftimeMode = (bombsites == 1 && total == 3);
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Halftime: threePlayerHalftimeMode={threePlayerHalftimeMode} total={total}");
+            } else {
+                threePlayerHalftimeMode = false;
+            }
+
             return HookResult.Continue;
         }
 
@@ -198,6 +247,8 @@ namespace OSBase.Modules {
             var gs = osbase?.GetGameStats();
             if (gs == null) return;
 
+            SyncTeams(gs);
+
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
 
@@ -222,6 +273,8 @@ namespace OSBase.Modules {
         private void WarmupFinalBalance() {
             var gs = osbase?.GetGameStats();
             if (gs == null) return;
+
+            SyncTeams(gs);
 
             if (warmupBalancedThisMap) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupFinalBalance skipped: already ran.");
@@ -310,6 +363,8 @@ namespace OSBase.Modules {
         private void BalanceAtRoundEnd() {
             var gs = osbase?.GetGameStats();
             if (gs == null) return;
+
+            SyncTeams(gs);
 
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
@@ -400,6 +455,8 @@ namespace OSBase.Modules {
         // ===== 2v1 helper: ensure best player is solo =====
 
         private void EnsureBestIsSoloIf2v1(GameStats gs) {
+            SyncTeams(gs);
+
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
 
@@ -470,6 +527,9 @@ namespace OSBase.Modules {
         }
 
         private (int idealT, int idealCT) ComputeIdealSizesForRound(GameStats gs, int tCount, int ctCount) {
+            // Keep halftime-mode up-to-date; auto-resets on join/leave via playercount change.
+            UpdateThreePlayerHalftimeMode(gs);
+
             int total = tCount + ctCount;
             if (total == 0) return (0, 0);
 
@@ -478,9 +538,19 @@ namespace OSBase.Modules {
             bool isOdd              = (total % 2) != 0;
             bool lastRoundFirstHalf = (gs.roundNumber == HALF_ROUNDS);
 
+            // Prevent halftime pendulum for 2v1 (don’t “prep flip” on the halftime round)
+            if (isOdd && lastRoundFirstHalf && total == 3)
+                return (baseT, baseCT);
+
+            // If we latched at halftime AND still total==3 on 1-bombsite maps:
+            // after halftime, enforce 1T vs 2CT (best-solo rule will place best on solo side).
+            if (threePlayerHalftimeMode && bombsites == 1 && total == 3 && gs.roundNumber > HALF_ROUNDS)
+                return (1, 2);
+
             if (!isOdd || !lastRoundFirstHalf)
                 return (baseT, baseCT);
 
+            // Existing odd special-case for larger odd playercounts (kept)
             if (bombsites == 2) {
                 if (baseCT > baseT) { baseCT--; baseT++; }
             } else {

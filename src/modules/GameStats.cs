@@ -13,15 +13,15 @@ namespace OSBase.Modules {
     public class GameStats {
         public string ModuleName => "gamestats";
         public static GameStats? Current { get; private set; }
-        
+
         private OSBase osbase;
         private Config config;
 
         private bool isWarmup = false;
         public int roundNumber = 0;
 
-        private const int TEAM_S = (int)CsTeam.Spectator;
-        private const int TEAM_T = (int)CsTeam.Terrorist;
+        private const int TEAM_S  = (int)CsTeam.Spectator;
+        private const int TEAM_T  = (int)CsTeam.Terrorist;
         private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
         private bool hasLoadedEvents = false;
@@ -39,7 +39,7 @@ namespace OSBase.Modules {
         private readonly Dictionary<string, float> avg90Cache = new Dictionary<string, float>(StringComparer.Ordinal);
         private DateTime avg90LastRefreshUtc = DateTime.MinValue;
 
-        public GameStats ( OSBase inOsbase, Config inConfig ) {
+        public GameStats(OSBase inOsbase, Config inConfig) {
             Current = this;
             osbase = inOsbase;
             config = inConfig;
@@ -49,14 +49,14 @@ namespace OSBase.Modules {
             loadEventHandlers();
             hasLoadedEvents = true;
 
-            teamList[TEAM_S] = new TeamStats();
-            teamList[TEAM_T] = new TeamStats();
+            teamList[TEAM_S]  = new TeamStats();
+            teamList[TEAM_T]  = new TeamStats();
             teamList[TEAM_CT] = new TeamStats();
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Init: GameStats constructed.");
         }
 
-        private void createTables ( ) {
+        private void createTables() {
             string query =
                 "CREATE TABLE IF NOT EXISTS skill_log (" +
                 "steamid varchar(32)," +
@@ -73,10 +73,8 @@ namespace OSBase.Modules {
             }
         }
 
-        public void loadEventHandlers ( ) {
-            if (hasLoadedEvents) {
-                return;
-            }
+        public void loadEventHandlers() {
+            if (hasLoadedEvents) return;
 
             osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
             osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
@@ -93,9 +91,10 @@ namespace OSBase.Modules {
 
         // ===== Event handlers =====
 
-        private void OnMapStart ( string mapName ) {
+        private void OnMapStart(string mapName) {
             isWarmup = true;
             roundNumber = 0;
+
             clearStats();
 
             TryRefresh90dCacheAllPlayers(); // bulk refresh once per map (keeps old cache on failure)
@@ -103,7 +102,7 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapStart: {mapName}, 90d cache size={avg90Cache.Count}");
         }
 
-        private void OnMapEnd ( ) {
+        private void OnMapEnd() {
             // Persist only with a reasonable population
             if (playerList.Count < 10) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapEnd: Not enough players to write stats.");
@@ -114,9 +113,7 @@ namespace OSBase.Modules {
             foreach (var entry in playerList) {
                 var ps = entry.Value;
 
-                if (ps.steamid.Equals("0") || ps.name.Length == 0 || ps.rounds < 10) {
-                    continue;
-                }
+                if (ps.steamid.Equals("0") || ps.name.Length == 0 || ps.rounds < 10) continue;
 
                 string query =
                     "INSERT INTO skill_log (steamid, name, skill, datestr, mapname) " +
@@ -145,14 +142,32 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapEnd: Stats cleared.");
         }
 
-        private HookResult OnWarmupEnd ( EventWarmupEnd ev, GameEventInfo info ) {
+        private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
             isWarmup = false;
-            clearStats();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - WarmupEnd.");
+
+            // Ensure correct team snapshot at the edge of warmup end (for TeamBalancer etc)
+            SyncTeamsNow(false);
+
+            // Ensure warmup never leaks into match counters
+            foreach (var kv in playerList) {
+                var ps = kv.Value;
+                ps.rounds = 0;
+                ps.roundWins = 0;
+                ps.roundLosses = 0;
+                ps.kills = 0;
+                ps.deaths = 0;
+                ps.assists = 0;
+                ps.damage = 0;
+                ps.shotsFired = 0;
+                ps.shotsHit = 0;
+                ps.headshotKills = 0;
+            }
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - WarmupEnd: snapshot synced + counters reset.");
             return HookResult.Continue;
         }
 
-        private HookResult OnWeaponFire ( EventWeaponFire ev, GameEventInfo info ) {
+        private HookResult OnWeaponFire(EventWeaponFire ev, GameEventInfo info) {
             if (isWarmup) return HookResult.Continue;
             if (ev.Userid?.UserId == null || !ev.Userid.UserId.HasValue) return HookResult.Continue;
 
@@ -164,7 +179,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnPlayerHurt ( EventPlayerHurt ev, GameEventInfo info ) {
+        private HookResult OnPlayerHurt(EventPlayerHurt ev, GameEventInfo info) {
             if (isWarmup) return HookResult.Continue;
 
             if (ev.Attacker != null && ev.Attacker.UserId.HasValue) {
@@ -178,7 +193,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnPlayerDeath ( EventPlayerDeath ev, GameEventInfo info ) {
+        private HookResult OnPlayerDeath(EventPlayerDeath ev, GameEventInfo info) {
             if (isWarmup) return HookResult.Continue;
 
             if (ev.Attacker != null && ev.Attacker.UserId.HasValue) {
@@ -211,7 +226,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnRoundStart ( EventRoundStart ev, GameEventInfo info ) {
+        private HookResult OnRoundStart(EventRoundStart ev, GameEventInfo info) {
             if (isWarmup) return HookResult.Continue;
 
             roundNumber++;
@@ -220,7 +235,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnRoundEnd ( EventRoundEnd ev, GameEventInfo info ) {
+        private HookResult OnRoundEnd(EventRoundEnd ev, GameEventInfo info) {
             if (isWarmup) return HookResult.Continue;
 
             // Rebuild team membership snapshot each round end
@@ -234,8 +249,10 @@ namespace OSBase.Modules {
                         playerList[p.UserId.Value] = new PlayerStats();
                     }
                     var ps = playerList[p.UserId.Value];
-                    if (ps.name.Length == 0) ps.name = p.PlayerName ?? "";
-                    if (ps.steamid.Length == 0) ps.steamid = p.SteamID.ToString();
+
+                    // Always refresh identity (safe)
+                    ps.name = p.PlayerName ?? "";
+                    ps.steamid = p.SteamID.ToString();
 
                     switch (p.TeamNum) {
                         case TEAM_S:
@@ -246,8 +263,6 @@ namespace OSBase.Modules {
                             break;
                         case TEAM_CT:
                             teamList[TEAM_CT].addPlayer(p.UserId.Value, ps);
-                            break;
-                        default:
                             break;
                     }
                 }
@@ -275,7 +290,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnStartHalftime ( EventStartHalftime ev, GameEventInfo info ) {
+        private HookResult OnStartHalftime(EventStartHalftime ev, GameEventInfo info) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime.");
             // Flip references (keeps streaks per “new” sides)
             var buf = teamList[TEAM_T];
@@ -286,21 +301,19 @@ namespace OSBase.Modules {
 
         // ===== Public helpers =====
 
-        public PlayerStats GetPlayerStats ( int userId ) {
-            if (playerList.ContainsKey(userId)) {
-                return playerList[userId];
-            }
+        public PlayerStats GetPlayerStats(int userId) {
+            if (playerList.ContainsKey(userId)) return playerList[userId];
             return new PlayerStats();
         }
 
-        public TeamStats getTeam ( int team ) {
+        public TeamStats getTeam(int team) {
             if (team == TEAM_T || team == TEAM_CT || team == TEAM_S) {
                 return teamList.TryGetValue(team, out var ts) ? ts : new TeamStats();
             }
             return new TeamStats();
         }
 
-        public Dictionary<int, PlayerStats> getTeamPlayers ( int team ) {
+        public Dictionary<int, PlayerStats> getTeamPlayers(int team) {
             if (team == TEAM_T || team == TEAM_CT || team == TEAM_S) {
                 return teamList.TryGetValue(team, out var ts) ? ts.playerList : new Dictionary<int, PlayerStats>();
             }
@@ -308,7 +321,7 @@ namespace OSBase.Modules {
         }
 
         // Bookkeeping only: keep internal team tracking in sync (T/CT/SPEC)
-        public void movePlayer ( int userId, int team ) {
+        public void movePlayer(int userId, int team) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - movePlayer: {userId} -> team {team}");
 
             if (!playerList.ContainsKey(userId)) {
@@ -316,9 +329,9 @@ namespace OSBase.Modules {
                 return;
             }
 
-            if (!teamList.ContainsKey(TEAM_T)) teamList[TEAM_T] = new TeamStats();
+            if (!teamList.ContainsKey(TEAM_T))  teamList[TEAM_T]  = new TeamStats();
             if (!teamList.ContainsKey(TEAM_CT)) teamList[TEAM_CT] = new TeamStats();
-            if (!teamList.ContainsKey(TEAM_S)) teamList[TEAM_S] = new TeamStats();
+            if (!teamList.ContainsKey(TEAM_S))  teamList[TEAM_S]  = new TeamStats();
 
             teamList[TEAM_T].removePlayer(userId);
             teamList[TEAM_CT].removePlayer(userId);
@@ -333,8 +346,9 @@ namespace OSBase.Modules {
         }
 
         // Quick lookup by SteamID (returns T/CT/SPEC; defaults to SPEC if unknown)
-        public int GetTeamBySteam ( ulong steamId64 ) {
+        public int GetTeamBySteam(ulong steamId64) {
             string sid = steamId64.ToString();
+
             if (teamList.ContainsKey(TEAM_T))
                 foreach (var kv in teamList[TEAM_T].playerList)
                     if (kv.Value.steamid == sid) return TEAM_T;
@@ -351,7 +365,7 @@ namespace OSBase.Modules {
         }
 
         // Live skill lookup for TeamBalancer (by Steam)
-        public bool TryGetLiveSkillBySteam ( ulong steamId64, out double skill, out int rounds ) {
+        public bool TryGetLiveSkillBySteam(ulong steamId64, out double skill, out int rounds) {
             string sid = steamId64.ToString();
             foreach (var kv in playerList) {
                 var ps = kv.Value;
@@ -367,13 +381,13 @@ namespace OSBase.Modules {
         }
 
         // Mean/std across ACTIVE players only (T + CT), excludes spectators
-        public (double mean, double std, int count) GetLiveSkillMomentsActive ( ) {
+        public (double mean, double std, int count) GetLiveSkillMomentsActive() {
             var vals = new List<double>();
 
-            if (!teamList.ContainsKey(TEAM_T)) teamList[TEAM_T] = new TeamStats();
+            if (!teamList.ContainsKey(TEAM_T))  teamList[TEAM_T]  = new TeamStats();
             if (!teamList.ContainsKey(TEAM_CT)) teamList[TEAM_CT] = new TeamStats();
 
-            foreach (var kv in teamList[TEAM_T].playerList) vals.Add(kv.Value.calcSkill());
+            foreach (var kv in teamList[TEAM_T].playerList)  vals.Add(kv.Value.calcSkill());
             foreach (var kv in teamList[TEAM_CT].playerList) vals.Add(kv.Value.calcSkill());
 
             int n = vals.Count;
@@ -439,7 +453,6 @@ namespace OSBase.Modules {
             var newCache = new Dictionary<string, float>(StringComparer.Ordinal);
 
             try {
-                // Try common Database read methods via reflection
                 var queryMethod =
                     db.GetType().GetMethod("query", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) ??
                     db.GetType().GetMethod("select", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) ??
@@ -447,7 +460,7 @@ namespace OSBase.Modules {
 
                 if (queryMethod == null) {
                     Console.WriteLine($"[WARN] OSBase[{ModuleName}] - No SELECT-capable method on Database; skipping 90d refresh.");
-                    return; // keep old cache
+                    return;
                 }
 
                 object? result = queryMethod.GetParameters().Length switch {
@@ -504,7 +517,6 @@ namespace OSBase.Modules {
                     return;
                 }
 
-                // Success: swap caches
                 avg90Cache.Clear();
                 foreach (var kv in newCache) avg90Cache[kv.Key] = kv.Value;
                 avg90LastRefreshUtc = DateTime.UtcNow;
@@ -512,36 +524,92 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - 90d cache refreshed: {avg90Cache.Count} players.");
             } catch (Exception e) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - 90d refresh failed: {e.Message}. Keeping previous cache.");
-                // keep old cache intact
             }
         }
 
         // ===== Internals =====
 
-        private void clearStats ( ) {
+        private void clearStats() {
             playerList.Clear();
             teamList.Clear();
 
-            teamList[TEAM_S] = new TeamStats();
-            teamList[TEAM_T] = new TeamStats();
+            teamList[TEAM_S]  = new TeamStats();
+            teamList[TEAM_T]  = new TeamStats();
             teamList[TEAM_CT] = new TeamStats();
 
             foreach (var p in Utilities.GetPlayers()) {
-                if (p != null && p.UserId.HasValue && !p.IsHLTV) {
-                    playerList[p.UserId.Value] = new PlayerStats();
-                    switch (p.TeamNum) {
-                        case TEAM_S:
-                            teamList[TEAM_S].addPlayer(p.UserId.Value, playerList[p.UserId.Value]);
-                            break;
-                        case TEAM_T:
-                            teamList[TEAM_T].addPlayer(p.UserId.Value, playerList[p.UserId.Value]);
-                            break;
-                        case TEAM_CT:
-                            teamList[TEAM_CT].addPlayer(p.UserId.Value, playerList[p.UserId.Value]);
-                            break;
-                        default:
-                            break;
+                if (p == null || !p.UserId.HasValue || p.IsHLTV) continue;
+
+                int uid = p.UserId.Value;
+                var ps = new PlayerStats {
+                    name = p.PlayerName ?? "",
+                    steamid = p.SteamID.ToString()
+                };
+                playerList[uid] = ps;
+
+                switch (p.TeamNum) {
+                    case TEAM_S:  teamList[TEAM_S].addPlayer(uid, ps); break;
+                    case TEAM_T:  teamList[TEAM_T].addPlayer(uid, ps); break;
+                    case TEAM_CT: teamList[TEAM_CT].addPlayer(uid, ps); break;
+                }
+            }
+        }
+
+        // === Public API for other modules (TeamBalancer etc) ===
+        // Call this right before you read getTeam()/getTeamPlayers() to avoid stale snapshot.
+        public void SyncTeamsNow(bool rebuildPlayers = false) {
+            RefreshTeamsSnapshot(rebuildPlayers);
+        }
+
+        // === Internal snapshot rebuild ===
+        private void RefreshTeamsSnapshot(bool rebuildPlayers = false) {
+            if (!teamList.ContainsKey(TEAM_T))  teamList[TEAM_T]  = new TeamStats();
+            if (!teamList.ContainsKey(TEAM_CT)) teamList[TEAM_CT] = new TeamStats();
+            if (!teamList.ContainsKey(TEAM_S))  teamList[TEAM_S]  = new TeamStats();
+
+            teamList[TEAM_T].resetPlayers();
+            teamList[TEAM_CT].resetPlayers();
+            teamList[TEAM_S].resetPlayers();
+
+            var players = Utilities.GetPlayers()
+                .Where(p => p != null && p.UserId.HasValue && !p.IsHLTV)
+                .ToList();
+
+            var live = new HashSet<int>(players.Select(p => p!.UserId!.Value));
+
+            if (rebuildPlayers) {
+                playerList.Clear();
+            } else {
+                // prune ghosts (prevents "Unknown" and stale ids)
+                foreach (var uid in playerList.Keys.ToList()) {
+                    if (!live.Contains(uid))
+                        playerList.Remove(uid);
+                }
+            }
+
+            foreach (var p in players) {
+                int uid = p!.UserId!.Value;
+                string sid = p.SteamID.ToString();
+
+                if (!playerList.TryGetValue(uid, out var ps)) {
+                    ps = new PlayerStats();
+                    playerList[uid] = ps;
+                } else {
+                    // Guard against userid reuse: don't leak old stats to a new steamid
+                    if (!string.IsNullOrEmpty(ps.steamid) && ps.steamid != sid) {
+                        ps = new PlayerStats();
+                        playerList[uid] = ps;
                     }
+                }
+
+                // Always refresh identity
+                ps.name = p.PlayerName ?? "";
+                ps.steamid = sid;
+
+                switch ((int)p.TeamNum) {
+                    case TEAM_T:  teamList[TEAM_T].addPlayer(uid, ps); break;
+                    case TEAM_CT: teamList[TEAM_CT].addPlayer(uid, ps); break;
+                    default:      teamList[TEAM_S].addPlayer(uid, ps); break;
                 }
             }
         }
@@ -569,10 +637,8 @@ namespace OSBase.Modules {
         public int immune { get; set; }
         public bool disconnected { get; set; }
 
-        // Your calcSkill formula (unchanged)
-        public float calcSkill ( ) {
-            if (rounds == 0)
-                return 10000f;
+        public float calcSkill() {
+            if (rounds == 0) return 10000f;
 
             float avgDamage = (float)damage / rounds;
             float baseDamageScore = 4000f + (avgDamage * 60f);
@@ -598,58 +664,42 @@ namespace OSBase.Modules {
 
         public Dictionary<int, PlayerStats> playerList = new Dictionary<int, PlayerStats>();
 
-        public int numPlayers ( ) {
-            return playerList.Count;
+        public int numPlayers() => playerList.Count;
+
+        public void resetPlayers() => playerList.Clear();
+
+        public void addPlayer(int userId, PlayerStats stats) {
+            if (!playerList.ContainsKey(userId)) playerList[userId] = stats;
         }
 
-        public void resetPlayers ( ) {
-            playerList.Clear();
+        public void removePlayer(int userId) {
+            if (playerList.ContainsKey(userId)) playerList.Remove(userId);
         }
 
-        public void addPlayer ( int userId, PlayerStats stats ) {
-            if (!playerList.ContainsKey(userId)) {
-                playerList[userId] = stats;
-            }
-        }
-
-        public void removePlayer ( int userId ) {
-            if (playerList.ContainsKey(userId)) {
-                playerList.Remove(userId);
-            }
-        }
-
-        public void incWins ( ) {
+        public void incWins() {
             wins++;
-            foreach (var p in playerList) {
-                p.Value.roundWins++;
-            }
+            foreach (var p in playerList) p.Value.roundWins++;
         }
 
-        public void incLosses ( ) {
+        public void incLosses() {
             losses++;
-            foreach (var p in playerList) {
-                p.Value.roundLosses++;
-            }
+            foreach (var p in playerList) p.Value.roundLosses++;
         }
 
-        public void incRounds ( ) {
-            foreach (var p in playerList) {
-                p.Value.rounds++;
-            }
+        public void incRounds() {
+            foreach (var p in playerList) p.Value.rounds++;
         }
 
-        public float getTotalSkill ( ) {
-            return playerList.Values.Sum(p => p.calcSkill());
-        }
+        public float getTotalSkill() => playerList.Values.Sum(p => p.calcSkill());
 
-        public float getAverageSkill ( ) {
+        public float getAverageSkill() {
             int count = numPlayers();
             float sum = count > 0 ? getTotalSkill() / count : 0f;
             sum += streak * 500f;
             return sum;
         }
 
-        public CCSPlayerController? getPlayerBySkill ( float targetSkill ) {
+        public CCSPlayerController? getPlayerBySkill(float targetSkill) {
             int bestPlayerId = -1;
             float bestDiff = float.MaxValue;
 
@@ -672,7 +722,7 @@ namespace OSBase.Modules {
             return Utilities.GetPlayerFromUserid(bestPlayerId);
         }
 
-        public CCSPlayerController? getPlayerBySkillNonImmune ( float targetSkill ) {
+        public CCSPlayerController? getPlayerBySkillNonImmune(float targetSkill) {
             int bestPlayerId = -1;
             float bestDiff = float.MaxValue;
 
@@ -693,10 +743,8 @@ namespace OSBase.Modules {
             return Utilities.GetPlayerFromUserid(bestPlayerId);
         }
 
-        public CCSPlayerController? GetPlayerByDeviation ( float targetDeviation, bool forStrongTeam ) {
-            if (float.IsInfinity(targetDeviation) || float.IsNaN(targetDeviation)) {
-                targetDeviation = 1000f;
-            }
+        public CCSPlayerController? GetPlayerByDeviation(float targetDeviation, bool forStrongTeam) {
+            if (float.IsInfinity(targetDeviation) || float.IsNaN(targetDeviation)) targetDeviation = 1000f;
 
             int leaderId = -1;
             if (playerList.Count > 0) {
@@ -728,14 +776,12 @@ namespace OSBase.Modules {
             return Utilities.GetPlayerFromUserid(bestPlayerId);
         }
 
-        public void printPlayers ( ) {
+        public void printPlayers() {
             foreach (var kvp in playerList) {
                 Console.WriteLine($"[DEBUG] OSBase[gamestats] - Player {kvp.Key}/{kvp.Value.name}: {kvp.Value.rounds}r/{kvp.Value.roundWins}w/{kvp.Value.roundLosses}l - {kvp.Value.kills}k/{kvp.Value.assists}a/{kvp.Value.deaths}d:{kvp.Value.damage}dmg -> {kvp.Value.calcSkill()}p");
             }
         }
 
-        public override string ToString ( ) {
-            return $"Wins: {wins}, Losses: {losses}, Streak: {streak}";
-        }
+        public override string ToString() => $"Wins: {wins}, Losses: {losses}, Streak: {streak}";
     }
 }
