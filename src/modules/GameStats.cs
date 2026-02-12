@@ -39,11 +39,25 @@ namespace OSBase.Modules {
         private readonly Dictionary<string, float> avg90Cache = new Dictionary<string, float>(StringComparer.Ordinal);
         private DateTime avg90LastRefreshUtc = DateTime.MinValue;
 
+        // === Match/save guards ===
+        private string activeMapName = "";
+        private bool savedThisMatch = false;
+
+        private int tWins = 0;
+        private int ctWins = 0;
+
+        // Change these if you want different rules:
+        private const int WIN_THRESHOLD = 11;      // only save when a team reaches this many wins
+        private const int MIN_ROUNDS_TO_SAVE = 8;  // per-player minimum rounds to be included in the save
+        private const int MIN_PLAYERS_TO_SAVE = 10;
+
         public GameStats(OSBase inOsbase, Config inConfig) {
             Current = this;
             osbase = inOsbase;
             config = inConfig;
             db = new Database(osbase, config);
+
+            activeMapName = Server.MapName ?? "";
 
             createTables();
             loadEventHandlers();
@@ -95,6 +109,14 @@ namespace OSBase.Modules {
             isWarmup = true;
             roundNumber = 0;
 
+            // Snapshot map for this match. Never use Server.MapName at save time.
+            activeMapName = mapName;
+
+            // Reset match guards/counters
+            savedThisMatch = false;
+            tWins = 0;
+            ctWins = 0;
+
             clearStats();
 
             TryRefresh90dCacheAllPlayers(); // bulk refresh once per map (keeps old cache on failure)
@@ -103,19 +125,33 @@ namespace OSBase.Modules {
         }
 
         private void OnMapEnd() {
-            // Persist only with a reasonable population
-            if (playerList.Count < 10) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapEnd: Not enough players to write stats.");
+            SaveIfMatchComplete("MapEnd");
+        }
+
+        private void SaveIfMatchComplete(string reason) {
+            if (savedThisMatch) return;
+
+            // Only save completed matches (prevents warmup/short map hops from writing garbage)
+            if (Math.Max(tWins, ctWins) < WIN_THRESHOLD) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Save skipped ({reason}): match not complete (T={tWins}, CT={ctWins}, need={WIN_THRESHOLD}). map={activeMapName}");
                 return;
             }
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapEnd: Writing player stats.");
+            // Persist only with a reasonable population
+            if (playerList.Count < MIN_PLAYERS_TO_SAVE) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Save skipped ({reason}): Not enough tracked players ({playerList.Count}<{MIN_PLAYERS_TO_SAVE}). map={activeMapName}");
+                return;
+            }
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Saving stats ({reason}): map={activeMapName} T={tWins} CT={ctWins} trackedPlayers={playerList.Count}");
+
+            int inserted = 0;
             foreach (var entry in playerList) {
                 var ps = entry.Value;
 
-                if (ps.steamid.Equals("0") || ps.name.Length == 0 || ps.rounds < 10) continue;
+                if (ps.steamid.Equals("0") || ps.name.Length == 0 || ps.rounds < MIN_ROUNDS_TO_SAVE) continue;
 
-                string query =
+                const string query =
                     "INSERT INTO skill_log (steamid, name, skill, datestr, mapname) " +
                     "VALUES (@steamid, @name, @skill, NOW(), @mapname);";
 
@@ -123,27 +159,36 @@ namespace OSBase.Modules {
                     new MySqlParameter("@steamid", ps.steamid),
                     new MySqlParameter("@name", ps.name),
                     new MySqlParameter("@skill", ps.calcSkill()),
-                    new MySqlParameter("@mapname", Server.MapName ?? "")
+                    new MySqlParameter("@mapname", activeMapName)
                 };
 
                 try {
                     db.insert(query, parameters);
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - DB: Inserted {ps.name} ({ps.steamid}).");
+                    inserted++;
                 } catch (Exception e) {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - MapEndInsert: {e.Message}");
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - SaveInsert({reason}): {e.Message} ({ps.name}/{ps.steamid})");
                 }
             }
 
+            savedThisMatch = true;
+
+            // Clear match state
             playerList.Clear();
             teamList[TEAM_T].resetPlayers();
             teamList[TEAM_CT].resetPlayers();
             teamList[TEAM_S].resetPlayers();
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - MapEnd: Stats cleared.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Saved ({reason}): inserted={inserted}, minRounds={MIN_ROUNDS_TO_SAVE}. Stats cleared.");
         }
 
         private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
             isWarmup = false;
+
+            // Reset counters cleanly at edge of warmup -> match
+            roundNumber = 0;
+            tWins = 0;
+            ctWins = 0;
+            savedThisMatch = false;
 
             // Ensure correct team snapshot at the edge of warmup end (for TeamBalancer etc)
             SyncTeamsNow(false);
@@ -270,11 +315,13 @@ namespace OSBase.Modules {
 
             // Update team W/L and streaks from the winner code
             if (ev.Winner == TEAM_T) {
+                tWins++;
                 teamList[TEAM_T].streak++;
                 teamList[TEAM_CT].streak = 0;
                 teamList[TEAM_T].incWins();
                 teamList[TEAM_CT].incLosses();
             } else if (ev.Winner == TEAM_CT) {
+                ctWins++;
                 teamList[TEAM_CT].streak++;
                 teamList[TEAM_T].streak = 0;
                 teamList[TEAM_CT].incWins();
@@ -286,16 +333,29 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - RoundEnd: T(avg)={teamList[TEAM_T].getAverageSkill()} CT(avg)={teamList[TEAM_CT].getAverageSkill()}");
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - RoundEnd: T({teamList[TEAM_T].numPlayers()}), CT({teamList[TEAM_CT].numPlayers()}), SPEC({teamList[TEAM_S].numPlayers()})");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Score: T={tWins} CT={ctWins} (need {WIN_THRESHOLD}) map={activeMapName}");
+
+            // If match is complete, save immediately (prevents mapname race at map end)
+            if (Math.Max(tWins, ctWins) >= WIN_THRESHOLD) {
+                SaveIfMatchComplete("ScoreReached");
+            }
 
             return HookResult.Continue;
         }
 
         private HookResult OnStartHalftime(EventStartHalftime ev, GameEventInfo info) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime.");
+
             // Flip references (keeps streaks per “new” sides)
             var buf = teamList[TEAM_T];
             teamList[TEAM_T] = teamList[TEAM_CT];
             teamList[TEAM_CT] = buf;
+
+            // ALSO swap win counters so "team of players" keeps its score after side switch
+            var wbuf = tWins;
+            tWins = ctWins;
+            ctWins = wbuf;
+
             return HookResult.Continue;
         }
 

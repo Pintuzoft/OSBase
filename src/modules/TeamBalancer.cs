@@ -258,6 +258,7 @@ namespace OSBase.Modules {
             var (idealT, idealCT) = ComputeIdealSizesForRound(gs, tCount, cCount);
             if (tCount == idealT && cCount == idealCT) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Round1 fallback: sizes already OK. T={tCount} CT={cCount}");
+                EnsureBestIsSoloIf2v1(gs);
                 return;
             }
 
@@ -266,6 +267,8 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[WARN] OSBase[{ModuleName}] Round1 fallback size-fix: T={tCount},CT={cCount} -> T={idealT},CT={idealCT} moves={moves} from={(moveFromT ? "T" : "CT")}");
             EvenTeamSizesLive(gs, tStats, cStats, moveFromT, moves, reason: "round1_sizefix");
+
+            EnsureBestIsSoloIf2v1(gs);
         }
 
         // ===== Warmup final balance =====
@@ -296,7 +299,6 @@ namespace OSBase.Modules {
             int total  = tCount + cCount;
 
             Console.WriteLine($"[INFO] OSBase[{ModuleName}] WarmupFinalBalance RUN. roundNumber={gs.roundNumber} T={tCount} CT={cCount} total={total}");
-
             if (total == 0) return;
 
             // 1) Fix team sizes first
@@ -312,7 +314,15 @@ namespace OSBase.Modules {
                 cStats = gs.getTeam(TEAM_CT);
                 tCount = tStats.numPlayers();
                 cCount = cStats.numPlayers();
+                total  = tCount + cCount;
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupFinalBalance after size-fix: T={tCount}, CT={cCount}");
+            }
+
+            // ===== FIX: For <4 players, never do skill-based balancing. Only enforce 2v1 best-solo. =====
+            if (total < 4) {
+                EnsureBestIsSoloIf2v1(gs);
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] WarmupFinalBalance DONE (total<{4}): skipped skill swaps, enforced 2v1 if applicable.");
+                return;
             }
 
             // 2) Aggressive 90d/provisional-based swaps
@@ -371,6 +381,7 @@ namespace OSBase.Modules {
 
             int tCount = tStats.numPlayers();
             int cCount = cStats.numPlayers();
+            int total  = tCount + cCount;
 
             // 1) ALWAYS fix team sizes first
             var (idealT, idealCT) = ComputeIdealSizesForRound(gs, tCount, cCount);
@@ -382,6 +393,15 @@ namespace OSBase.Modules {
 
                 tStats = gs.getTeam(TEAM_T);
                 cStats = gs.getTeam(TEAM_CT);
+                tCount = tStats.numPlayers();
+                cCount = cStats.numPlayers();
+                total  = tCount + cCount;
+            }
+
+            // ===== FIX: For <4 players, never do skill-based swap balancing. Only enforce 2v1 best-solo. =====
+            if (total < 4) {
+                EnsureBestIsSoloIf2v1(gs);
+                return;
             }
 
             // 2) Then possibly do a performance swap if needed
