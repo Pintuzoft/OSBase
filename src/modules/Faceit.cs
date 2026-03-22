@@ -283,11 +283,11 @@ public class Faceit : IModule {
         lookupQueue.Enqueue(steamId64);
         queuedSteamIds.Add(steamId64);
 
-        if (debug)
-            Console.WriteLine($"[DEBUG] OSBase[faceit]: queued {steamId64}");
+        Console.WriteLine($"[DEBUG] OSBase[faceit]: queued {steamId64}, queueCount={lookupQueue.Count}");
     }
 
     private void StartWorker() {
+        Console.WriteLine("[DEBUG] OSBase[faceit]: StartWorker called");
         StopWorker();
 
         workerTimer = osbase?.AddTimer(
@@ -303,10 +303,15 @@ public class Faceit : IModule {
     }
 
     private void WorkerTick() {
+        Console.WriteLine($"[DEBUG] OSBase[faceit]: WorkerTick fired, busy={workerBusy}, queue={lookupQueue.Count}");
+
         try {
             if (!workerBusy && lookupQueue.Count > 0) {
                 ulong steamId64 = lookupQueue.Dequeue();
                 queuedSteamIds.Remove(steamId64);
+
+                Console.WriteLine($"[DEBUG] OSBase[faceit]: dequeued {steamId64}");
+
                 _ = ProcessLookupAsync(steamId64);
             }
         } catch (Exception ex) {
@@ -321,6 +326,7 @@ public class Faceit : IModule {
     }
 
     private async Task ProcessLookupAsync(ulong steamId64) {
+        Console.WriteLine($"[DEBUG] OSBase[faceit]: ProcessLookupAsync started for {steamId64}");
         workerBusy = true;
 
         try {
@@ -356,6 +362,7 @@ public class Faceit : IModule {
     }
 
     private void ApplyLookupResult(ulong steamId64, FaceitLookupResult result) {
+        Console.WriteLine($"[DEBUG] OSBase[faceit]: ApplyLookupResult for {steamId64}, status={result.Status}");
         if (db == null)
             return;
 
