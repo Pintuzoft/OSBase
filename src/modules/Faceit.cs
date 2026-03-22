@@ -318,7 +318,7 @@ public class Faceit : IModule {
             Console.WriteLine($"[ERROR] OSBase[faceit]: WorkerTick failed: {ex.Message}");
         }
     }
-
+    
     private async Task ProcessLookupAsync(ulong steamId64) {
         Console.WriteLine($"[DEBUG] OSBase[faceit]: ProcessLookupAsync started for {steamId64}");
         workerBusy = true;
