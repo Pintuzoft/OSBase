@@ -289,11 +289,16 @@ public class Faceit : IModule {
         Console.WriteLine("[DEBUG] OSBase[faceit]: StartWorker called");
         StopWorker();
 
-        workerTimer = osbase?.AddTimer(
+        workerTimer = osbase!.AddTimer(
             2.0f,
-            WorkerTick,
-            TimerFlags.REPEAT | TimerFlags.STOP_ON_MAPCHANGE
+            () => {
+                Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+                WorkerTick();
+            },
+            CounterStrikeSharp.API.Modules.Timers.TimerFlags.STOP_ON_MAPCHANGE
         );
+
+        Console.WriteLine($"[DEBUG] OSBase[faceit]: workerTimer null? {workerTimer == null}");
     }
 
     private void StopWorker() {
@@ -316,9 +321,18 @@ public class Faceit : IModule {
             _ = ProcessLookupAsync(steamId64);
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[faceit]: WorkerTick failed: {ex.Message}");
+        } finally {
+            workerTimer = osbase!.AddTimer(
+                2.0f,
+                () => {
+                    Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+                    WorkerTick();
+                },
+                CounterStrikeSharp.API.Modules.Timers.TimerFlags.STOP_ON_MAPCHANGE
+            );
         }
     }
-    
+
     private async Task ProcessLookupAsync(ulong steamId64) {
         Console.WriteLine($"[DEBUG] OSBase[faceit]: ProcessLookupAsync started for {steamId64}");
         workerBusy = true;
