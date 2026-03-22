@@ -14,7 +14,7 @@ namespace OSBase.Modules;
 
 public class Faceit : IModule {
     public string ModuleName => "faceit";
-
+    private const string ChatPrefix = " \x08[OSBase]\x01 ";
     private OSBase? osbase;
     private Config? config;
     private Database? db;
@@ -509,7 +509,7 @@ public class Faceit : IModule {
             ChatHelper.PrintToAdmins(
                 $"{player.PlayerName} | no FACEIT account found",
                 adminPermission,
-                " \x08[FACEIT]\x01 "
+                ChatPrefix
             );
             return;
         }
@@ -525,7 +525,7 @@ public class Faceit : IModule {
             ? $"{player.PlayerName} | FACEIT {nickname} | lvl {level} | elo {elo} | ACTIVE BAN"
             : $"{player.PlayerName} | FACEIT {nickname} | lvl {level} | elo {elo}";
 
-        ChatHelper.PrintToAdmins(message, adminPermission, " \x08[FACEIT]\x01 ");
+        ChatHelper.PrintToAdmins(message, adminPermission, ChatPrefix);
     }
 
     private void NotifyAdminsIfRelevant(ulong steamId64, FaceitLookupResult result) {
@@ -540,7 +540,7 @@ public class Faceit : IModule {
             ChatHelper.PrintToAdmins(
                 $"{player!.PlayerName} | no FACEIT account found",
                 adminPermission,
-                " \x08[FACEIT]\x01 "
+                ChatPrefix
             );
             return;
         }
@@ -552,7 +552,7 @@ public class Faceit : IModule {
             ? $"{player!.PlayerName} | FACEIT {result.FaceitNickname ?? "unknown"} | lvl {result.SkillLevel?.ToString() ?? "?"} | elo {result.FaceitElo?.ToString() ?? "?"} | ACTIVE BAN"
             : $"{player!.PlayerName} | FACEIT {result.FaceitNickname ?? "unknown"} | lvl {result.SkillLevel?.ToString() ?? "?"} | elo {result.FaceitElo?.ToString() ?? "?"}";
 
-        ChatHelper.PrintToAdmins(message, adminPermission, " \x08[FACEIT]\x01 ");
+        ChatHelper.PrintToAdmins(message, adminPermission, ChatPrefix);
     }
 
     private CCSPlayerController? FindOnlinePlayer(ulong steamId64) {
