@@ -8,6 +8,11 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Timers;
 using MySqlConnector;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 using OSBase.Helpers;
 
 namespace OSBase.Modules;
@@ -137,6 +142,7 @@ public class Faceit : IModule {
                 `verified` TINYINT(1) NOT NULL DEFAULT 0,
                 `has_faceit_account` TINYINT(1) NOT NULL DEFAULT 0,
                 `active_ban` TINYINT(1) NOT NULL DEFAULT 0,
+                `ban_reason` VARCHAR(128) DEFAULT NULL,
                 `cache_level` INT NOT NULL DEFAULT 0,
                 `last_seen_at` DATETIME DEFAULT NULL,
                 `last_checked_at` DATETIME DEFAULT NULL,
@@ -370,22 +376,159 @@ public class Faceit : IModule {
     }
 
     private async Task<FaceitLookupResult> FetchFaceitDataAsync(ulong steamId64) {
-        await Task.Yield();
+        if (httpClient == null)
+            throw new InvalidOperationException("HttpClient is null");
 
-        // TODO:
-        // 1. Lookup player by SteamID64 / game_player_id
-        // 2. If found, lookup bans
-        // 3. Map response to FaceitLookupResult
-        // 4. Return not_found if no account exists
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new InvalidOperationException("FACEIT api_key is missing in faceit.cfg");
 
-        return new FaceitLookupResult {
-            SteamId64 = steamId64,
-            HasFaceitAccount = false,
-            ActiveBan = false,
-            Status = "not_found"
+        string url = $"https://open.faceit.com/data/v4/players?game=cs2&game_player_id={steamId64}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        using var response = await httpClient.SendAsync(request);
+
+        if (debug)
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: FACEIT lookup status={(int)response.StatusCode} for steamid64={steamId64}");
+
+        if (response.StatusCode == HttpStatusCode.NotFound) {
+            return new FaceitLookupResult {
+                SteamId64 = steamId64,
+                HasFaceitAccount = false,
+                ActiveBan = false,
+                BanReason = null,
+                Status = "not_found"
+            };
+        }
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+            throw new Exception($"FACEIT auth failed: {(int)response.StatusCode}");
+
+        if ((int)response.StatusCode == 429)
+            throw new Exception("FACEIT rate limited");
+
+        if (!response.IsSuccessStatusCode)
+            throw new Exception($"FACEIT lookup failed: {(int)response.StatusCode} {response.ReasonPhrase}");
+
+        string body = await response.Content.ReadAsStringAsync();
+
+        var options = new JsonSerializerOptions {
+            PropertyNameCaseInsensitive = true
         };
-    }
 
+        var player = JsonSerializer.Deserialize<FaceitPlayerResponse>(body, options);
+        if (player == null) {
+            return new FaceitLookupResult {
+                SteamId64 = steamId64,
+                HasFaceitAccount = false,
+                ActiveBan = false,
+                BanReason = null,
+                Status = "not_found"
+            };
+        }
+
+        FaceitGameData? cs2 = null;
+        if (player.Games != null)
+            player.Games.TryGetValue("cs2", out cs2);
+
+        if (cs2 == null) {
+            return new FaceitLookupResult {
+                SteamId64 = steamId64,
+                HasFaceitAccount = false,
+                ActiveBan = false,
+                BanReason = null,
+                Status = "not_found"
+            };
+        }
+
+        var result = new FaceitLookupResult {
+            SteamId64 = steamId64,
+            FaceitPlayerId = player.PlayerId,
+            FaceitNickname = player.Nickname,
+            SkillLevel = cs2.SkillLevel,
+            FaceitElo = cs2.FaceitElo,
+            Region = cs2.Region,
+            Country = player.Country,
+            Verified = player.Verified,
+            HasFaceitAccount = true,
+            ActiveBan = false,
+            BanReason = null,
+            Status = "ok"
+        };
+
+        // Optional bans lookup
+        if (!string.IsNullOrWhiteSpace(player.PlayerId)) {
+            try {
+                await PopulateBanInfoAsync(result, player.PlayerId!);
+            } catch (Exception ex) {
+                if (debug)
+                    Console.WriteLine($"[DEBUG] OSBase[faceit]: bans lookup failed for {steamId64}: {ex.Message}");
+            }
+        }
+
+        return result;
+    }
+    private async Task PopulateBanInfoAsync(FaceitLookupResult result, string faceitPlayerId) {
+        if (httpClient == null)
+            return;
+
+        string url = $"https://open.faceit.com/data/v4/players/{faceitPlayerId}/bans";
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        using var response = await httpClient.SendAsync(request);
+
+        if (debug)
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: FACEIT bans status={(int)response.StatusCode} for player_id={faceitPlayerId}");
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return;
+
+        if (!response.IsSuccessStatusCode)
+            return;
+
+        string body = await response.Content.ReadAsStringAsync();
+
+        var options = new JsonSerializerOptions {
+            PropertyNameCaseInsensitive = true
+        };
+
+        var bans = JsonSerializer.Deserialize<FaceitBansResponse>(body, options);
+        if (bans?.Items == null || bans.Items.Count == 0)
+            return;
+
+        foreach (var ban in bans.Items) {
+            if (!IsBanActive(ban))
+                continue;
+
+            result.ActiveBan = true;
+            result.BanReason =
+                !string.IsNullOrWhiteSpace(ban.Reason) ? ban.Reason :
+                !string.IsNullOrWhiteSpace(ban.EntityType) ? ban.EntityType :
+                "unknown";
+
+            return;
+        }
+    }
+    private bool IsBanActive(FaceitBanItem? ban) {
+        if (ban == null)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(ban.Status)) {
+            string status = ban.Status.Trim().ToLowerInvariant();
+            if (status == "active")
+                return true;
+            if (status == "expired" || status == "inactive")
+                return false;
+        }
+
+        if (ban.ExpiresAt.HasValue)
+            return ban.ExpiresAt.Value > DateTime.UtcNow;
+
+        return true;
+    }
     private void ApplyLookupResult(ulong steamId64, FaceitLookupResult result) {
         Console.WriteLine($"[DEBUG] OSBase[faceit]: ApplyLookupResult for {steamId64}, status={result.Status}");
         if (db == null)
@@ -424,6 +567,7 @@ public class Faceit : IModule {
                 `verified` = @verified,
                 `has_faceit_account` = @has_faceit_account,
                 `active_ban` = @active_ban,
+                `ban_reason` = @ban_reason,
                 `cache_level` = @cache_level,
                 `last_checked_at` = UTC_TIMESTAMP(),
                 `next_check_at` = @next_check_at,
@@ -441,6 +585,7 @@ public class Faceit : IModule {
             new MySqlParameter("@verified", result.Verified ? 1 : 0),
             new MySqlParameter("@has_faceit_account", result.HasFaceitAccount ? 1 : 0),
             new MySqlParameter("@active_ban", result.ActiveBan ? 1 : 0),
+            new MySqlParameter("@ban_reason", (object?)result.BanReason ?? DBNull.Value),
             new MySqlParameter("@cache_level", storedLevel),
             new MySqlParameter("@next_check_at", nextCheckAt),
             new MySqlParameter("@status", result.Status),
@@ -521,6 +666,7 @@ public class Faceit : IModule {
 
         bool hasFaceit = row["has_faceit_account"] != DBNull.Value && Convert.ToInt32(row["has_faceit_account"]) == 1;
         bool activeBan = row["active_ban"] != DBNull.Value && Convert.ToInt32(row["active_ban"]) == 1;
+        string banReason = row["ban_reason"] == DBNull.Value ? "unknown" : row["ban_reason"].ToString() ?? "unknown";
         string status = row["status"] == DBNull.Value ? "unknown" : row["status"].ToString() ?? "unknown";
 
         if (!hasFaceit) {
@@ -540,8 +686,8 @@ public class Faceit : IModule {
         string elo = row["faceit_elo"] == DBNull.Value ? "?" : row["faceit_elo"].ToString() ?? "?";
 
         string message = activeBan
-            ? $"{player.PlayerName} | FACEIT {nickname} | lvl {level} | elo {elo} | ACTIVE BAN"
-            : $"{player.PlayerName} | FACEIT {nickname} | lvl {level} | elo {elo}";
+            ? $"{player.PlayerName} | FACEIT: {nickname} | lvl {level} | elo {elo} | ACTIVE BAN: {banReason}"
+            : $"{player.PlayerName} | FACEIT: {nickname} | lvl {level} | elo {elo}";
 
         ChatHelper.PrintToAdmins(message, adminPermission, ChatPrefix);
     }
@@ -567,8 +713,8 @@ public class Faceit : IModule {
             return;
 
         string message = result.ActiveBan
-            ? $"{player!.PlayerName} | FACEIT {result.FaceitNickname ?? "unknown"} | lvl {result.SkillLevel?.ToString() ?? "?"} | elo {result.FaceitElo?.ToString() ?? "?"} | ACTIVE BAN"
-            : $"{player!.PlayerName} | FACEIT {result.FaceitNickname ?? "unknown"} | lvl {result.SkillLevel?.ToString() ?? "?"} | elo {result.FaceitElo?.ToString() ?? "?"}";
+            ? $"{player!.PlayerName} | FACEIT: {result.FaceitNickname ?? "unknown"} | lvl {result.SkillLevel?.ToString() ?? "?"} | elo {result.FaceitElo?.ToString() ?? "?"} | ACTIVE BAN: {result.BanReason ?? "unknown"}"
+            : $"{player!.PlayerName} | FACEIT: {result.FaceitNickname ?? "unknown"} | lvl {result.SkillLevel?.ToString() ?? "?"} | elo {result.FaceitElo?.ToString() ?? "?"}";
 
         ChatHelper.PrintToAdmins(message, adminPermission, ChatPrefix);
     }
@@ -601,6 +747,64 @@ public class Faceit : IModule {
         workerBusy = false;
     }
 
+    private class FaceitPlayerResponse {
+        [JsonPropertyName("player_id")]
+        public string? PlayerId { get; set; }
+
+        [JsonPropertyName("nickname")]
+        public string? Nickname { get; set; }
+
+        [JsonPropertyName("country")]
+        public string? Country { get; set; }
+
+        [JsonPropertyName("verified")]
+        public bool Verified { get; set; }
+
+        [JsonPropertyName("steam_id_64")]
+        public string? SteamId64 { get; set; }
+
+        [JsonPropertyName("games")]
+        public Dictionary<string, FaceitGameData>? Games { get; set; }
+    }
+
+    private class FaceitGameData {
+        [JsonPropertyName("region")]
+        public string? Region { get; set; }
+
+        [JsonPropertyName("game_player_id")]
+        public string? GamePlayerId { get; set; }
+
+        [JsonPropertyName("skill_level")]
+        public int? SkillLevel { get; set; }
+
+        [JsonPropertyName("faceit_elo")]
+        public int? FaceitElo { get; set; }
+
+        [JsonPropertyName("game_player_name")]
+        public string? GamePlayerName { get; set; }
+
+        [JsonPropertyName("skill_level_label")]
+        public string? SkillLevelLabel { get; set; }
+    }
+
+    private class FaceitBansResponse {
+        [JsonPropertyName("items")]
+        public List<FaceitBanItem> Items { get; set; } = new();
+    }
+
+    private class FaceitBanItem {
+        [JsonPropertyName("reason")]
+        public string? Reason { get; set; }
+
+        [JsonPropertyName("status")]
+        public string? Status { get; set; }
+
+        [JsonPropertyName("entity_type")]
+        public string? EntityType { get; set; }
+
+        [JsonPropertyName("expires_at")]
+        public DateTime? ExpiresAt { get; set; }
+    }
     private class FaceitLookupResult {
         public ulong SteamId64 { get; set; }
         public string? FaceitPlayerId { get; set; }
@@ -612,6 +816,7 @@ public class Faceit : IModule {
         public bool Verified { get; set; }
         public bool HasFaceitAccount { get; set; }
         public bool ActiveBan { get; set; }
+        public string? BanReason { get; set; }
         public string Status { get; set; } = "pending";
     }
 }
