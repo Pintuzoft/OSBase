@@ -327,14 +327,19 @@ public class Faceit : IModule {
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[faceit]: WorkerTick failed: {ex.Message}");
         } finally {
-            workerTimer = osbase!.AddTimer(
-                2.0f,
-                () => {
-                    Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
-                    WorkerTick();
-                },
-                CounterStrikeSharp.API.Modules.Timers.TimerFlags.STOP_ON_MAPCHANGE
-            );
+            if (lookupQueue.Count > 0 || workerBusy) {
+                workerTimer = osbase!.AddTimer(
+                    2.0f,
+                    () => {
+                        Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+                        WorkerTick();
+                    },
+                    CounterStrikeSharp.API.Modules.Timers.TimerFlags.STOP_ON_MAPCHANGE
+                );
+            } else {
+                Console.WriteLine("[DEBUG] OSBase[faceit]: queue empty, stopping worker");
+                StopWorker();
+            }
         }
     }
 
