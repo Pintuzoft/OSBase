@@ -285,7 +285,6 @@ public class Faceit : IModule {
 
         Console.WriteLine($"[DEBUG] OSBase[faceit]: queued {steamId64}, queueCount={lookupQueue.Count}");
     }
-
     private void StartWorker() {
         Console.WriteLine("[DEBUG] OSBase[faceit]: StartWorker called");
         StopWorker();
@@ -293,7 +292,7 @@ public class Faceit : IModule {
         workerTimer = osbase?.AddTimer(
             2.0f,
             WorkerTick,
-            TimerFlags.STOP_ON_MAPCHANGE
+            TimerFlags.REPEAT | TimerFlags.STOP_ON_MAPCHANGE
         );
     }
 
@@ -306,22 +305,17 @@ public class Faceit : IModule {
         Console.WriteLine($"[DEBUG] OSBase[faceit]: WorkerTick fired, busy={workerBusy}, queue={lookupQueue.Count}");
 
         try {
-            if (!workerBusy && lookupQueue.Count > 0) {
-                ulong steamId64 = lookupQueue.Dequeue();
-                queuedSteamIds.Remove(steamId64);
+            if (workerBusy || lookupQueue.Count == 0)
+                return;
 
-                Console.WriteLine($"[DEBUG] OSBase[faceit]: dequeued {steamId64}");
+            ulong steamId64 = lookupQueue.Dequeue();
+            queuedSteamIds.Remove(steamId64);
 
-                _ = ProcessLookupAsync(steamId64);
-            }
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: dequeued {steamId64}");
+
+            _ = ProcessLookupAsync(steamId64);
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[faceit]: WorkerTick failed: {ex.Message}");
-        } finally {
-            workerTimer = osbase?.AddTimer(
-                2.0f,
-                WorkerTick,
-                TimerFlags.STOP_ON_MAPCHANGE
-            );
         }
     }
 
