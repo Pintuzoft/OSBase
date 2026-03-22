@@ -1,25 +1,26 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Timers;
 using MySqlConnector;
-using System.Net;
-using System.Net.Http.Headers;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-
 using OSBase.Helpers;
 
 namespace OSBase.Modules;
 
 public class Faceit : IModule {
     public string ModuleName => "faceit";
-    private const string ChatPrefix = " \x08[OSBase]\x01 ";
+
+    private const string ChatPrefix = " \x08[OSBase(Admin)]\x01 ";
+
     private OSBase? osbase;
     private Config? config;
     private Database? db;
@@ -35,7 +36,7 @@ public class Faceit : IModule {
     private bool debug = false;
 
     // cache levels
-    private readonly int[] cacheDays = { 3, 7, 14, 30, 60, 120 };
+    private readonly int[] cacheDays = { 3, 6, 9, 12, 15, 18, 21, 24, 27, 30 };
 
     // in-memory queue
     private readonly Queue<ulong> lookupQueue = new();
@@ -62,7 +63,7 @@ public class Faceit : IModule {
 
         EnsureFaceitCacheTable();
         CleanupOldCacheRows();
-        
+
         osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
         osbase.RegisterEventHandler<EventMapTransition>((_, __) => {
             StopWorker();
@@ -70,7 +71,11 @@ public class Faceit : IModule {
             return HookResult.Continue;
         });
 
-        Console.WriteLine("[DEBUG] OSBase[faceit]: loaded successfully!");
+        if (debug) {
+            Console.WriteLine("[DEBUG] OSBase[faceit]: loaded successfully!");
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: api key loaded={!string.IsNullOrWhiteSpace(apiKey)}, len={apiKey.Length}");
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: admin_permission={adminPermission}, timeout={httpTimeoutSeconds}, cleanup_after_days={cleanupAfterDays}");
+        }
     }
 
     private void CreateModuleConfig() {
@@ -98,7 +103,7 @@ public class Faceit : IModule {
 
             switch (kv[0].ToLowerInvariant()) {
                 case "api_key":
-                    apiKey = kv[1];
+                    apiKey = kv[1].Trim();
                     break;
                 case "admin_permission":
                     adminPermission = kv[1];
@@ -288,28 +293,36 @@ public class Faceit : IModule {
         lookupQueue.Enqueue(steamId64);
         queuedSteamIds.Add(steamId64);
 
-        Console.WriteLine($"[DEBUG] OSBase[faceit]: queued {steamId64}, queueCount={lookupQueue.Count}");
+        if (debug)
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: queued {steamId64}, queueCount={lookupQueue.Count}");
 
         if (workerTimer == null) {
-            Console.WriteLine("[DEBUG] OSBase[faceit]: worker not running, starting now");
+            if (debug)
+                Console.WriteLine("[DEBUG] OSBase[faceit]: worker not running, starting now");
+
             StartWorker();
         }
     }
 
     private void StartWorker() {
-        Console.WriteLine("[DEBUG] OSBase[faceit]: StartWorker called");
+        if (debug)
+            Console.WriteLine("[DEBUG] OSBase[faceit]: StartWorker called");
+
         StopWorker();
 
         workerTimer = osbase!.AddTimer(
             2.0f,
             () => {
-                Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+                if (debug)
+                    Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+
                 WorkerTick();
             },
-            CounterStrikeSharp.API.Modules.Timers.TimerFlags.STOP_ON_MAPCHANGE
+            TimerFlags.STOP_ON_MAPCHANGE
         );
 
-        Console.WriteLine($"[DEBUG] OSBase[faceit]: workerTimer null? {workerTimer == null}");
+        if (debug)
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: workerTimer null? {workerTimer == null}");
     }
 
     private void StopWorker() {
@@ -318,7 +331,8 @@ public class Faceit : IModule {
     }
 
     private void WorkerTick() {
-        Console.WriteLine($"[DEBUG] OSBase[faceit]: WorkerTick fired, busy={workerBusy}, queue={lookupQueue.Count}");
+        if (debug)
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: WorkerTick fired, busy={workerBusy}, queue={lookupQueue.Count}");
 
         try {
             if (workerBusy || lookupQueue.Count == 0)
@@ -327,7 +341,8 @@ public class Faceit : IModule {
             ulong steamId64 = lookupQueue.Dequeue();
             queuedSteamIds.Remove(steamId64);
 
-            Console.WriteLine($"[DEBUG] OSBase[faceit]: dequeued {steamId64}");
+            if (debug)
+                Console.WriteLine($"[DEBUG] OSBase[faceit]: dequeued {steamId64}");
 
             _ = ProcessLookupAsync(steamId64);
         } catch (Exception ex) {
@@ -337,20 +352,26 @@ public class Faceit : IModule {
                 workerTimer = osbase!.AddTimer(
                     2.0f,
                     () => {
-                        Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+                        if (debug)
+                            Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+
                         WorkerTick();
                     },
-                    CounterStrikeSharp.API.Modules.Timers.TimerFlags.STOP_ON_MAPCHANGE
+                    TimerFlags.STOP_ON_MAPCHANGE
                 );
             } else {
-                Console.WriteLine("[DEBUG] OSBase[faceit]: queue empty, stopping worker");
+                if (debug)
+                    Console.WriteLine("[DEBUG] OSBase[faceit]: queue empty, stopping worker");
+
                 StopWorker();
             }
         }
     }
 
     private async Task ProcessLookupAsync(ulong steamId64) {
-        Console.WriteLine($"[DEBUG] OSBase[faceit]: ProcessLookupAsync started for {steamId64}");
+        if (debug)
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: ProcessLookupAsync started for {steamId64}");
+
         workerBusy = true;
 
         try {
@@ -384,8 +405,14 @@ public class Faceit : IModule {
 
         string url = $"https://open.faceit.com/data/v4/players?game=cs2&game_player_id={steamId64}";
 
+        if (debug) {
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: lookup url={url}");
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: api key loaded={!string.IsNullOrWhiteSpace(apiKey)}, len={apiKey.Length}");
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Headers.UserAgent.ParseAdd("OSBase-Faceit/1.0");
 
         using var response = await httpClient.SendAsync(request);
 
@@ -393,6 +420,13 @@ public class Faceit : IModule {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: FACEIT lookup status={(int)response.StatusCode} for steamid64={steamId64}");
 
         if (response.StatusCode == HttpStatusCode.NotFound) {
+            string notFoundBody = await response.Content.ReadAsStringAsync();
+
+            if (debug) {
+                Console.WriteLine($"[DEBUG] OSBase[faceit]: FACEIT returned 404 for steamid64={steamId64}");
+                Console.WriteLine($"[DEBUG] OSBase[faceit]: FACEIT 404 body={notFoundBody}");
+            }
+
             return new FaceitLookupResult {
                 SteamId64 = steamId64,
                 HasFaceitAccount = false,
@@ -457,7 +491,6 @@ public class Faceit : IModule {
             Status = "ok"
         };
 
-        // Optional bans lookup
         if (!string.IsNullOrWhiteSpace(player.PlayerId)) {
             try {
                 await PopulateBanInfoAsync(result, player.PlayerId!);
@@ -469,6 +502,7 @@ public class Faceit : IModule {
 
         return result;
     }
+
     private async Task PopulateBanInfoAsync(FaceitLookupResult result, string faceitPlayerId) {
         if (httpClient == null)
             return;
@@ -477,6 +511,7 @@ public class Faceit : IModule {
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Headers.UserAgent.ParseAdd("OSBase-Faceit/1.0");
 
         using var response = await httpClient.SendAsync(request);
 
@@ -512,6 +547,7 @@ public class Faceit : IModule {
             return;
         }
     }
+
     private bool IsBanActive(FaceitBanItem? ban) {
         if (ban == null)
             return false;
@@ -529,8 +565,11 @@ public class Faceit : IModule {
 
         return true;
     }
+
     private void ApplyLookupResult(ulong steamId64, FaceitLookupResult result) {
-        Console.WriteLine($"[DEBUG] OSBase[faceit]: ApplyLookupResult for {steamId64}, status={result.Status}");
+        if (debug)
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: ApplyLookupResult for {steamId64}, status={result.Status}");
+
         if (db == null)
             return;
 
@@ -667,7 +706,6 @@ public class Faceit : IModule {
         bool hasFaceit = row["has_faceit_account"] != DBNull.Value && Convert.ToInt32(row["has_faceit_account"]) == 1;
         bool activeBan = row["active_ban"] != DBNull.Value && Convert.ToInt32(row["active_ban"]) == 1;
         string banReason = row["ban_reason"] == DBNull.Value ? "unknown" : row["ban_reason"].ToString() ?? "unknown";
-        string status = row["status"] == DBNull.Value ? "unknown" : row["status"].ToString() ?? "unknown";
 
         if (!hasFaceit) {
             ChatHelper.PrintToAdmins(
@@ -805,6 +843,7 @@ public class Faceit : IModule {
         [JsonPropertyName("expires_at")]
         public DateTime? ExpiresAt { get; set; }
     }
+
     private class FaceitLookupResult {
         public ulong SteamId64 { get; set; }
         public string? FaceitPlayerId { get; set; }
