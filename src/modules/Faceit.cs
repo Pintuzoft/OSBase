@@ -57,8 +57,7 @@ public class Faceit : IModule {
 
         EnsureFaceitCacheTable();
         CleanupOldCacheRows();
-        StartWorker();
-
+        
         osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
         osbase.RegisterEventHandler<EventMapTransition>((_, __) => {
             StopWorker();
@@ -284,7 +283,13 @@ public class Faceit : IModule {
         queuedSteamIds.Add(steamId64);
 
         Console.WriteLine($"[DEBUG] OSBase[faceit]: queued {steamId64}, queueCount={lookupQueue.Count}");
+
+        if (workerTimer == null) {
+            Console.WriteLine("[DEBUG] OSBase[faceit]: worker not running, starting now");
+            StartWorker();
+        }
     }
+
     private void StartWorker() {
         Console.WriteLine("[DEBUG] OSBase[faceit]: StartWorker called");
         StopWorker();
