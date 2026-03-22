@@ -503,9 +503,16 @@ public class Faceit : IModule {
 
         bool hasFaceit = row["has_faceit_account"] != DBNull.Value && Convert.ToInt32(row["has_faceit_account"]) == 1;
         bool activeBan = row["active_ban"] != DBNull.Value && Convert.ToInt32(row["active_ban"]) == 1;
+        string status = row["status"] == DBNull.Value ? "unknown" : row["status"].ToString() ?? "unknown";
 
-        if (!hasFaceit)
+        if (!hasFaceit) {
+            ChatHelper.PrintToAdmins(
+                $"{player.PlayerName} | no FACEIT account found",
+                adminPermission,
+                " \x08[FACEIT]\x01 "
+            );
             return;
+        }
 
         if (onlyNotifyOnBan && !activeBan)
             return;
@@ -525,14 +532,20 @@ public class Faceit : IModule {
         if (!notifyAdminsOnConnect)
             return;
 
-        if (!result.HasFaceitAccount)
-            return;
-
-        if (onlyNotifyOnBan && !result.ActiveBan)
-            return;
-
         var player = FindOnlinePlayer(steamId64);
         if (!IsValidHuman(player))
+            return;
+
+        if (!result.HasFaceitAccount) {
+            ChatHelper.PrintToAdmins(
+                $"{player!.PlayerName} | no FACEIT account found",
+                adminPermission,
+                " \x08[FACEIT]\x01 "
+            );
+            return;
+        }
+
+        if (onlyNotifyOnBan && !result.ActiveBan)
             return;
 
         string message = result.ActiveBan
