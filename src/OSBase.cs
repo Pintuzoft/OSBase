@@ -16,9 +16,9 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.433";
+    public override string ModuleVersion => "0.0.434";
     public override string ModuleAuthor => "Pintuz";
-    public override string ModuleDescription => "Plugin for handling map events with config execution";
+    public override string ModuleDescription => "Plugin for managing CS2 servers";
     
     public string currentMap = "";
     private Config? config;
