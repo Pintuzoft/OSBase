@@ -391,8 +391,19 @@ public class Faceit : IModule {
             int.TryParse(existingRow["cache_level"].ToString(), out currentLevel);
 
         bool changed = HasMeaningfulChanges(existingRow, result);
-        int nextLevel = changed ? 0 : GetNextCacheLevel(currentLevel);
-        DateTime nextCheckAt = GetNextCheckAt(nextLevel);
+
+        int appliedLevel;
+        int storedLevel;
+
+        if (changed) {
+            appliedLevel = 0;
+            storedLevel = 0;
+        } else {
+            appliedLevel = currentLevel;
+            storedLevel = GetNextCacheLevel(currentLevel);
+        }
+
+        DateTime nextCheckAt = GetNextCheckAt(appliedLevel);
 
         string query = @"
             `faceit_cache`
@@ -423,14 +434,14 @@ public class Faceit : IModule {
             new MySqlParameter("@verified", result.Verified ? 1 : 0),
             new MySqlParameter("@has_faceit_account", result.HasFaceitAccount ? 1 : 0),
             new MySqlParameter("@active_ban", result.ActiveBan ? 1 : 0),
-            new MySqlParameter("@cache_level", nextLevel),
+            new MySqlParameter("@cache_level", storedLevel),
             new MySqlParameter("@next_check_at", nextCheckAt),
             new MySqlParameter("@status", result.Status),
             new MySqlParameter("@steamid64", steamId64)
         );
 
         if (debug)
-            Console.WriteLine($"[DEBUG] OSBase[faceit]: updated cache for {steamId64}, changed={changed}, nextLevel={nextLevel}");
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: updated cache for {steamId64}, changed={changed}, appliedLevel={appliedLevel}, storedLevel={storedLevel}");
     }
 
     private void ApplyTemporaryError(ulong steamId64, string errorMessage) {
