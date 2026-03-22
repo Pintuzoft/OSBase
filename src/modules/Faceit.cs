@@ -353,7 +353,14 @@ public class Faceit : IModule {
 
             var result = await FetchFaceitDataAsync(steamId64);
             ApplyLookupResult(steamId64, result);
-            NotifyAdminsIfRelevant(steamId64, result);
+
+            Server.NextWorldUpdate(() => {
+                try {
+                    NotifyAdminsIfRelevant(steamId64, result);
+                } catch (Exception ex) {
+                    Console.WriteLine($"[ERROR] OSBase[faceit]: NotifyAdminsIfRelevant(main thread) failed for {steamId64}: {ex.Message}");
+                }
+            });
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[faceit]: ProcessLookupAsync failed for {steamId64}: {ex.Message}");
             ApplyTemporaryError(steamId64, ex.Message);
