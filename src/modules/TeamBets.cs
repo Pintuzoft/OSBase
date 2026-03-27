@@ -90,11 +90,6 @@ namespace OSBase.Modules {
 
         // Command format: bet <t/ct> <amount|all>
         private void handleBetCommand(CCSPlayerController? player, string command) {
-            Console.WriteLine("[DEBUG] TeamBets: handleBetCommand");
-            if (player != null) {
-                player.PrintToChat("[TeamBets]: WooHoo! you are here!!");
-            }
-
             // Check if the player is valid and has an InGameMoneyServices instance
             if ( player == null || 
                  player.IsValid == false || 
@@ -150,11 +145,11 @@ namespace OSBase.Modules {
             switch (teamStr) {
                 case "t":
                     team = TEAM_T;
-                    odds = ctSize / tSize;
+                    odds = tSize > 0 ? (float)ctSize / tSize : 1.0f;
                     break;
                 case "ct":
                     team = TEAM_CT;
-                    odds = tSize / ctSize;
+                    odds = ctSize > 0 ? (float)tSize / ctSize : 1.0f;
                     break;
                 default:
                     player.PrintToChat("[TeamBets]: Invalid team. Use 't' or 'ct'.");
@@ -217,8 +212,8 @@ namespace OSBase.Modules {
                     continue;
 
                 if (bet.team == winningTeam) {
-                    // Your payout equals your bet plus your share of the losers' pool
-                    int payout = bet.amount;
+                    // Payout equals the original bet plus winnings based on the stored odds
+                    int payout = (int)(bet.amount * (1.0f + bet.odds));
                     if (player.InGameMoneyServices != null) {
                         player.InGameMoneyServices.Account += payout;
                     }
@@ -233,7 +228,7 @@ namespace OSBase.Modules {
         }
 
         private bool isOnATeam ( CsTeam team ) {
-            return team == ( CsTeam.Terrorist | CsTeam.CounterTerrorist );
+            return team == CsTeam.Terrorist || team == CsTeam.CounterTerrorist;
         }
 
     }
