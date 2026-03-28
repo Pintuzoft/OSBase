@@ -7,37 +7,31 @@ using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules {
-
     public class TeamBets : IModule {
         public string ModuleName => "teambets";
 
         private OSBase? osbase;
         private Config? config;
 
-        private const int TEAM_T = (int)CsTeam.Terrorist;
-        private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
+        private const int TeamT = (int)CsTeam.Terrorist;
+        private const int TeamCt = (int)CsTeam.CounterTerrorist;
         private const int MinMoney = 0;
         private const int MaxMoney = 16000;
 
-        // optional live round flag, but warmup is sourced from GameStats
         private bool roundLive = false;
 
         // userid -> bet
-        private readonly Dictionary<int, Bet> betters = new();
+        private readonly Dictionary<int, Bet> bets = new();
 
         private class Bet {
-            public int Amount { get; set; }
-            public int Team { get; set; }
-            public float Odds { get; set; }
-            public int AliveT { get; set; }
-            public int AliveCt { get; set; }
+            public int Amount { get; }
+            public int Team { get; }
+            public float Odds { get; }
 
-            public Bet(int amount, int team, float odds, int aliveT, int aliveCt) {
+            public Bet(int amount, int team, float odds) {
                 Amount = amount;
                 Team = team;
                 Odds = odds;
-                AliveT = aliveT;
-                AliveCt = aliveCt;
             }
         }
 
@@ -45,7 +39,7 @@ namespace OSBase.Modules {
             osbase = inOsbase;
             config = inConfig;
 
-            config.RegisterGlobalConfigValue($"{ModuleName}", "1");
+            config.RegisterGlobalConfigValue(ModuleName, "1");
 
             if (osbase == null) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
@@ -57,13 +51,15 @@ namespace OSBase.Modules {
                 return;
             }
 
-            if (config.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
-                LoadEventHandlers();
-                osbase.RegisterEventHandler<EventPlayerChat>(OnPlayerChat);
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
-            } else {
+            if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
+                return;
             }
+
+            LoadEventHandlers();
+            osbase.RegisterEventHandler<EventPlayerChat>(OnPlayerChat);
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
 
         private void LoadEventHandlers() {
@@ -76,14 +72,12 @@ namespace OSBase.Modules {
         }
 
         private HookResult OnPlayerChat(EventPlayerChat eventInfo, GameEventInfo gameEventInfo) {
-            if (eventInfo?.Userid == null || string.IsNullOrWhiteSpace(eventInfo.Text)) {
+            if (eventInfo?.Userid == null || string.IsNullOrWhiteSpace(eventInfo.Text))
                 return HookResult.Continue;
-            }
 
             CCSPlayerController? player = Utilities.GetPlayerFromUserid(eventInfo.Userid);
-            if (player == null || !player.IsValid || !player.UserId.HasValue) {
+            if (player == null || !player.IsValid || !player.UserId.HasValue)
                 return HookResult.Continue;
-            }
 
             string text = eventInfo.Text.Trim();
 
@@ -95,14 +89,16 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
+        // Format: bet <t/ct> <amount|all|half>
         private void HandleBetCommand(CCSPlayerController player, string command) {
-            if (player == null || !player.IsValid || !player.UserId.HasValue || player.InGameMoneyServices == null) {
+            if (player == null || !player.IsValid || !player.UserId.HasValue || player.InGameMoneyServices == null)
                 return;
-            }
 
-            List<string> cmds = command.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+            List<string> parts = command
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .ToList();
 
-            if (cmds.Count < 3) {
+            if (parts.Count < 3) {
                 player.PrintToChat("[TeamBets]: Usage: bet <t/ct> <amount|all|half>");
                 return;
             }
@@ -122,46 +118,38 @@ namespace OSBase.Modules {
                 return;
             }
 
-            if (!IsOnATeam(player.Team)) {
+            if (!IsPlayableTeam(player.Team)) {
                 player.PrintToChat("[TeamBets]: You must be on a team to bet on the round!");
                 return;
             }
 
-            if (betters.ContainsKey(player.UserId.Value)) {
+            if (bets.ContainsKey(player.UserId.Value)) {
                 player.PrintToChat("[TeamBets]: You've already placed a bet this round!");
                 return;
             }
 
-            var aliveTPlayers = Utilities.GetPlayers()
-                .Where(p => p != null && p.IsValid && p.TeamNum == TEAM_T && p.PawnIsAlive)
-                .ToList();
-
-            var aliveCtPlayers = Utilities.GetPlayers()
-                .Where(p => p != null && p.IsValid && p.TeamNum == TEAM_CT && p.PawnIsAlive)
-                .ToList();
-
-            int aliveT = aliveTPlayers.Count;
-            int aliveCt = aliveCtPlayers.Count;
+            int aliveT = CountAlivePlayers(TeamT);
+            int aliveCt = CountAlivePlayers(TeamCt);
 
             if (aliveT <= 0 || aliveCt <= 0) {
                 player.PrintToChat("[TeamBets]: Betting is closed for this round state.");
                 return;
             }
 
-            string teamStr = cmds[1].ToLowerInvariant();
-            string amountStr = cmds[2].ToLowerInvariant();
+            string teamArg = parts[1].ToLowerInvariant();
+            string amountArg = parts[2].ToLowerInvariant();
 
-            int team;
+            int betTeam;
             float odds;
 
-            switch (teamStr) {
+            switch (teamArg) {
                 case "t":
-                    team = TEAM_T;
+                    betTeam = TeamT;
                     odds = (float)aliveCt / aliveT;
                     break;
 
                 case "ct":
-                    team = TEAM_CT;
+                    betTeam = TeamCt;
                     odds = (float)aliveT / aliveCt;
                     break;
 
@@ -173,7 +161,7 @@ namespace OSBase.Modules {
             int currentBalance = player.InGameMoneyServices.Account;
             int amount;
 
-            switch (amountStr) {
+            switch (amountArg) {
                 case "all":
                     amount = currentBalance;
                     break;
@@ -183,7 +171,7 @@ namespace OSBase.Modules {
                     break;
 
                 default:
-                    if (!int.TryParse(amountStr, out amount)) {
+                    if (!int.TryParse(amountArg, out amount)) {
                         player.PrintToChat("[TeamBets]: Invalid bet amount!");
                         return;
                     }
@@ -200,25 +188,22 @@ namespace OSBase.Modules {
                 return;
             }
 
-            int oldBalance = currentBalance;
             RemoveMoney(player, amount);
-            int newBalance = player.InGameMoneyServices.Account;
-
-            betters[player.UserId.Value] = new Bet(amount, team, odds, aliveT, aliveCt);
+            bets[player.UserId.Value] = new Bet(amount, betTeam, odds);
 
             player.PrintToChat(
-                $"[TeamBets]: Bet placed: ${amount} on {(team == TEAM_T ? "T" : "CT")} " +
-                $"at {odds:0.00} odds. Alive T/CT: {aliveT}/{aliveCt}. Balance: ${oldBalance} -> ${newBalance}"
+                $"[TeamBets]: You bet ${amount} on {(betTeam == TeamT ? "T" : "CT")} " +
+                $"at {odds:0.00} odds. Alive T/CT: {aliveT}/{aliveCt}"
             );
 
             Console.WriteLine(
                 $"[DEBUG] OSBase[{ModuleName}] Bet placed by {player.PlayerName}: " +
-                $"team={(team == TEAM_T ? "T" : "CT")} amount={amount} odds={odds:0.00} aliveT={aliveT} aliveCt={aliveCt} balance={oldBalance}->{newBalance}"
+                $"team={(betTeam == TeamT ? "T" : "CT")} amount={amount} odds={odds:0.00} aliveT={aliveT} aliveCt={aliveCt}"
             );
         }
 
         private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
-            betters.Clear();
+            bets.Clear();
             roundLive = false;
             return HookResult.Continue;
         }
@@ -235,52 +220,55 @@ namespace OSBase.Modules {
 
             int winningTeam = eventInfo.Winner;
 
-            foreach (var kvp in betters) {
-                int playerId = kvp.Key;
+            foreach (var kvp in bets) {
+                int userId = kvp.Key;
                 Bet bet = kvp.Value;
 
-                CCSPlayerController? player = Utilities.GetPlayerFromUserid(playerId);
-                if (player == null || !player.IsValid || player.InGameMoneyServices == null) {
+                CCSPlayerController? player = Utilities.GetPlayerFromUserid(userId);
+                if (player == null || !player.IsValid || player.InGameMoneyServices == null)
                     continue;
-                }
 
                 if (bet.Team == winningTeam) {
                     int payout = (int)Math.Round(bet.Amount * (1.0f + bet.Odds));
                     int profit = payout - bet.Amount;
 
-                    int oldBalance = player.InGameMoneyServices.Account;
                     AddMoney(player, payout);
-                    int newBalance = player.InGameMoneyServices.Account;
 
                     player.PrintToChat(
-                        $"[TeamBets]: You won ${profit}! Total payout: ${payout}. " +
-                        $"Bet was on {(winningTeam == TEAM_T ? "T" : "CT")} at {bet.Odds:0.00} odds. " +
-                        $"Balance: ${oldBalance} -> ${newBalance}"
+                        $"[TeamBets]: You won ${profit} betting on {(winningTeam == TeamT ? "T" : "CT")}!"
                     );
 
                     Console.WriteLine(
                         $"[DEBUG] OSBase[{ModuleName}] Bet WON by {player.PlayerName}: " +
-                        $"amount={bet.Amount} payout={payout} profit={profit} odds={bet.Odds:0.00} balance={oldBalance}->{newBalance}"
+                        $"amount={bet.Amount} payout={payout} profit={profit} odds={bet.Odds:0.00}"
                     );
                 } else {
                     player.PrintToChat(
-                        $"[TeamBets]: You lost ${bet.Amount} betting on {(bet.Team == TEAM_T ? "T" : "CT")} " +
-                        $"at {bet.Odds:0.00} odds."
+                        $"[TeamBets]: You lost ${bet.Amount} betting on {(bet.Team == TeamT ? "T" : "CT")}."
                     );
 
                     Console.WriteLine(
                         $"[DEBUG] OSBase[{ModuleName}] Bet LOST by {player.PlayerName}: " +
-                        $"amount={bet.Amount} team={(bet.Team == TEAM_T ? "T" : "CT")} odds={bet.Odds:0.00}"
+                        $"amount={bet.Amount} team={(bet.Team == TeamT ? "T" : "CT")} odds={bet.Odds:0.00}"
                     );
                 }
             }
 
-            betters.Clear();
+            bets.Clear();
             return HookResult.Continue;
+        }
+
+        private int CountAlivePlayers(int teamNum) {
+            return Utilities.GetPlayers()
+                .Count(p => p != null && p.IsValid && p.TeamNum == teamNum && p.PawnIsAlive);
         }
 
         private bool IsWarmupActive() {
             return GameStats.Current?.IsWarmup ?? true;
+        }
+
+        private bool IsPlayableTeam(CsTeam team) {
+            return team == CsTeam.Terrorist || team == CsTeam.CounterTerrorist;
         }
 
         private void AddMoney(CCSPlayerController player, int amount) {
@@ -294,10 +282,6 @@ namespace OSBase.Modules {
 
         private void RemoveMoney(CCSPlayerController player, int amount) {
             AddMoney(player, -amount);
-        }
-
-        private bool IsOnATeam(CsTeam team) {
-            return team == CsTeam.Terrorist || team == CsTeam.CounterTerrorist;
         }
     }
 }
