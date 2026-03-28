@@ -18,6 +18,7 @@ namespace OSBase.Modules {
         private Config config;
 
         private bool isWarmup = false;
+        public bool IsWarmup => isWarmup;
         public int roundNumber = 0;
 
         private const int TEAM_S  = (int)CsTeam.Spectator;
