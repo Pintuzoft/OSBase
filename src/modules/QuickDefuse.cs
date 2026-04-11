@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Events;
+using CounterStrikeSharp.API.Modules.Utils;
 using CoreListeners = CounterStrikeSharp.API.Core.Listeners;
 
 namespace OSBase.Modules;
@@ -12,22 +12,19 @@ namespace OSBase.Modules;
 public class QuickDefuse : IModule {
     public string ModuleName => "quickdefuse";
 
+    private const float SessionTimeoutSeconds = 10.0f;
+
     private OSBase? osbase;
     private Config? config;
     private readonly Random random = new();
-    private readonly Dictionary<IntPtr, ActiveDebugSession> activeSessions = new();
-    private int renderTickCounter = 0;
-
-    private const string ForwardColor = "Red";
-    private const string LeftColor = "Blue";
-    private const string BackColor = "Yellow";
-    private const string RightColor = "Green";
+    private readonly Dictionary<IntPtr, ActiveDefuseSession> activeSessions = new();
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
 
         config.RegisterGlobalConfigValue(ModuleName, "1");
+        config.RegisterGlobalConfigValue($"{ModuleName}_debug", "0");
 
         if (osbase == null) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
@@ -54,34 +51,17 @@ public class QuickDefuse : IModule {
             return;
         }
 
-        osbase.AddCommand("css_quickdefuse", "Start QuickDefuse debug test", OnQuickDefuseCommand);
-        osbase.AddCommand("css_quickdefuse_clear", "Clear QuickDefuse debug test", OnQuickDefuseClearCommand);
-
-        osbase.RegisterListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
         osbase.RegisterListener<CoreListeners.OnTick>(OnTick);
+        osbase.RegisterListener<CoreListeners.OnMapEnd>(OnMapEnd);
+        osbase.RegisterListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
 
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
+        osbase.RegisterEventHandler<EventBombBegindefuse>(OnBombBeginDefuse);
+        osbase.RegisterEventHandler<EventBombAbortdefuse>(OnBombAbortDefuse);
+        osbase.RegisterEventHandler<EventBombDefused>(OnBombDefused);
+        osbase.RegisterEventHandler<EventBombExploded>(OnBombExploded);
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
-    }
-
-    private void OnQuickDefuseCommand(CCSPlayerController? player, CommandInfo command) {
-        if (player == null || !player.IsValid) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] css_quickdefuse must be run by a player.");
-            return;
-        }
-
-        StartDebugSession(player);
-    }
-
-    private void OnQuickDefuseClearCommand(CCSPlayerController? player, CommandInfo command) {
-        if (player == null || !player.IsValid) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] css_quickdefuse_clear must be run by a player.");
-            return;
-        }
-
-        EndSession(player);
-        player.PrintToChat("[OSBase] QuickDefuse debug cleared.");
     }
 
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
@@ -89,9 +69,41 @@ public class QuickDefuse : IModule {
         return HookResult.Continue;
     }
 
+    private void OnMapEnd() {
+        ClearAllSessions();
+    }
+
+    private HookResult OnBombBeginDefuse(EventBombBegindefuse eventInfo, GameEventInfo gameEventInfo) {
+        CCSPlayerController? player = eventInfo.Userid;
+        if (player == null || !player.IsValid || !player.PawnIsAlive) {
+            return HookResult.Continue;
+        }
+
+        StartSession(player, eventInfo.Haskit);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnBombAbortDefuse(EventBombAbortdefuse eventInfo, GameEventInfo gameEventInfo) {
+        CCSPlayerController? player = eventInfo.Userid;
+        if (player != null && player.IsValid) {
+            EndSession(player);
+        }
+
+        return HookResult.Continue;
+    }
+
+    private HookResult OnBombDefused(EventBombDefused eventInfo, GameEventInfo gameEventInfo) {
+        ClearAllSessions();
+        return HookResult.Continue;
+    }
+
+    private HookResult OnBombExploded(EventBombExploded eventInfo, GameEventInfo gameEventInfo) {
+        ClearAllSessions();
+        return HookResult.Continue;
+    }
+
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
-
         if (player != null && player.IsValid) {
             EndSession(player);
         }
@@ -101,7 +113,6 @@ public class QuickDefuse : IModule {
 
     private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
-
         if (player != null) {
             activeSessions.Remove(player.Handle);
         }
@@ -114,18 +125,22 @@ public class QuickDefuse : IModule {
             return;
         }
 
-        renderTickCounter++;
-        if (renderTickCounter < 8) {
-            return;
-        }
-
-        renderTickCounter = 0;
-
-        foreach (ActiveDebugSession session in activeSessions.Values.ToList()) {
+        foreach (ActiveDefuseSession session in activeSessions.Values.ToList()) {
             CCSPlayerController player = session.Player;
 
-            if (!player.IsValid) {
-                activeSessions.Remove(player.Handle);
+            if (!player.IsValid || !player.PawnIsAlive) {
+                EndSession(player);
+                continue;
+            }
+
+            if (Server.CurrentTime >= session.ExpiresAt) {
+                EndSession(player);
+                continue;
+            }
+
+            CPlantedC4? bomb = FindPlantedBomb();
+            if (bomb == null || bomb.HasExploded || bomb.BombDefused || !bomb.BombTicking || !bomb.BeingDefused || bomb.CannotBeDefused) {
+                EndSession(player);
                 continue;
             }
 
@@ -134,11 +149,11 @@ public class QuickDefuse : IModule {
     }
 
     private void OnPlayerButtonsChanged(CCSPlayerController player, PlayerButtons pressed, PlayerButtons released) {
-        if (player == null || !player.IsValid) {
+        if (!player.IsValid || !player.PawnIsAlive) {
             return;
         }
 
-        if (!activeSessions.TryGetValue(player.Handle, out ActiveDebugSession? session)) {
+        if (!activeSessions.TryGetValue(player.Handle, out ActiveDefuseSession? session)) {
             return;
         }
 
@@ -152,55 +167,105 @@ public class QuickDefuse : IModule {
         }
 
         session.SelectionLocked = true;
-        HandleSelection(player, selectedDirection.Value, session.CorrectDirection);
+        HandleSelection(player, selectedDirection.Value, session.CorrectDirection, session.HasDefuseKit);
     }
 
-    private void StartDebugSession(CCSPlayerController player) {
-        PlayerButtons correctDirection = GetRandomDirection();
-
-        activeSessions[player.Handle] = new ActiveDebugSession {
+    private void StartSession(CCSPlayerController player, bool hasDefuseKit) {
+        activeSessions[player.Handle] = new ActiveDefuseSession {
             Player = player,
-            CorrectDirection = correctDirection,
+            HasDefuseKit = hasDefuseKit,
+            CorrectDirection = GetRandomDirection(),
+            ExpiresAt = Server.CurrentTime + SessionTimeoutSeconds,
             SelectionLocked = false
         };
 
-        player.PrintToChat("[OSBase] QuickDefuse debug started.");
-        player.PrintToChat("[OSBase] Use your forward / left / back / right movement binds to choose.");
-        player.PrintToChat($"[OSBase] DEBUG correct cable is: {GetColorForDirection(correctDirection)}");
+        if (IsDebugEnabled()) {
+            ActiveDefuseSession session = activeSessions[player.Handle];
+            player.PrintToChat($"[OSBase] DEBUG correct cable: {GetColorNameText(session.CorrectDirection)}");
+        }
     }
 
-    private void HandleSelection(CCSPlayerController player, PlayerButtons selectedDirection, PlayerButtons correctDirection) {
-        string selectedColor = GetColorForDirection(selectedDirection);
-        string correctColor = GetColorForDirection(correctDirection);
-        string selectedDirectionName = GetDirectionName(selectedDirection);
-        string correctDirectionName = GetDirectionName(correctDirection);
+    private void HandleSelection(CCSPlayerController player, PlayerButtons selectedDirection, PlayerButtons correctDirection, bool hasDefuseKit) {
+        bool correctCable = selectedDirection == correctDirection;
 
+        PrintCableAttempt(player, selectedDirection, hasDefuseKit);
         EndSession(player);
 
-        if (selectedDirection == correctDirection) {
-            player.PrintToChat($"[OSBase] Correct! You selected {selectedColor} using {selectedDirectionName}.");
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName} selected correct cable {selectedColor} using {selectedDirectionName}.");
+        if (!correctCable) {
+            PrintIncorrectResult(player, selectedDirection, correctDirection);
+            ForceBombExplode();
             return;
         }
 
-        player.PrintToChat($"[OSBase] Wrong! You selected {selectedColor} using {selectedDirectionName}.");
-        player.PrintToChat($"[OSBase] Correct cable was {correctColor} using {correctDirectionName}.");
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName} selected wrong cable {selectedColor} using {selectedDirectionName}. Correct was {correctColor} using {correctDirectionName}.");
+        if (hasDefuseKit) {
+            PrintCorrectResult(player, selectedDirection);
+            ForceInstantDefuse();
+            return;
+        }
+
+        bool noKitSuccess = random.Next(2) == 0;
+        if (!noKitSuccess) {
+            PrintNoKitFailResult(player, selectedDirection);
+            ForceBombExplode();
+            return;
+        }
+
+        PrintCorrectResult(player, selectedDirection);
+        ForceInstantDefuse();
+    }
+
+    private void ForceInstantDefuse() {
+        Server.NextFrame(() => {
+            CPlantedC4? bomb = FindPlantedBomb();
+            if (bomb == null || bomb.CannotBeDefused || bomb.HasExploded || bomb.BombDefused) {
+                return;
+            }
+
+            bomb.DefuseCountDown = 0.0f;
+        });
+    }
+
+    private void ForceBombExplode() {
+        Server.NextFrame(() => {
+            CPlantedC4? bomb = FindPlantedBomb();
+            if (bomb == null || bomb.HasExploded || bomb.BombDefused) {
+                return;
+            }
+
+            bomb.C4Blow = 1.0f;
+        });
     }
 
     private void EndSession(CCSPlayerController player) {
         activeSessions.Remove(player.Handle);
-        player.PrintToCenterHtml(" ");
+        if (player.IsValid) {
+            player.PrintToCenterHtml(" ");
+        }
     }
 
     private void ClearAllSessions() {
-        foreach (ActiveDebugSession session in activeSessions.Values.ToList()) {
-            if (session.Player != null && session.Player.IsValid) {
+        foreach (ActiveDefuseSession session in activeSessions.Values.ToList()) {
+            if (session.Player.IsValid) {
                 session.Player.PrintToCenterHtml(" ");
             }
         }
 
         activeSessions.Clear();
+    }
+
+    private bool IsDebugEnabled() {
+        return config?.GetGlobalConfigValue($"{ModuleName}_debug", "0") == "1";
+    }
+
+    private PlayerButtons GetRandomDirection() {
+        PlayerButtons[] directions = {
+            PlayerButtons.Forward,
+            PlayerButtons.Moveleft,
+            PlayerButtons.Back,
+            PlayerButtons.Moveright
+        };
+
+        return directions[random.Next(directions.Length)];
     }
 
     private static PlayerButtons? GetSelectedDirection(PlayerButtons pressed) {
@@ -223,52 +288,13 @@ public class QuickDefuse : IModule {
         return null;
     }
 
-    private PlayerButtons GetRandomDirection() {
-        PlayerButtons[] directions = {
-            PlayerButtons.Forward,
-            PlayerButtons.Moveleft,
-            PlayerButtons.Back,
-            PlayerButtons.Moveright
-        };
-
-        return directions[random.Next(directions.Length)];
-    }
-
-    private static string GetColorForDirection(PlayerButtons direction) {
-        if (direction == PlayerButtons.Forward) {
-            return ForwardColor;
-        }
-
-        if (direction == PlayerButtons.Moveleft) {
-            return LeftColor;
-        }
-
-        if (direction == PlayerButtons.Back) {
-            return BackColor;
-        }
-
-        return RightColor;
-    }
-
-    private static string GetDirectionName(PlayerButtons direction) {
-        if (direction == PlayerButtons.Forward) {
-            return "Forward";
-        }
-
-        if (direction == PlayerButtons.Moveleft) {
-            return "Left";
-        }
-
-        if (direction == PlayerButtons.Back) {
-            return "Back";
-        }
-
-        return "Right";
+    private static CPlantedC4? FindPlantedBomb() {
+        return Utilities.FindAllEntitiesByDesignerName<CPlantedC4>("planted_c4").FirstOrDefault();
     }
 
     private static string BuildMenuHtml() {
         return string.Join("<br>", new[] {
-            "<b>Quick Defuse Debug</b>",
+            "<b>Quick Defuse</b>",
             "",
             "W = <font color='red'>─── Red ─────</font>",
             "A = <font color='deepskyblue'>─── Blue ─────</font>",
@@ -278,9 +304,58 @@ public class QuickDefuse : IModule {
             "<font color='grey'>Uses your movement binds</font>"
         });
     }
-    private class ActiveDebugSession {
+
+    private static string ColorWord(string text, char color) {
+        return $"{color}{text}{ChatColors.Default}";
+    }
+
+    private static string GetColorNameText(PlayerButtons direction) {
+        if (direction == PlayerButtons.Forward) {
+            return ColorWord("Red", ChatColors.Red);
+        }
+
+        if (direction == PlayerButtons.Moveleft) {
+            return ColorWord("Blue", ChatColors.Blue);
+        }
+
+        if (direction == PlayerButtons.Back) {
+            return ColorWord("Yellow", ChatColors.Yellow);
+        }
+
+        return ColorWord("Green", ChatColors.Lime);
+    }
+
+    private static string GetOddsText(bool hasDefuseKit) {
+        return hasDefuseKit
+            ? $"{ChatColors.Green}1/4 (25%){ChatColors.Default}"
+            : $"{ChatColors.Red}1/8 (12.5%){ChatColors.Default}";
+    }
+
+    private void PrintCableAttempt(CCSPlayerController player, PlayerButtons selectedDirection, bool hasDefuseKit) {
+        player.PrintToChat($"[OSBase] Cut: {GetColorNameText(selectedDirection)} | Odds: {GetOddsText(hasDefuseKit)}");
+    }
+
+    private void PrintCorrectResult(CCSPlayerController player, PlayerButtons selectedDirection) {
+        player.PrintToChat($"[OSBase] Result: {ChatColors.Green}Correct{ChatColors.Default} | Cable: {GetColorNameText(selectedDirection)}");
+    }
+
+    private void PrintIncorrectResult(CCSPlayerController player, PlayerButtons selectedDirection, PlayerButtons correctDirection) {
+        player.PrintToChat(
+            $"[OSBase] Result: {ChatColors.Red}Incorrect{ChatColors.Default} | Cut: {GetColorNameText(selectedDirection)} | Correct: {GetColorNameText(correctDirection)}"
+        );
+    }
+
+    private void PrintNoKitFailResult(CCSPlayerController player, PlayerButtons selectedDirection) {
+        player.PrintToChat(
+            $"[OSBase] Result: {ChatColors.Red}Incorrect{ChatColors.Default} | Cable: {GetColorNameText(selectedDirection)} | Correct cable, but without a defuse kit the bomb exploded anyway."
+        );
+    }
+
+    private class ActiveDefuseSession {
         public CCSPlayerController Player { get; set; } = null!;
         public PlayerButtons CorrectDirection { get; set; }
+        public bool HasDefuseKit { get; set; }
         public bool SelectionLocked { get; set; }
+        public float ExpiresAt { get; set; }
     }
 }
