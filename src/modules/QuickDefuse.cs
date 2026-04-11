@@ -1,8 +1,9 @@
 using System;
-using System.Collections.Generic;
+using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Events;
+using CounterStrikeSharp.API.Modules.Menu;
 
 namespace OSBase.Modules;
 
@@ -11,7 +12,6 @@ public class QuickDefuse : IModule {
 
     private OSBase? osbase;
     private Config? config;
-    private readonly HashSet<IntPtr> enabledPlayers = new();
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -44,70 +44,84 @@ public class QuickDefuse : IModule {
             return;
         }
 
-        osbase.AddCommand("css_quickdefuse", "Toggle QuickDefuse slot test mode", OnToggleCommand);
-
-        osbase.AddCommandListener("slot1", OnSlot1);
-        osbase.AddCommandListener("slot2", OnSlot2);
-        osbase.AddCommandListener("slot3", OnSlot3);
-        osbase.AddCommandListener("slot4", OnSlot4);
-
+        osbase.AddCommand("css_quickdefuse", "Open QuickDefuse menu test", OnQuickDefuseCommand);
+        osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
+        osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
     }
 
-    private void OnToggleCommand(CCSPlayerController? player, CommandInfo command) {
+    private void OnQuickDefuseCommand(CCSPlayerController? player, CommandInfo command) {
         if (player == null || !player.IsValid) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] css_quickdefuse must be run by a player.");
             return;
         }
 
-        if (enabledPlayers.Contains(player.Handle)) {
-            enabledPlayers.Remove(player.Handle);
-            player.PrintToChat("[OSBase] QuickDefuse slot test disabled.");
-            return;
+        OpenCableMenu(player);
+    }
+
+    private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+        foreach (CCSPlayerController player in Utilities.GetPlayers()) {
+            if (!player.IsValid) {
+                continue;
+            }
+
+            ForceCloseMenu(player);
         }
 
-        enabledPlayers.Add(player.Handle);
-        player.PrintToChat("[OSBase] QuickDefuse slot test enabled. Press 1/2/3/4.");
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+        CCSPlayerController? player = eventInfo.Userid;
+
+        if (player != null && player.IsValid) {
+            ForceCloseMenu(player);
+        }
+
+        return HookResult.Continue;
     }
 
     private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
 
-        if (player != null) {
-            enabledPlayers.Remove(player.Handle);
+        if (player != null && player.IsValid) {
+            ForceCloseMenu(player);
         }
 
         return HookResult.Continue;
     }
 
-    private HookResult OnSlot1(CCSPlayerController? player, CommandInfo command) {
-        return HandleSlot(player, 1);
-    }
-
-    private HookResult OnSlot2(CCSPlayerController? player, CommandInfo command) {
-        return HandleSlot(player, 2);
-    }
-
-    private HookResult OnSlot3(CCSPlayerController? player, CommandInfo command) {
-        return HandleSlot(player, 3);
-    }
-
-    private HookResult OnSlot4(CCSPlayerController? player, CommandInfo command) {
-        return HandleSlot(player, 4);
-    }
-
-    private HookResult HandleSlot(CCSPlayerController? player, int slot) {
-        if (player == null || !player.IsValid) {
-            return HookResult.Continue;
+    private void OpenCableMenu(CCSPlayerController player) {
+        if (osbase == null) {
+            return;
         }
 
-        if (!enabledPlayers.Contains(player.Handle)) {
-            return HookResult.Continue;
-        }
+        ForceCloseMenu(player);
 
-        player.PrintToChat($"[OSBase] slot{slot} detected.");
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName} used slot{slot}.");
+        CenterHtmlMenu menu = new CenterHtmlMenu("Quick Defuse - Cut a cable", osbase) {
+            ExitButton = false,
+            PostSelectAction = PostSelectAction.Close
+        };
 
-        return HookResult.Continue;
+        menu.AddMenuOption("Red", (p, option) => OnCableSelected(p, "Red"));
+        menu.AddMenuOption("Blue", (p, option) => OnCableSelected(p, "Blue"));
+        menu.AddMenuOption("Yellow", (p, option) => OnCableSelected(p, "Yellow"));
+        menu.AddMenuOption("Green", (p, option) => OnCableSelected(p, "Green"));
+
+        menu.Open(player);
+    }
+
+    private void OnCableSelected(CCSPlayerController player, string cableColor) {
+        player.PrintToChat($"[OSBase] You selected cable: {cableColor}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName} selected cable: {cableColor}");
+
+        ForceCloseMenu(player);
+    }
+
+    private static void ForceCloseMenu(CCSPlayerController player) {
+        IMenuInstance? activeMenu = MenuManager.GetActiveMenu(player);
+        activeMenu?.Close();
+
+        player.PrintToCenterHtml(" ");
     }
 }
