@@ -1,11 +1,7 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.Events;
-using CoreListeners = CounterStrikeSharp.API.Core.Listeners;
+using CounterStrikeSharp.API.Modules.Menu;
 
 namespace OSBase.Modules;
 
@@ -14,7 +10,6 @@ public class QuickDefuse : IModule {
 
     private OSBase? osbase;
     private Config? config;
-    private readonly HashSet<IntPtr> enabledPlayers = new();
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -47,77 +42,38 @@ public class QuickDefuse : IModule {
             return;
         }
 
-        osbase.RegisterListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
-        osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
-        osbase.AddCommand("css_quickdefuse", "Toggle QuickDefuse input test mode", OnToggleCommand);
+        osbase.AddCommand("css_quickdefuse", "Open QuickDefuse menu test", OnQuickDefuseCommand);
     }
 
-    private void OnToggleCommand(CCSPlayerController? player, CommandInfo command) {
+    private void OnQuickDefuseCommand(CCSPlayerController? player, CommandInfo command) {
         if (player == null || !player.IsValid) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] css_quickdefuse must be run by a player.");
             return;
         }
 
-        if (enabledPlayers.Contains(player.Handle)) {
-            enabledPlayers.Remove(player.Handle);
-            player.PrintToChat("[OSBase] QuickDefuse test disabled.");
-            return;
-        }
-
-        enabledPlayers.Add(player.Handle);
-        player.PrintToChat("[OSBase] QuickDefuse test enabled. Press 1/2/3/4 and watch chat.");
+        OpenCableMenu(player);
     }
 
-    private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
-        CCSPlayerController? player = eventInfo.Userid;
-
-        if (player != null) {
-            enabledPlayers.Remove(player.Handle);
+    private void OpenCableMenu(CCSPlayerController player) {
+        if (osbase == null) {
+            return;
         }
 
-        return HookResult.Continue;
+        CenterHtmlMenu menu = new CenterHtmlMenu("Quick Defuse - Cut a cable", osbase) {
+            ExitButton = false,
+            PostSelectAction = PostSelectAction.Close
+        };
+
+        menu.AddMenuOption("Red", (p, option) => OnCableSelected(p, "Red"));
+        menu.AddMenuOption("Blue", (p, option) => OnCableSelected(p, "Blue"));
+        menu.AddMenuOption("Yellow", (p, option) => OnCableSelected(p, "Yellow"));
+        menu.AddMenuOption("Green", (p, option) => OnCableSelected(p, "Green"));
+
+        menu.Open(player);
     }
 
-    private void OnPlayerButtonsChanged(CCSPlayerController player, PlayerButtons pressed, PlayerButtons released) {
-        if (player == null || !player.IsValid) {
-            return;
-        }
-
-        if (!enabledPlayers.Contains(player.Handle)) {
-            return;
-        }
-
-        ulong pressedValue = Convert.ToUInt64(pressed);
-        ulong releasedValue = Convert.ToUInt64(released);
-
-        if (pressedValue == 0 && releasedValue == 0) {
-            return;
-        }
-
-        string pressedText = ButtonsToString(pressed);
-        string releasedText = ButtonsToString(released);
-
-        player.PrintToChat(
-            $"[OSBase] pressed: {pressedText} ({pressedValue}) | released: {releasedText} ({releasedValue})"
-        );
-    }
-
-    private static string ButtonsToString(PlayerButtons buttons) {
-        ulong value = Convert.ToUInt64(buttons);
-
-        if (value == 0) {
-            return "none";
-        }
-
-        List<string> names = Enum.GetValues<PlayerButtons>()
-            .Where(button => Convert.ToUInt64(button) != 0 && buttons.HasFlag(button))
-            .Select(button => button.ToString())
-            .ToList();
-
-        if (names.Count == 0) {
-            return $"unknown({value})";
-        }
-
-        return string.Join(", ", names);
+    private void OnCableSelected(CCSPlayerController player, string cableColor) {
+        player.PrintToChat($"[OSBase] You selected cable: {cableColor}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName} selected cable: {cableColor}");
     }
 }
