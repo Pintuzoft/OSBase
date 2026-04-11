@@ -270,16 +270,15 @@ public class QuickDefuse : IModule {
         return string.Join("<br>", new[] {
             "<b>Quick Defuse Debug</b>",
             "",
-            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;W = Red",
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;W = <font color='red'>Red</font>",
             "",
-            "A = Blue&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;D = Green",
+            "A = <font color='deepskyblue'>Blue</font>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;D = <font color='lime'>Green</font>",
             "",
-            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;S = Yellow",
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;S = <font color='yellow'>Yellow</font>",
             "",
             "<font color='grey'>Uses your forward / left / back / right binds</font>"
         });
     }
-
     private class ActiveDebugSession {
         public CCSPlayerController Player { get; set; } = null!;
         public PlayerButtons CorrectDirection { get; set; }
