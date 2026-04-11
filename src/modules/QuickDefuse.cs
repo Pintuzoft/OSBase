@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Events;
-using CounterStrikeSharp.API.Modules.Menu;
+using CoreListeners = CounterStrikeSharp.API.Core.Listeners;
 
 namespace OSBase.Modules;
 
@@ -12,6 +14,14 @@ public class QuickDefuse : IModule {
 
     private OSBase? osbase;
     private Config? config;
+    private readonly Random random = new();
+    private readonly Dictionary<IntPtr, ActiveDebugSession> activeSessions = new();
+    private int renderTickCounter = 0;
+
+    private const string ForwardColor = "Red";
+    private const string LeftColor = "Blue";
+    private const string BackColor = "Yellow";
+    private const string RightColor = "Green";
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -44,7 +54,12 @@ public class QuickDefuse : IModule {
             return;
         }
 
-        osbase.AddCommand("css_quickdefuse", "Open QuickDefuse menu test", OnQuickDefuseCommand);
+        osbase.AddCommand("css_quickdefuse", "Start QuickDefuse debug test", OnQuickDefuseCommand);
+        osbase.AddCommand("css_quickdefuse_clear", "Clear QuickDefuse debug test", OnQuickDefuseClearCommand);
+
+        osbase.RegisterListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
+        osbase.RegisterListener<CoreListeners.OnTick>(OnTick);
+
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
@@ -56,18 +71,21 @@ public class QuickDefuse : IModule {
             return;
         }
 
-        OpenCableMenu(player);
+        StartDebugSession(player);
+    }
+
+    private void OnQuickDefuseClearCommand(CCSPlayerController? player, CommandInfo command) {
+        if (player == null || !player.IsValid) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] css_quickdefuse_clear must be run by a player.");
+            return;
+        }
+
+        EndSession(player);
+        player.PrintToChat("[OSBase] QuickDefuse debug cleared.");
     }
 
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
-        foreach (CCSPlayerController player in Utilities.GetPlayers()) {
-            if (!player.IsValid) {
-                continue;
-            }
-
-            ForceCloseMenu(player);
-        }
-
+        ClearAllSessions();
         return HookResult.Continue;
     }
 
@@ -75,7 +93,7 @@ public class QuickDefuse : IModule {
         CCSPlayerController? player = eventInfo.Userid;
 
         if (player != null && player.IsValid) {
-            ForceCloseMenu(player);
+            EndSession(player);
         }
 
         return HookResult.Continue;
@@ -84,44 +102,187 @@ public class QuickDefuse : IModule {
     private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
 
-        if (player != null && player.IsValid) {
-            ForceCloseMenu(player);
+        if (player != null) {
+            activeSessions.Remove(player.Handle);
         }
 
         return HookResult.Continue;
     }
 
-    private void OpenCableMenu(CCSPlayerController player) {
-        if (osbase == null) {
+    private void OnTick() {
+        if (activeSessions.Count == 0) {
             return;
         }
 
-        ForceCloseMenu(player);
+        renderTickCounter++;
+        if (renderTickCounter < 8) {
+            return;
+        }
 
-        CenterHtmlMenu menu = new CenterHtmlMenu("Quick Defuse - Cut a cable", osbase) {
-            ExitButton = false,
-            PostSelectAction = PostSelectAction.Close
+        renderTickCounter = 0;
+
+        foreach (ActiveDebugSession session in activeSessions.Values.ToList()) {
+            CCSPlayerController player = session.Player;
+
+            if (!player.IsValid) {
+                activeSessions.Remove(player.Handle);
+                continue;
+            }
+
+            player.PrintToCenterHtml(BuildMenuHtml());
+        }
+    }
+
+    private void OnPlayerButtonsChanged(CCSPlayerController player, PlayerButtons pressed, PlayerButtons released) {
+        if (player == null || !player.IsValid) {
+            return;
+        }
+
+        if (!activeSessions.TryGetValue(player.Handle, out ActiveDebugSession? session)) {
+            return;
+        }
+
+        if (session.SelectionLocked) {
+            return;
+        }
+
+        PlayerButtons? selectedDirection = GetSelectedDirection(pressed);
+        if (selectedDirection == null) {
+            return;
+        }
+
+        session.SelectionLocked = true;
+        HandleSelection(player, selectedDirection.Value, session.CorrectDirection);
+    }
+
+    private void StartDebugSession(CCSPlayerController player) {
+        PlayerButtons correctDirection = GetRandomDirection();
+
+        activeSessions[player.Handle] = new ActiveDebugSession {
+            Player = player,
+            CorrectDirection = correctDirection,
+            SelectionLocked = false
         };
 
-        menu.AddMenuOption("Red", (p, option) => OnCableSelected(p, "Red"));
-        menu.AddMenuOption("Blue", (p, option) => OnCableSelected(p, "Blue"));
-        menu.AddMenuOption("Yellow", (p, option) => OnCableSelected(p, "Yellow"));
-        menu.AddMenuOption("Green", (p, option) => OnCableSelected(p, "Green"));
-
-        menu.Open(player);
+        player.PrintToChat("[OSBase] QuickDefuse debug started.");
+        player.PrintToChat("[OSBase] Use your forward / left / back / right movement binds to choose.");
+        player.PrintToChat($"[OSBase] DEBUG correct cable is: {GetColorForDirection(correctDirection)}");
     }
 
-    private void OnCableSelected(CCSPlayerController player, string cableColor) {
-        player.PrintToChat($"[OSBase] You selected cable: {cableColor}");
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName} selected cable: {cableColor}");
+    private void HandleSelection(CCSPlayerController player, PlayerButtons selectedDirection, PlayerButtons correctDirection) {
+        string selectedColor = GetColorForDirection(selectedDirection);
+        string correctColor = GetColorForDirection(correctDirection);
+        string selectedDirectionName = GetDirectionName(selectedDirection);
+        string correctDirectionName = GetDirectionName(correctDirection);
 
-        ForceCloseMenu(player);
+        EndSession(player);
+
+        if (selectedDirection == correctDirection) {
+            player.PrintToChat($"[OSBase] Correct! You selected {selectedColor} using {selectedDirectionName}.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName} selected correct cable {selectedColor} using {selectedDirectionName}.");
+            return;
+        }
+
+        player.PrintToChat($"[OSBase] Wrong! You selected {selectedColor} using {selectedDirectionName}.");
+        player.PrintToChat($"[OSBase] Correct cable was {correctColor} using {correctDirectionName}.");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {player.PlayerName} selected wrong cable {selectedColor} using {selectedDirectionName}. Correct was {correctColor} using {correctDirectionName}.");
     }
 
-    private static void ForceCloseMenu(CCSPlayerController player) {
-        IMenuInstance? activeMenu = MenuManager.GetActiveMenu(player);
-        activeMenu?.Close();
-
+    private void EndSession(CCSPlayerController player) {
+        activeSessions.Remove(player.Handle);
         player.PrintToCenterHtml(" ");
+    }
+
+    private void ClearAllSessions() {
+        foreach (ActiveDebugSession session in activeSessions.Values.ToList()) {
+            if (session.Player != null && session.Player.IsValid) {
+                session.Player.PrintToCenterHtml(" ");
+            }
+        }
+
+        activeSessions.Clear();
+    }
+
+    private static PlayerButtons? GetSelectedDirection(PlayerButtons pressed) {
+        if ((pressed & PlayerButtons.Forward) != 0) {
+            return PlayerButtons.Forward;
+        }
+
+        if ((pressed & PlayerButtons.Moveleft) != 0) {
+            return PlayerButtons.Moveleft;
+        }
+
+        if ((pressed & PlayerButtons.Back) != 0) {
+            return PlayerButtons.Back;
+        }
+
+        if ((pressed & PlayerButtons.Moveright) != 0) {
+            return PlayerButtons.Moveright;
+        }
+
+        return null;
+    }
+
+    private PlayerButtons GetRandomDirection() {
+        PlayerButtons[] directions = {
+            PlayerButtons.Forward,
+            PlayerButtons.Moveleft,
+            PlayerButtons.Back,
+            PlayerButtons.Moveright
+        };
+
+        return directions[random.Next(directions.Length)];
+    }
+
+    private static string GetColorForDirection(PlayerButtons direction) {
+        if (direction == PlayerButtons.Forward) {
+            return ForwardColor;
+        }
+
+        if (direction == PlayerButtons.Moveleft) {
+            return LeftColor;
+        }
+
+        if (direction == PlayerButtons.Back) {
+            return BackColor;
+        }
+
+        return RightColor;
+    }
+
+    private static string GetDirectionName(PlayerButtons direction) {
+        if (direction == PlayerButtons.Forward) {
+            return "Forward";
+        }
+
+        if (direction == PlayerButtons.Moveleft) {
+            return "Left";
+        }
+
+        if (direction == PlayerButtons.Back) {
+            return "Back";
+        }
+
+        return "Right";
+    }
+
+    private static string BuildMenuHtml() {
+        return string.Join("<br>", new[] {
+            "<b>Quick Defuse Debug</b>",
+            "",
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;W = Red",
+            "",
+            "A = Blue&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;D = Green",
+            "",
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;S = Yellow",
+            "",
+            "<font color='grey'>Uses your forward / left / back / right binds</font>"
+        });
+    }
+
+    private class ActiveDebugSession {
+        public CCSPlayerController Player { get; set; } = null!;
+        public PlayerButtons CorrectDirection { get; set; }
+        public bool SelectionLocked { get; set; }
     }
 }
