@@ -270,10 +270,10 @@ public class QuickDefuse : IModule {
         return string.Join("<br>", new[] {
             "<b>Quick Defuse Debug</b>",
             "",
-            "W = <font color='red'>────&nbsp;Red&nbsp;&nbsp;&nbsp;&nbsp;────</font>",
-            "A = <font color='deepskyblue'>───&nbsp;Blue&nbsp;&nbsp;&nbsp;───</font>",
-            "S = <font color='yellow'>──&nbsp;Yellow&nbsp;──</font>",
-            "D = <font color='lime'>──&nbsp;Green&nbsp;&nbsp;──</font>",
+            "W = <font color='red'>──── Red ─────</font>",
+            "A = <font color='deepskyblue'>──── Blue ────</font>",
+            "S = <font color='yellow'>─── Yellow ───</font>",
+            "D = <font color='lime'>─── Green ───</font>",
             "",
             "<font color='grey'>Uses your movement binds</font>"
         });
