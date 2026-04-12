@@ -26,6 +26,9 @@ namespace OSBase.Modules {
         private const string WEAPON_SCAR20 = "weapon_scar20";
         private const string WEAPON_G3SG1 = "weapon_g3sg1";
 
+        private const int PRICE_AWP = 4750;
+        private const int PRICE_AUTOSNIPER = 5000;
+
         private bool ignoreWarmup = true;
 
         private readonly List<(int MinPlayers, int Limit)> awpRules = new();
@@ -56,7 +59,7 @@ namespace OSBase.Modules {
 
             try {
                 osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
-                osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Pre);
+                osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Post);
                 osbase.RegisterEventHandler<EventItemPickup>(OnItemPickup, HookMode.Post);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded.");
             } catch (Exception ex) {
@@ -145,7 +148,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        [GameEventHandler(HookMode.Pre)]
+        [GameEventHandler(HookMode.Post)]
         private HookResult OnItemPurchase(EventItemPurchase ev, GameEventInfo info) {
             if (gameStats == null) {
                 return HookResult.Continue;
@@ -166,14 +169,15 @@ namespace OSBase.Modules {
             }
 
             if (!IsPurchaseAllowed(player, weaponName)) {
+                int refund = GetWeaponPrice(weaponName);
+                RefundPlayer(player, refund);
+
                 Console.WriteLine(
-                    $"[DEBUG] OSBase[{ModuleName}] Purchase denied pre-hook: " +
-                    $"player={player.PlayerName} uid={player.UserId.Value} weapon={weaponName} " +
+                    $"[DEBUG] OSBase[{ModuleName}] Purchase refunded: " +
+                    $"player={player.PlayerName} uid={player.UserId.Value} weapon={weaponName} refund={refund} " +
                     $"effective_total={currentRoundEffectiveTotal} awp_limit={currentRoundAwpLimit} " +
                     $"autosniper_limit={currentRoundAutosniperLimit}"
                 );
-
-                return HookResult.Handled;
             }
 
             return HookResult.Continue;
@@ -399,6 +403,28 @@ namespace OSBase.Modules {
             }
 
             return false;
+        }
+
+        private int GetWeaponPrice(string weaponName) {
+            return weaponName switch {
+                WEAPON_AWP => PRICE_AWP,
+                WEAPON_SCAR20 => PRICE_AUTOSNIPER,
+                WEAPON_G3SG1 => PRICE_AUTOSNIPER,
+                _ => 0
+            };
+        }
+
+        private void RefundPlayer(CCSPlayerController player, int amount) {
+            if (amount <= 0 || player == null || !player.IsValid) {
+                return;
+            }
+
+            if (player.InGameMoneyServices == null) {
+                return;
+            }
+
+            player.InGameMoneyServices.Account += amount;
+            Utilities.SetStateChanged(player, "CCSPlayerController", "m_pInGameMoneyServices");
         }
 
         private float GetPrioritySkill(CCSPlayerController player) {
