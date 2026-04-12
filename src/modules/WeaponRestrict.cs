@@ -38,6 +38,8 @@ namespace OSBase.Modules {
         private int currentRoundAwpLimit = 0;
         private int currentRoundAutosniperLimit = 0;
 
+        private readonly Dictionary<int, (string WeaponName, DateTime UntilUtc)> recentNotifications = new();
+
         public void Load(OSBase inOsbase, Config inConfig) {
             osbase = inOsbase;
             config = inConfig;
@@ -171,6 +173,7 @@ namespace OSBase.Modules {
             if (!IsPurchaseAllowed(player, weaponName)) {
                 int refund = GetWeaponPrice(weaponName);
                 RefundPlayer(player, refund);
+                NotifyRestrictedWeapon(player, weaponName, true);
 
                 Console.WriteLine(
                     $"[DEBUG] OSBase[{ModuleName}] Purchase refunded: " +
@@ -205,6 +208,10 @@ namespace OSBase.Modules {
 
             if (!IsPickupAllowed(player, weaponName)) {
                 bool removed = RemoveRestrictedWeapon(player, weaponName);
+
+                if (removed) {
+                    NotifyRestrictedWeapon(player, weaponName, false);
+                }
 
                 Console.WriteLine(
                     $"[DEBUG] OSBase[{ModuleName}] Pickup blocked: " +
@@ -425,6 +432,39 @@ namespace OSBase.Modules {
 
             player.InGameMoneyServices.Account += amount;
             Utilities.SetStateChanged(player, "CCSPlayerController", "m_pInGameMoneyServices");
+        }
+
+        private void NotifyRestrictedWeapon(CCSPlayerController player, string weaponName, bool refunded) {
+            if (player == null || !player.IsValid || !player.UserId.HasValue) {
+                return;
+            }
+
+            int userId = player.UserId.Value;
+            var now = DateTime.UtcNow;
+
+            if (recentNotifications.TryGetValue(userId, out var recent)) {
+                if (recent.WeaponName == weaponName && recent.UntilUtc > now) {
+                    return;
+                }
+            }
+
+            recentNotifications[userId] = (weaponName, now.AddMilliseconds(1200));
+
+            string pretty = PrettyWeaponName(weaponName);
+            string message = refunded
+                ? $" \x08[WeaponRestrict]\x01 {pretty} is not allowed this round. Money refunded."
+                : $" \x08[WeaponRestrict]\x01 {pretty} is not allowed this round.";
+
+            player.PrintToChat(message);
+        }
+
+        private string PrettyWeaponName(string weaponName) {
+            return weaponName switch {
+                WEAPON_AWP => "AWP",
+                WEAPON_SCAR20 => "SCAR-20",
+                WEAPON_G3SG1 => "G3SG1",
+                _ => weaponName
+            };
         }
 
         private float GetPrioritySkill(CCSPlayerController player) {
