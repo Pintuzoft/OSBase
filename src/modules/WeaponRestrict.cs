@@ -56,7 +56,7 @@ namespace OSBase.Modules {
 
             try {
                 osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
-                osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Post);
+                osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Pre);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded.");
             } catch (Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] registering: {ex.Message}");
@@ -144,7 +144,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        [GameEventHandler(HookMode.Post)]
+        [GameEventHandler(HookMode.Pre)]
         private HookResult OnItemPurchase(EventItemPurchase ev, GameEventInfo info) {
             if (gameStats == null) {
                 return HookResult.Continue;
@@ -155,7 +155,7 @@ namespace OSBase.Modules {
             }
 
             var player = ev.Userid;
-            if (player == null || !player.IsValid || !player.UserId.HasValue || player.IsBot || player.IsHLTV) {
+            if (player == null || !player.IsValid || !player.UserId.HasValue || player.IsHLTV) {
                 return HookResult.Continue;
             }
 
@@ -165,14 +165,14 @@ namespace OSBase.Modules {
             }
 
             if (!IsPurchaseAllowed(player, purchasedWeapon)) {
-                bool removed = RemovePurchasedRestrictedWeapon(player, purchasedWeapon);
-
                 Console.WriteLine(
-                    $"[DEBUG] OSBase[{ModuleName}] Purchase blocked: " +
+                    $"[DEBUG] OSBase[{ModuleName}] Purchase denied pre-hook: " +
                     $"player={player.PlayerName} uid={player.UserId.Value} weapon={purchasedWeapon} " +
                     $"effective_total={currentRoundEffectiveTotal} awp_limit={currentRoundAwpLimit} " +
-                    $"autosniper_limit={currentRoundAutosniperLimit} removed={removed}"
+                    $"autosniper_limit={currentRoundAutosniperLimit}"
                 );
+
+                return HookResult.Handled;
             }
 
             return HookResult.Continue;
@@ -296,29 +296,12 @@ namespace OSBase.Modules {
                 .Count(HasAnyAutosniper);
         }
 
-        private bool RemovePurchasedRestrictedWeapon(CCSPlayerController player, string purchasedWeapon) {
-            if (purchasedWeapon == WEAPON_AWP) {
-                return player.RemoveItemByDesignerName(WEAPON_AWP);
-            }
-
-            if (purchasedWeapon == WEAPON_SCAR20) {
-                return player.RemoveItemByDesignerName(WEAPON_SCAR20);
-            }
-
-            if (purchasedWeapon == WEAPON_G3SG1) {
-                return player.RemoveItemByDesignerName(WEAPON_G3SG1);
-            }
-
-            return false;
-        }
-
         private List<CCSPlayerController> GetEligibleTeamPlayers(int team) {
             return Utilities.GetPlayers()
                 .Where(p =>
                     p != null &&
                     p.IsValid &&
                     p.UserId.HasValue &&
-                    !p.IsBot &&
                     !p.IsHLTV &&
                     p.TeamNum == team)
                 .ToList();
