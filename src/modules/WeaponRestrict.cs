@@ -57,6 +57,7 @@ namespace OSBase.Modules {
             try {
                 osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
                 osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Pre);
+                osbase.RegisterEventHandler<EventItemPickup>(OnItemPickup, HookMode.Post);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded.");
             } catch (Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] registering: {ex.Message}");
@@ -159,20 +160,52 @@ namespace OSBase.Modules {
                 return HookResult.Continue;
             }
 
-            string purchasedWeapon = NormalizePurchasedWeaponName(ev.Weapon);
-            if (!IsRestrictedWeaponName(purchasedWeapon)) {
+            string weaponName = NormalizeWeaponName(ev.Weapon);
+            if (!IsRestrictedWeaponName(weaponName)) {
                 return HookResult.Continue;
             }
 
-            if (!IsPurchaseAllowed(player, purchasedWeapon)) {
+            if (!IsPurchaseAllowed(player, weaponName)) {
                 Console.WriteLine(
                     $"[DEBUG] OSBase[{ModuleName}] Purchase denied pre-hook: " +
-                    $"player={player.PlayerName} uid={player.UserId.Value} weapon={purchasedWeapon} " +
+                    $"player={player.PlayerName} uid={player.UserId.Value} weapon={weaponName} " +
                     $"effective_total={currentRoundEffectiveTotal} awp_limit={currentRoundAwpLimit} " +
                     $"autosniper_limit={currentRoundAutosniperLimit}"
                 );
 
                 return HookResult.Handled;
+            }
+
+            return HookResult.Continue;
+        }
+
+        [GameEventHandler(HookMode.Post)]
+        private HookResult OnItemPickup(EventItemPickup ev, GameEventInfo info) {
+            if (gameStats == null) {
+                return HookResult.Continue;
+            }
+
+            if (ignoreWarmup && gameStats.IsWarmup) {
+                return HookResult.Continue;
+            }
+
+            var player = ev.Userid;
+            if (player == null || !player.IsValid || !player.UserId.HasValue || player.IsHLTV) {
+                return HookResult.Continue;
+            }
+
+            string weaponName = NormalizeWeaponName(ev.Item);
+            if (!IsRestrictedWeaponName(weaponName)) {
+                return HookResult.Continue;
+            }
+
+            if (!IsPickupAllowed(player, weaponName)) {
+                bool removed = RemoveRestrictedWeapon(player, weaponName);
+
+                Console.WriteLine(
+                    $"[DEBUG] OSBase[{ModuleName}] Pickup blocked: " +
+                    $"player={player.PlayerName} uid={player.UserId.Value} weapon={weaponName} removed={removed}"
+                );
             }
 
             return HookResult.Continue;
@@ -267,16 +300,33 @@ namespace OSBase.Modules {
             }
         }
 
-        private bool IsPurchaseAllowed(CCSPlayerController player, string purchasedWeapon) {
+        private bool IsPurchaseAllowed(CCSPlayerController player, string weaponName) {
             int userId = player.UserId!.Value;
             int team = player.TeamNum;
 
-            if (purchasedWeapon == WEAPON_AWP) {
+            if (weaponName == WEAPON_AWP) {
                 int currentOwners = CountTeamWeaponOwnersExcludingUser(team, userId, WEAPON_AWP);
                 return currentOwners < currentRoundAwpLimit;
             }
 
-            if (IsAutosniperWeaponName(purchasedWeapon)) {
+            if (IsAutosniperWeaponName(weaponName)) {
+                int currentOwners = CountTeamAutosniperOwnersExcludingUser(team, userId);
+                return currentOwners < currentRoundAutosniperLimit;
+            }
+
+            return true;
+        }
+
+        private bool IsPickupAllowed(CCSPlayerController player, string weaponName) {
+            int userId = player.UserId!.Value;
+            int team = player.TeamNum;
+
+            if (weaponName == WEAPON_AWP) {
+                int currentOwners = CountTeamWeaponOwnersExcludingUser(team, userId, WEAPON_AWP);
+                return currentOwners < currentRoundAwpLimit;
+            }
+
+            if (IsAutosniperWeaponName(weaponName)) {
                 int currentOwners = CountTeamAutosniperOwnersExcludingUser(team, userId);
                 return currentOwners < currentRoundAutosniperLimit;
             }
@@ -335,6 +385,22 @@ namespace OSBase.Modules {
             return false;
         }
 
+        private bool RemoveRestrictedWeapon(CCSPlayerController player, string weaponName) {
+            if (weaponName == WEAPON_AWP) {
+                return player.RemoveItemByDesignerName(WEAPON_AWP);
+            }
+
+            if (weaponName == WEAPON_SCAR20) {
+                return player.RemoveItemByDesignerName(WEAPON_SCAR20);
+            }
+
+            if (weaponName == WEAPON_G3SG1) {
+                return player.RemoveItemByDesignerName(WEAPON_G3SG1);
+            }
+
+            return false;
+        }
+
         private float GetPrioritySkill(CCSPlayerController player) {
             return TeamBalancer.Current?.GetEffectiveSkillForPriority(player) ?? 0f;
         }
@@ -375,7 +441,7 @@ namespace OSBase.Modules {
             return weaponName == WEAPON_SCAR20 || weaponName == WEAPON_G3SG1;
         }
 
-        private string NormalizePurchasedWeaponName(string weaponName) {
+        private string NormalizeWeaponName(string weaponName) {
             if (string.IsNullOrWhiteSpace(weaponName)) {
                 return string.Empty;
             }
