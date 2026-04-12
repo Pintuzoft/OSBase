@@ -56,6 +56,7 @@ namespace OSBase.Modules {
 
             try {
                 osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
+                osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Post);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded.");
             } catch (Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] registering: {ex.Message}");
@@ -65,7 +66,6 @@ namespace OSBase.Modules {
         private void LoadConfig() {
             string defaultContent =
                 "// WeaponRestrict config\n" +
-                "// Warmup is ignored by default\n" +
                 "weaponrestrict_ignore_warmup 1\n" +
                 "\n" +
                 "// Format: weaponrestrict_awp_rule <minplayers> <limit_per_team>\n" +
@@ -144,6 +144,40 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
+        [GameEventHandler(HookMode.Post)]
+        private HookResult OnItemPurchase(EventItemPurchase ev, GameEventInfo info) {
+            if (gameStats == null) {
+                return HookResult.Continue;
+            }
+
+            if (ignoreWarmup && gameStats.IsWarmup) {
+                return HookResult.Continue;
+            }
+
+            var player = ev.Userid;
+            if (player == null || !player.IsValid || !player.UserId.HasValue || player.IsBot || player.IsHLTV) {
+                return HookResult.Continue;
+            }
+
+            string purchasedWeapon = NormalizePurchasedWeaponName(ev.Weapon);
+            if (!IsRestrictedWeaponName(purchasedWeapon)) {
+                return HookResult.Continue;
+            }
+
+            if (!IsPurchaseAllowed(player, purchasedWeapon)) {
+                bool removed = RemovePurchasedRestrictedWeapon(player, purchasedWeapon);
+
+                Console.WriteLine(
+                    $"[DEBUG] OSBase[{ModuleName}] Purchase blocked: " +
+                    $"player={player.PlayerName} uid={player.UserId.Value} weapon={purchasedWeapon} " +
+                    $"effective_total={currentRoundEffectiveTotal} awp_limit={currentRoundAwpLimit} " +
+                    $"autosniper_limit={currentRoundAutosniperLimit} removed={removed}"
+                );
+            }
+
+            return HookResult.Continue;
+        }
+
         private void LockRoundLimits() {
             if (gameStats == null) {
                 return;
@@ -187,12 +221,11 @@ namespace OSBase.Modules {
                 return;
             }
 
-            var keep = owners.Take(limit).ToList();
             var strip = owners.Skip(limit).ToList();
 
             Console.WriteLine(
                 $"[DEBUG] OSBase[{ModuleName}] Freeze sweep {TeamName(team)} {designerName}: " +
-                $"owners={owners.Count} limit={limit} keep={keep.Count} strip={strip.Count}"
+                $"owners={owners.Count} limit={limit} strip={strip.Count}"
             );
 
             foreach (var player in strip) {
@@ -216,12 +249,11 @@ namespace OSBase.Modules {
                 return;
             }
 
-            var keep = owners.Take(limit).ToList();
             var strip = owners.Skip(limit).ToList();
 
             Console.WriteLine(
                 $"[DEBUG] OSBase[{ModuleName}] Freeze sweep {TeamName(team)} autosniper: " +
-                $"owners={owners.Count} limit={limit} keep={keep.Count} strip={strip.Count}"
+                $"owners={owners.Count} limit={limit} strip={strip.Count}"
             );
 
             foreach (var player in strip) {
@@ -233,6 +265,51 @@ namespace OSBase.Modules {
                     $"uid={GetPriorityUserId(player)} scar20={removedScar} g3sg1={removedG3}"
                 );
             }
+        }
+
+        private bool IsPurchaseAllowed(CCSPlayerController player, string purchasedWeapon) {
+            int userId = player.UserId!.Value;
+            int team = player.TeamNum;
+
+            if (purchasedWeapon == WEAPON_AWP) {
+                int currentOwners = CountTeamWeaponOwnersExcludingUser(team, userId, WEAPON_AWP);
+                return currentOwners < currentRoundAwpLimit;
+            }
+
+            if (IsAutosniperWeaponName(purchasedWeapon)) {
+                int currentOwners = CountTeamAutosniperOwnersExcludingUser(team, userId);
+                return currentOwners < currentRoundAutosniperLimit;
+            }
+
+            return true;
+        }
+
+        private int CountTeamWeaponOwnersExcludingUser(int team, int excludedUserId, string designerName) {
+            return GetEligibleTeamPlayers(team)
+                .Where(p => p.UserId!.Value != excludedUserId)
+                .Count(p => HasWeapon(p, designerName));
+        }
+
+        private int CountTeamAutosniperOwnersExcludingUser(int team, int excludedUserId) {
+            return GetEligibleTeamPlayers(team)
+                .Where(p => p.UserId!.Value != excludedUserId)
+                .Count(HasAnyAutosniper);
+        }
+
+        private bool RemovePurchasedRestrictedWeapon(CCSPlayerController player, string purchasedWeapon) {
+            if (purchasedWeapon == WEAPON_AWP) {
+                return player.RemoveItemByDesignerName(WEAPON_AWP);
+            }
+
+            if (purchasedWeapon == WEAPON_SCAR20) {
+                return player.RemoveItemByDesignerName(WEAPON_SCAR20);
+            }
+
+            if (purchasedWeapon == WEAPON_G3SG1) {
+                return player.RemoveItemByDesignerName(WEAPON_G3SG1);
+            }
+
+            return false;
         }
 
         private List<CCSPlayerController> GetEligibleTeamPlayers(int team) {
@@ -305,6 +382,27 @@ namespace OSBase.Modules {
             }
 
             return limit;
+        }
+
+        private bool IsRestrictedWeaponName(string weaponName) {
+            return weaponName == WEAPON_AWP || IsAutosniperWeaponName(weaponName);
+        }
+
+        private bool IsAutosniperWeaponName(string weaponName) {
+            return weaponName == WEAPON_SCAR20 || weaponName == WEAPON_G3SG1;
+        }
+
+        private string NormalizePurchasedWeaponName(string weaponName) {
+            if (string.IsNullOrWhiteSpace(weaponName)) {
+                return string.Empty;
+            }
+
+            string normalized = weaponName.Trim().ToLowerInvariant();
+            if (!normalized.StartsWith("weapon_", StringComparison.Ordinal)) {
+                normalized = "weapon_" + normalized;
+            }
+
+            return normalized;
         }
 
         private string FormatRules(List<(int MinPlayers, int Limit)> rules) {
