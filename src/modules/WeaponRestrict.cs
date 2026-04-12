@@ -452,8 +452,8 @@ namespace OSBase.Modules {
 
             string pretty = PrettyWeaponName(weaponName);
             string message = refunded
-                ? $" \x08[WeaponRestrict]\x01 {pretty} is not allowed this round. Money refunded."
-                : $" \x08[WeaponRestrict]\x01 {pretty} is not allowed this round.";
+                ? $" {ChatColors.Red}[WeaponRestrict] {pretty} is not allowed this round. Money refunded.{ChatColors.Default}"
+                : $" {ChatColors.Red}[WeaponRestrict] {pretty} is not allowed this round.{ChatColors.Default}";
 
             player.PrintToChat(message);
         }
