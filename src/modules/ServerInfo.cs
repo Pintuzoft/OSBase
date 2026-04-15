@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
-using CounterStrikeSharp.API.Modules.Utils;
 using MySqlConnector;
+using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
 
 namespace OSBase.Modules;
 
@@ -22,6 +22,8 @@ public class ServerInfo : IModule {
     private string host = string.Empty;
     private string name = string.Empty;
     private string map = string.Empty;
+
+    private Timer? pendingPruneTimer;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -60,8 +62,11 @@ public class ServerInfo : IModule {
     public void Unload() {
         isActive = false;
 
+        pendingPruneTimer?.Kill();
+        pendingPruneTimer = null;
+
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
+            osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
             osbase.DeregisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
             osbase.DeregisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
             osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd);
@@ -93,6 +98,7 @@ public class ServerInfo : IModule {
         }
 
         SaveServerInfo();
+        SchedulePruneUsers(0.2f);
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
     }
@@ -102,7 +108,7 @@ public class ServerInfo : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
+        osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
         osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
         osbase.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
         osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
@@ -181,32 +187,18 @@ public class ServerInfo : IModule {
         return value;
     }
 
-    private HookResult OnPlayerConnect(EventPlayerConnect eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
 
         var player = eventInfo?.Userid;
-        if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) {
+        if (!IsTrackablePlayer(player)) {
             return HookResult.Continue;
         }
 
-        UpsertUserRow(player, teamOverride: 0);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
-        if (!isActive) {
-            return HookResult.Continue;
-        }
-
-        foreach (var player in Utilities.GetPlayers()) {
-            if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) {
-                continue;
-            }
-
-            UpsertUserRow(player);
-        }
+        UpsertUserRow(player!);
+        SchedulePruneUsers();
 
         return HookResult.Continue;
     }
@@ -217,11 +209,14 @@ public class ServerInfo : IModule {
         }
 
         var player = eventInfo?.Userid;
-        if (player == null) {
-            return HookResult.Continue;
+        if (player != null) {
+            string? userKey = BuildUserKey(player);
+            if (!string.IsNullOrWhiteSpace(userKey)) {
+                DeleteUserRow(userKey);
+            }
         }
 
-        DeleteUserRow(player.PlayerName ?? string.Empty);
+        SchedulePruneUsers();
         return HookResult.Continue;
     }
 
@@ -231,12 +226,30 @@ public class ServerInfo : IModule {
         }
 
         var player = eventInfo?.Userid;
-        if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) {
+        if (!IsTrackablePlayer(player)) {
             return HookResult.Continue;
         }
 
-        int team = eventInfo?.Team ?? 0;
-        UpsertUserRow(player, teamOverride: team);
+        int team = eventInfo?.Team ?? player!.TeamNum;
+        UpsertUserRow(player!, teamOverride: team);
+
+        return HookResult.Continue;
+    }
+
+    private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        foreach (var player in Utilities.GetPlayers()) {
+            if (!IsTrackablePlayer(player)) {
+                continue;
+            }
+
+            UpsertUserRow(player!);
+        }
+
+        SchedulePruneUsers(0.2f);
         return HookResult.Continue;
     }
 
@@ -247,14 +260,70 @@ public class ServerInfo : IModule {
 
         map = mapName;
         SaveServerInfo();
-        ClearUsers();
 
         foreach (var player in Utilities.GetPlayers()) {
-            if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) {
+            if (!IsTrackablePlayer(player)) {
                 continue;
             }
 
-            UpsertUserRow(player);
+            UpsertUserRow(player!);
+        }
+
+        SchedulePruneUsers(0.2f);
+    }
+
+    private void SchedulePruneUsers(float delay = 0.5f) {
+        if (!isActive || osbase == null) {
+            return;
+        }
+
+        pendingPruneTimer?.Kill();
+        pendingPruneTimer = osbase.AddTimer(delay, () => {
+            pendingPruneTimer = null;
+            PruneStaleUsers();
+        });
+    }
+
+    private void PruneStaleUsers() {
+        if (!isActive || db == null) {
+            return;
+        }
+
+        try {
+            var onlineKeys = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var player in Utilities.GetPlayers()) {
+                if (!IsTrackablePlayer(player)) {
+                    continue;
+                }
+
+                string? key = BuildUserKey(player!);
+                if (!string.IsNullOrWhiteSpace(key)) {
+                    onlineKeys.Add(key);
+                }
+            }
+
+            const string query = "SELECT user_key FROM serverinfo_user WHERE host=@host AND port=@port";
+            var table = db.select(
+                query,
+                new MySqlParameter("@host", host),
+                new MySqlParameter("@port", port)
+            );
+
+            foreach (System.Data.DataRow row in table.Rows) {
+                string userKey = row["user_key"]?.ToString() ?? "";
+                if (string.IsNullOrWhiteSpace(userKey)) {
+                    continue;
+                }
+
+                if (!onlineKeys.Contains(userKey)) {
+                    DeleteUserRow(userKey);
+                }
+            }
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] stale prune complete.");
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error pruning stale users: {e.Message}");
         }
     }
 
@@ -279,12 +348,16 @@ public class ServerInfo : IModule {
         CREATE TABLE IF NOT EXISTS serverinfo_user (
             host varchar(64) not null,
             port int(11) not null,
+            user_key varchar(128) not null,
+            steamid64 bigint unsigned null,
             name varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+            is_bot tinyint(1) not null default 0,
             team int(11),
             kills int(11),
             assists int(11),
             deaths int(11),
-            primary key (host, port, name),
+            primary key (host, port, user_key),
+            key idx_serverinfo_user_steamid64 (steamid64),
             constraint serverinfo_user_fk_server
                 foreign key (host, port)
                 references serverinfo_server (host, port)
@@ -325,37 +398,17 @@ public class ServerInfo : IModule {
         }
     }
 
-    private void ClearUsers() {
-        if (db == null) {
+    private void DeleteUserRow(string userKey) {
+        if (db == null || string.IsNullOrWhiteSpace(userKey)) {
             return;
         }
 
         try {
             db.delete(
-                "DELETE FROM serverinfo_user WHERE host=@host AND port=@port",
-                new MySqlParameter[] {
-                    new MySqlParameter("@host", host),
-                    new MySqlParameter("@port", port)
-                }
-            );
-        } catch (Exception e) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error clearing users: {e.Message}");
-        }
-    }
-
-    private void DeleteUserRow(string playerName) {
-        if (db == null || string.IsNullOrWhiteSpace(playerName)) {
-            return;
-        }
-
-        try {
-            db.delete(
-                "DELETE FROM serverinfo_user WHERE host=@host AND port=@port AND name=@name",
-                new MySqlParameter[] {
-                    new MySqlParameter("@host", host),
-                    new MySqlParameter("@port", port),
-                    new MySqlParameter("@name", playerName)
-                }
+                "DELETE FROM serverinfo_user WHERE host=@host AND port=@port AND user_key=@user_key",
+                new MySqlParameter("@host", host),
+                new MySqlParameter("@port", port),
+                new MySqlParameter("@user_key", userKey)
             );
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error deleting user row: {e.Message}");
@@ -363,20 +416,28 @@ public class ServerInfo : IModule {
     }
 
     private void UpsertUserRow(CCSPlayerController player, int? teamOverride = null) {
-        if (db == null || osbase == null || player == null || !player.IsValid) {
+        if (db == null || osbase == null || !IsTrackablePlayer(player)) {
             return;
         }
 
+        string? userKey = BuildUserKey(player);
+        if (string.IsNullOrWhiteSpace(userKey)) {
+            return;
+        }
+
+        ulong steamId64 = (!player!.IsBot && player.SteamID != 0) ? player.SteamID : 0;
+        bool isBot = player.IsBot;
+
         string playerName = player.PlayerName ?? string.Empty;
         if (string.IsNullOrWhiteSpace(playerName)) {
-            return;
+            playerName = isBot ? $"Bot-{player.Index}" : "Unknown";
         }
 
         int kills = 0;
         int assists = 0;
         int deaths = 0;
 
-        if (player.UserId.HasValue) {
+        if (!isBot && player.UserId.HasValue) {
             PlayerStats? stats = osbase.GetGameStats()?.GetPlayerStats(player.UserId.Value);
             if (stats != null) {
                 kills = stats.kills;
@@ -388,14 +449,17 @@ public class ServerInfo : IModule {
         int team = teamOverride ?? player.TeamNum;
 
         const string query =
-            "INSERT INTO serverinfo_user (host, port, name, team, kills, assists, deaths) " +
-            "VALUES (@host, @port, @name, @team, @kills, @assists, @deaths) " +
-            "ON DUPLICATE KEY UPDATE team=@team, kills=@kills, assists=@assists, deaths=@deaths, name=@name";
+            "INSERT INTO serverinfo_user (host, port, user_key, steamid64, name, is_bot, team, kills, assists, deaths) " +
+            "VALUES (@host, @port, @user_key, @steamid64, @name, @is_bot, @team, @kills, @assists, @deaths) " +
+            "ON DUPLICATE KEY UPDATE steamid64=@steamid64, name=@name, is_bot=@is_bot, team=@team, kills=@kills, assists=@assists, deaths=@deaths";
 
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
+            new MySqlParameter("@user_key", userKey),
+            new MySqlParameter("@steamid64", steamId64 == 0 ? DBNull.Value : steamId64),
             new MySqlParameter("@name", playerName),
+            new MySqlParameter("@is_bot", isBot ? 1 : 0),
             new MySqlParameter("@team", team),
             new MySqlParameter("@kills", kills),
             new MySqlParameter("@assists", assists),
@@ -407,5 +471,29 @@ public class ServerInfo : IModule {
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error upserting user row: {e.Message}");
         }
+    }
+
+    private static bool IsTrackablePlayer(CCSPlayerController? player) {
+        if (player == null || !player.IsValid || player.IsHLTV) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string? BuildUserKey(CCSPlayerController? player) {
+        if (player == null) {
+            return null;
+        }
+
+        if (!player.IsBot && player.SteamID != 0) {
+            return $"steam:{player.SteamID}";
+        }
+
+        if (player.IsBot) {
+            return $"bot:{player.Index}";
+        }
+
+        return null;
     }
 }
