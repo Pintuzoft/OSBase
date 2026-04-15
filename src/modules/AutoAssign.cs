@@ -19,11 +19,14 @@ public class AutoAssign : IModule {
 
     private const float AssignDelay = 0.20f;
     private const float CorrectionDelay = 0.25f;
+    private const float GuardSeconds = 1.0f;
+
     private static readonly object TeamAssignLock = new();
 
     private bool warmupActive = true;
+    private int stateGeneration = 0;
 
-    // Guard recent team to fight engine SPEC fallback
+    // Recent intended/observed team to fight engine fallback to spec/unassigned.
     private readonly Dictionary<ulong, (CsTeam team, DateTime until)> teamGuards = new();
 
     // Track which team we intentionally assigned.
@@ -52,7 +55,7 @@ public class AutoAssign : IModule {
         ResetState();
         LoadHandlers();
 
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (delay={AssignDelay}s).");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (delay={AssignDelay}s, correction={CorrectionDelay}s).");
     }
 
     public void Unload() {
@@ -102,11 +105,15 @@ public class AutoAssign : IModule {
 
     private HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup ev, GameEventInfo info) {
         warmupActive = true;
+        stateGeneration++;
+        teamGuards.Clear();
+        justAutoAssigned.Clear();
         return HookResult.Continue;
     }
 
     private HookResult OnRoundStart(EventRoundStart ev, GameEventInfo info) {
         warmupActive = false;
+        stateGeneration++;
         teamGuards.Clear();
         justAutoAssigned.Clear();
         return HookResult.Continue;
@@ -127,27 +134,30 @@ public class AutoAssign : IModule {
             return HookResult.Continue;
         }
 
+        ulong steamId = player!.SteamID;
+        int generation = stateGeneration;
+
         osbase.AddTimer(AssignDelay, () => {
+            if (!isActive || osbase == null) {
+                return;
+            }
+
+            if (generation != stateGeneration) {
+                return;
+            }
+
             try {
-                if (!isActive) {
+                var livePlayer = FindHumanBySteamId(steamId);
+                if (!IsEligiblePlayer(livePlayer)) {
                     return;
                 }
 
-                if (!IsEligiblePlayer(player)) {
-                    return;
-                }
-
-                var safePlayer = player!;
+                var safePlayer = livePlayer!;
 
                 // Engine already placed the player on a real team. Leave it alone.
                 if (IsPlayable(safePlayer.TeamNum)) {
                     var teamNow = (CsTeam)safePlayer.TeamNum;
-                    teamGuards[safePlayer.SteamID] = (teamNow, DateTime.UtcNow.AddSeconds(1));
-
-                    if (warmupActive && !safePlayer.PawnIsAlive) {
-                        TryForceSpawn(safePlayer);
-                    }
-
+                    teamGuards[steamId] = (teamNow, DateTime.UtcNow.AddSeconds(GuardSeconds));
                     return;
                 }
 
@@ -161,52 +171,64 @@ public class AutoAssign : IModule {
                     safePlayer.SwitchTeam(intendedTeam);
                 }
 
-                justAutoAssigned[safePlayer.SteamID] = intendedTeam;
+                justAutoAssigned[steamId] = intendedTeam;
+                teamGuards[steamId] = (intendedTeam, DateTime.UtcNow.AddSeconds(GuardSeconds));
 
-                osbase.AddTimer(CorrectionDelay, () => {
-                    try {
-                        if (!isActive) {
-                            return;
-                        }
-
-                        if (!IsEligiblePlayer(safePlayer)) {
-                            return;
-                        }
-
-                        if (!justAutoAssigned.TryGetValue(safePlayer.SteamID, out var storedTeam)) {
-                            return;
-                        }
-
-                        // Only restore if engine bounced the player back to a non-playable team.
-                        if (!safePlayer.PawnIsAlive && !IsPlayable(safePlayer.TeamNum)) {
-                            safePlayer.SwitchTeam(storedTeam);
-                        }
-
-                        CsTeam finalTeam = IsPlayable(safePlayer.TeamNum) ? (CsTeam)safePlayer.TeamNum : storedTeam;
-                        string color = finalTeam == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
-
-                        safePlayer.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{finalTeam}\x01 team.");
-                        teamGuards[safePlayer.SteamID] = (finalTeam, DateTime.UtcNow.AddSeconds(1));
-
-                        if (warmupActive && !safePlayer.PawnIsAlive) {
-                            TryForceSpawn(safePlayer);
-                        }
-                    } catch (Exception ex) {
-                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] correction failed: {ex.Message}");
-                    } finally {
-                        justAutoAssigned.Remove(safePlayer.SteamID);
-                    }
-                });
+                ScheduleCorrection(steamId, generation);
             } catch (Exception ex) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] assign failed: {ex.Message}");
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] assign failed for {steamId}: {ex.Message}");
             }
         });
 
         return HookResult.Continue;
     }
 
+    private void ScheduleCorrection(ulong steamId, int generation) {
+        if (osbase == null) {
+            return;
+        }
+
+        osbase.AddTimer(CorrectionDelay, () => {
+            if (!isActive) {
+                return;
+            }
+
+            if (generation != stateGeneration) {
+                return;
+            }
+
+            try {
+                var livePlayer = FindHumanBySteamId(steamId);
+                if (!IsEligiblePlayer(livePlayer)) {
+                    return;
+                }
+
+                var safePlayer = livePlayer!;
+
+                if (!justAutoAssigned.TryGetValue(steamId, out var storedTeam)) {
+                    return;
+                }
+
+                // Only restore if engine bounced the player back to a non-playable team.
+                if (!IsPlayable(safePlayer.TeamNum) && !safePlayer.PawnIsAlive) {
+                    safePlayer.SwitchTeam(storedTeam);
+                }
+
+                CsTeam finalTeam = IsPlayable(safePlayer.TeamNum) ? (CsTeam)safePlayer.TeamNum : storedTeam;
+                string color = finalTeam == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
+
+                safePlayer.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{finalTeam}\x01 team.");
+                teamGuards[steamId] = (finalTeam, DateTime.UtcNow.AddSeconds(GuardSeconds));
+            } catch (Exception ex) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] correction failed for {steamId}: {ex.Message}");
+            } finally {
+                justAutoAssigned.Remove(steamId);
+            }
+        });
+    }
+
     private HookResult OnPlayerTeam(EventPlayerTeam ev, GameEventInfo info) {
-        if (!isActive) {
+        if (!isActive || osbase == null) {
             return HookResult.Continue;
         }
 
@@ -217,24 +239,55 @@ public class AutoAssign : IModule {
             }
 
             var safePlayer = player!;
+            ulong steamId = safePlayer.SteamID;
 
             if (!warmupActive) {
                 return HookResult.Continue;
             }
 
-            if (!teamGuards.TryGetValue(safePlayer.SteamID, out var guard)) {
+            if (!teamGuards.TryGetValue(steamId, out var guard)) {
                 return HookResult.Continue;
             }
 
             if (DateTime.UtcNow > guard.until) {
-                teamGuards.Remove(safePlayer.SteamID);
+                teamGuards.Remove(steamId);
                 return HookResult.Continue;
             }
 
-            // If engine bounces them right back to SPEC during warmup, restore intended team.
-            if (!IsPlayable(safePlayer.TeamNum) && !safePlayer.PawnIsAlive) {
-                safePlayer.SwitchTeam(guard.team);
+            if (IsPlayable(safePlayer.TeamNum)) {
+                return HookResult.Continue;
             }
+
+            int generation = stateGeneration;
+
+            // Delay the restore slightly instead of switching inside the event callback.
+            osbase.AddTimer(0.05f, () => {
+                if (!isActive) {
+                    return;
+                }
+
+                if (generation != stateGeneration) {
+                    return;
+                }
+
+                try {
+                    var livePlayer = FindHumanBySteamId(steamId);
+                    if (!IsEligiblePlayer(livePlayer)) {
+                        return;
+                    }
+
+                    var p = livePlayer!;
+                    if (IsPlayable(p.TeamNum)) {
+                        return;
+                    }
+
+                    if (!p.PawnIsAlive) {
+                        p.SwitchTeam(guard.team);
+                    }
+                } catch (Exception ex) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] delayed restore failed for {steamId}: {ex.Message}");
+                }
+            });
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] OnPlayerTeam failed: {ex.Message}");
         }
@@ -257,38 +310,23 @@ public class AutoAssign : IModule {
         return Random.Shared.Next(2) == 0 ? CsTeam.CounterTerrorist : CsTeam.Terrorist;
     }
 
-    private void TryForceSpawn(CCSPlayerController player) {
-        if (!isActive || !warmupActive || osbase == null) {
-            return;
+    private CCSPlayerController? FindHumanBySteamId(ulong steamId) {
+        foreach (var player in Utilities.GetPlayers()) {
+            if (!IsEligiblePlayer(player)) {
+                continue;
+            }
+
+            if (player!.SteamID == steamId) {
+                return player;
+            }
         }
 
-        const int tries = 8;
-        const float step = 0.20f;
-
-        for (int i = 1; i <= tries; i++) {
-            float delay = i * step;
-
-            osbase.AddTimer(delay, () => {
-                if (!isActive || !warmupActive) {
-                    return;
-                }
-
-                if (!IsEligiblePlayer(player)) {
-                    return;
-                }
-
-                if (!player!.PawnIsAlive) {
-                    try {
-                        player.Respawn();
-                    } catch {
-                    }
-                }
-            });
-        }
+        return null;
     }
 
     private void ResetState() {
         warmupActive = true;
+        stateGeneration++;
         teamGuards.Clear();
         justAutoAssigned.Clear();
     }
