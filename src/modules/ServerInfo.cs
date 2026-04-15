@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
@@ -210,9 +211,9 @@ public class ServerInfo : IModule {
 
         var player = eventInfo?.Userid;
         if (player != null) {
-            string? userKey = BuildUserKey(player);
-            if (!string.IsNullOrWhiteSpace(userKey)) {
-                DeleteUserRow(userKey);
+            string playerName = player.PlayerName ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(playerName)) {
+                DeleteUserRow(playerName);
             }
         }
 
@@ -232,6 +233,7 @@ public class ServerInfo : IModule {
 
         int team = eventInfo?.Team ?? player!.TeamNum;
         UpsertUserRow(player!, teamOverride: team);
+        SchedulePruneUsers();
 
         return HookResult.Continue;
     }
@@ -290,34 +292,38 @@ public class ServerInfo : IModule {
         }
 
         try {
-            var onlineKeys = new HashSet<string>(StringComparer.Ordinal);
+            var onlineNames = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var player in Utilities.GetPlayers()) {
                 if (!IsTrackablePlayer(player)) {
                     continue;
                 }
 
-                string? key = BuildUserKey(player!);
-                if (!string.IsNullOrWhiteSpace(key)) {
-                    onlineKeys.Add(key);
+                string playerName = player!.PlayerName ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(playerName)) {
+                    onlineNames.Add(playerName);
                 }
             }
 
-            const string query = "SELECT user_key FROM serverinfo_user WHERE host=@host AND port=@port";
-            var table = db.select(
-                query,
+            DataTable table = db.select(
+                "name FROM serverinfo_user WHERE host=@host AND port=@port",
                 new MySqlParameter("@host", host),
                 new MySqlParameter("@port", port)
             );
 
-            foreach (System.Data.DataRow row in table.Rows) {
-                string userKey = row["user_key"]?.ToString() ?? "";
-                if (string.IsNullOrWhiteSpace(userKey)) {
+            foreach (DataRow row in table.Rows) {
+                string dbName = row["name"]?.ToString() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(dbName)) {
                     continue;
                 }
 
-                if (!onlineKeys.Contains(userKey)) {
-                    DeleteUserRow(userKey);
+                if (!onlineNames.Contains(dbName)) {
+                    db.delete(
+                        "FROM serverinfo_user WHERE host=@host AND port=@port AND name=@name",
+                        new MySqlParameter("@host", host),
+                        new MySqlParameter("@port", port),
+                        new MySqlParameter("@name", dbName)
+                    );
                 }
             }
 
@@ -334,7 +340,7 @@ public class ServerInfo : IModule {
         }
 
         string serverTable = """
-        CREATE TABLE IF NOT EXISTS serverinfo_server (
+        TABLE IF NOT EXISTS serverinfo_server (
             port int(11),
             host varchar(64),
             name varchar(64),
@@ -345,19 +351,15 @@ public class ServerInfo : IModule {
         """;
 
         string userTable = """
-        CREATE TABLE IF NOT EXISTS serverinfo_user (
+        TABLE IF NOT EXISTS serverinfo_user (
             host varchar(64) not null,
             port int(11) not null,
-            user_key varchar(128) not null,
-            steamid64 bigint unsigned null,
             name varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
-            is_bot tinyint(1) not null default 0,
             team int(11),
             kills int(11),
             assists int(11),
             deaths int(11),
-            primary key (host, port, user_key),
-            key idx_serverinfo_user_steamid64 (steamid64),
+            primary key (host, port, name),
             constraint serverinfo_user_fk_server
                 foreign key (host, port)
                 references serverinfo_server (host, port)
@@ -379,8 +381,8 @@ public class ServerInfo : IModule {
             return;
         }
 
-        const string query =
-            "INSERT INTO serverinfo_server (host, port, name, map) " +
+        string query =
+            "INTO serverinfo_server (host, port, name, map) " +
             "VALUES (@host, @port, @name, @map) " +
             "ON DUPLICATE KEY UPDATE name=@name, map=@map";
 
@@ -398,17 +400,17 @@ public class ServerInfo : IModule {
         }
     }
 
-    private void DeleteUserRow(string userKey) {
-        if (db == null || string.IsNullOrWhiteSpace(userKey)) {
+    private void DeleteUserRow(string playerName) {
+        if (db == null || string.IsNullOrWhiteSpace(playerName)) {
             return;
         }
 
         try {
             db.delete(
-                "DELETE FROM serverinfo_user WHERE host=@host AND port=@port AND user_key=@user_key",
+                "FROM serverinfo_user WHERE host=@host AND port=@port AND name=@name",
                 new MySqlParameter("@host", host),
                 new MySqlParameter("@port", port),
-                new MySqlParameter("@user_key", userKey)
+                new MySqlParameter("@name", playerName)
             );
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error deleting user row: {e.Message}");
@@ -420,24 +422,16 @@ public class ServerInfo : IModule {
             return;
         }
 
-        string? userKey = BuildUserKey(player);
-        if (string.IsNullOrWhiteSpace(userKey)) {
-            return;
-        }
-
-        ulong steamId64 = (!player!.IsBot && player.SteamID != 0) ? player.SteamID : 0;
-        bool isBot = player.IsBot;
-
-        string playerName = player.PlayerName ?? string.Empty;
+        string playerName = player!.PlayerName ?? string.Empty;
         if (string.IsNullOrWhiteSpace(playerName)) {
-            playerName = isBot ? $"Bot-{player.Index}" : "Unknown";
+            playerName = player.IsBot ? $"Bot-{player.Index}" : "Unknown";
         }
 
         int kills = 0;
         int assists = 0;
         int deaths = 0;
 
-        if (!isBot && player.UserId.HasValue) {
+        if (!player.IsBot && player.UserId.HasValue) {
             PlayerStats? stats = osbase.GetGameStats()?.GetPlayerStats(player.UserId.Value);
             if (stats != null) {
                 kills = stats.kills;
@@ -448,18 +442,15 @@ public class ServerInfo : IModule {
 
         int team = teamOverride ?? player.TeamNum;
 
-        const string query =
-            "INSERT INTO serverinfo_user (host, port, user_key, steamid64, name, is_bot, team, kills, assists, deaths) " +
-            "VALUES (@host, @port, @user_key, @steamid64, @name, @is_bot, @team, @kills, @assists, @deaths) " +
-            "ON DUPLICATE KEY UPDATE steamid64=@steamid64, name=@name, is_bot=@is_bot, team=@team, kills=@kills, assists=@assists, deaths=@deaths";
+        string query =
+            "INTO serverinfo_user (host, port, name, team, kills, assists, deaths) " +
+            "VALUES (@host, @port, @name, @team, @kills, @assists, @deaths) " +
+            "ON DUPLICATE KEY UPDATE team=@team, kills=@kills, assists=@assists, deaths=@deaths, name=@name";
 
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
-            new MySqlParameter("@user_key", userKey),
-            new MySqlParameter("@steamid64", steamId64 == 0 ? DBNull.Value : steamId64),
             new MySqlParameter("@name", playerName),
-            new MySqlParameter("@is_bot", isBot ? 1 : 0),
             new MySqlParameter("@team", team),
             new MySqlParameter("@kills", kills),
             new MySqlParameter("@assists", assists),
@@ -479,21 +470,5 @@ public class ServerInfo : IModule {
         }
 
         return true;
-    }
-
-    private static string? BuildUserKey(CCSPlayerController? player) {
-        if (player == null) {
-            return null;
-        }
-
-        if (!player.IsBot && player.SteamID != 0) {
-            return $"steam:{player.SteamID}";
-        }
-
-        if (player.IsBot) {
-            return $"bot:{player.Index}";
-        }
-
-        return null;
     }
 }
