@@ -5,7 +5,6 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
-using CounterStrikeSharp.API.Core.Attributes.Registration;
 using OSBase.Helpers;
 
 namespace OSBase.Modules {
@@ -15,11 +14,12 @@ namespace OSBase.Modules {
         public string ModuleNameNice => "TeamBalancer";
 
         public static TeamBalancer? Current { get; private set; }
-
+        private bool handlersLoaded = false;
+        private CounterStrikeSharp.API.Modules.Timers.Timer? warmupBalanceTimer;
         private OSBase? osbase;
         private Config? config;
         private GameStats? gameStats;
-
+        private bool isActive = false;
         // Teams
         private const int TEAM_S  = (int)CsTeam.Spectator;
         private const int TEAM_T  = (int)CsTeam.Terrorist;
@@ -72,6 +72,7 @@ namespace OSBase.Modules {
 
         public void Load(OSBase inOsbase, Config inConfig) {
             Current = this;
+            isActive = true;
 
             osbase = inOsbase;
             config = inConfig;
@@ -89,51 +90,80 @@ namespace OSBase.Modules {
                 return;
             }
 
+            LoadMapInfo();
+
             try {
-                osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-                osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
-
-                osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd, HookMode.Post);
-                osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd, HookMode.Post);
-                osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime, HookMode.Post);
-
-                // Round 1 freeze-time fallback
-                osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
-
-                LoadMapInfo();
+                LoadHandlers();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded.");
             } catch (Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] registering: {ex.Message}");
             }
         }
+        private void LoadHandlers() {
+            if (osbase == null || handlersLoaded) {
+                return;
+            }
 
-        private void OnMapStart(string mapName) {
-            currentMap = mapName;
-            swapsThisMap = 0;
-            lateSwapsThisHalf = 0;
-            currentHalfIndex = 0;
+            osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+            osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
+
+            osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd, HookMode.Post);
+            osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd, HookMode.Post);
+            osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime, HookMode.Post);
+            osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
+
+            handlersLoaded = true;
+        }
+        public void Unload() {
+            warmupBalanceTimer?.Kill();
+            warmupBalanceTimer = null;
+            isActive = false;
+
+            if (osbase != null && handlersLoaded) {
+                osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+                osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
+
+                osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd, HookMode.Post);
+                osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd, HookMode.Post);
+                osbase.DeregisterEventHandler<EventStartHalftime>(OnStartHalftime, HookMode.Post);
+                osbase.DeregisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
+
+                handlersLoaded = false;
+            }
+
+            if (ReferenceEquals(Current, this)) {
+                Current = null;
+            }
+
+            gameStats = null;
+            config = null;
+            osbase = null;
+
+            currentMap = "";
+            bombsites = 2;
             warmupBalancedThisMap = false;
             firstRoundSizeFixDone = false;
             threePlayerHalftimeMode = false;
+            lastSwapRound = -999;
+            lateSwapsThisHalf = 0;
+            swapsThisMap = 0;
+            currentHalfIndex = 0;
 
-            if (mapBombsites.TryGetValue(mapName, out int bs)) {
-                bombsites = bs;
-                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} bombsites={bombsites}");
-            } else {
-                bombsites = mapName.StartsWith("cs_", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
-                config?.AddCustomConfigLine(mapConfigFile, $"{mapName} {bombsites}");
-                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} defaulted bombsites={bombsites}");
-            }
+            playerSwapRound.Clear();
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Scheduling WarmupFinalBalance in {WARMUP_BURST_AT:0.0}s (warmup only).");
-            osbase?.AddTimer(WARMUP_BURST_AT, WarmupFinalBalance);
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
         }
+        public void ReloadConfig(Config inConfig) {
+            config = inConfig;
+            gameStats = osbase?.GetGameStats();
 
-        private void OnMapEnd() {
-            // counters reset on next start
+            LoadMapInfo();
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
         }
-
         private void LoadMapInfo() {
+            mapBombsites.Clear();
+
             config?.CreateCustomConfig($"{mapConfigFile}", "// Map info\nde_dust2 2\n");
             var lines = config?.FetchCustomConfig($"{mapConfigFile}") ?? new List<string>();
 
@@ -148,6 +178,35 @@ namespace OSBase.Modules {
                     mapBombsites[parts[0]] = bs;
                 }
             }
+        }
+        private void OnMapStart(string mapName) {
+            currentMap = mapName;
+            swapsThisMap = 0;
+            lateSwapsThisHalf = 0;
+            currentHalfIndex = 0;
+            warmupBalancedThisMap = false;
+            firstRoundSizeFixDone = false;
+            threePlayerHalftimeMode = false;
+
+            warmupBalanceTimer?.Kill();
+            warmupBalanceTimer = null;
+
+            if (mapBombsites.TryGetValue(mapName, out int bs)) {
+                bombsites = bs;
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} bombsites={bombsites}");
+            } else {
+                bombsites = mapName.StartsWith("cs_", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
+                config?.AddCustomConfigLine(mapConfigFile, $"{mapName} {bombsites}");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Map {mapName} defaulted bombsites={bombsites}");
+            }
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Scheduling WarmupFinalBalance in {WARMUP_BURST_AT:0.0}s (warmup only).");
+            warmupBalanceTimer = osbase?.AddTimer(WARMUP_BURST_AT, WarmupFinalBalance);
+        }
+
+        private void OnMapEnd() {
+            warmupBalanceTimer?.Kill();
+            warmupBalanceTimer = null;
         }
 
         public float GetEffectiveSkillForPriority(CCSPlayerController player) {
@@ -189,7 +248,6 @@ namespace OSBase.Modules {
 
         // ===== Event handlers =====
 
-        [GameEventHandler(HookMode.Post)]
         private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
             // Only clear immunity; do not move after warmup to avoid spawn bugs
             var gs = osbase?.GetGameStats();
@@ -211,7 +269,6 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        [GameEventHandler(HookMode.Post)]
         private HookResult OnStartHalftime(EventStartHalftime ev, GameEventInfo info) {
             lateSwapsThisHalf = 0;
             currentHalfIndex = 1;
@@ -231,14 +288,12 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        [GameEventHandler(HookMode.Post)]
         private HookResult OnRoundEnd(EventRoundEnd ev, GameEventInfo info) {
             osbase?.AddTimer(6.5f, () => BalanceAtRoundEnd());
             return HookResult.Continue;
         }
 
         // Round 1 safety-net: size-fix only (no aggressive swaps)
-        [GameEventHandler(HookMode.Post)]
         private HookResult OnRoundPrestart(EventRoundPrestart ev, GameEventInfo info) {
             var gs = osbase?.GetGameStats();
             if (gs == null) return HookResult.Continue;
@@ -254,6 +309,7 @@ namespace OSBase.Modules {
         }
 
         private void ForceSizeFixForFirstRound() {
+            if (!isActive) return;
             var gs = osbase?.GetGameStats();
             if (gs == null) return;
 
@@ -284,6 +340,7 @@ namespace OSBase.Modules {
         // ===== Warmup final balance =====
 
         private void WarmupFinalBalance() {
+            if (!isActive) return;
             var gs = osbase?.GetGameStats();
             if (gs == null) return;
 
@@ -381,6 +438,7 @@ namespace OSBase.Modules {
         // ===== Live round-end balancing (low-churn) =====
 
         private void BalanceAtRoundEnd() {
+            if (!isActive) return;
             var gs = osbase?.GetGameStats();
             if (gs == null) return;
 

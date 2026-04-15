@@ -12,6 +12,7 @@ namespace OSBase.Modules {
     public class WeaponRestrict : IModule {
         public string ModuleName => "weaponrestrict";
         public string ModuleNameNice => "WeaponRestrict";
+        private bool handlersLoaded = false;
 
         private OSBase? osbase;
         private Config? config;
@@ -60,15 +61,51 @@ namespace OSBase.Modules {
             LoadConfig();
 
             try {
-                osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
-                osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Post);
-                osbase.RegisterEventHandler<EventItemPickup>(OnItemPickup, HookMode.Post);
+                LoadHandlers();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded.");
             } catch (Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] registering: {ex.Message}");
             }
         }
+        public void Unload() {
+            if (osbase != null && handlersLoaded) {
+                osbase.DeregisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
+                osbase.DeregisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Post);
+                osbase.DeregisterEventHandler<EventItemPickup>(OnItemPickup, HookMode.Post);
+                handlersLoaded = false;
+            }
 
+            recentNotifications.Clear();
+            currentRoundEffectiveTotal = 0;
+            currentRoundAwpLimit = 0;
+            currentRoundAutosniperLimit = 0;
+
+            gameStats = null;
+            config = null;
+            osbase = null;
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
+        }
+
+        public void ReloadConfig(Config inConfig) {
+            config = inConfig;
+            gameStats = osbase?.GetGameStats();
+            recentNotifications.Clear();
+            LoadConfig();
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
+        }
+        private void LoadHandlers() {
+            if (osbase == null || handlersLoaded) {
+                return;
+            }
+
+            osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
+            osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Post);
+            osbase.RegisterEventHandler<EventItemPickup>(OnItemPickup, HookMode.Post);
+
+            handlersLoaded = true;
+        }
         private void LoadConfig() {
             string defaultContent =
                 "// WeaponRestrict config\n" +
@@ -133,7 +170,6 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Autosniper rules: {FormatRules(autosniperRules)}");
         }
 
-        [GameEventHandler(HookMode.Post)]
         private HookResult OnRoundPrestart(EventRoundPrestart ev, GameEventInfo info) {
             if (gameStats == null) {
                 return HookResult.Continue;
@@ -150,7 +186,6 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        [GameEventHandler(HookMode.Post)]
         private HookResult OnItemPurchase(EventItemPurchase ev, GameEventInfo info) {
             if (gameStats == null) {
                 return HookResult.Continue;
@@ -186,7 +221,6 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        [GameEventHandler(HookMode.Post)]
         private HookResult OnItemPickup(EventItemPickup ev, GameEventInfo info) {
             if (gameStats == null) {
                 return HookResult.Continue;

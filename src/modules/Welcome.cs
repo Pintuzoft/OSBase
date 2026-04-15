@@ -1,95 +1,191 @@
 using System;
-using System.IO;
+using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.Cvars;
-using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Events;
-using System.Diagnostics.Tracing;
-using System.Reflection;
 
 namespace OSBase.Modules;
 
-using System.IO;
-
 public class Welcome : IModule {
-    public string ModuleName => "welcome";   
+    public string ModuleName => "welcome";
+
+    private const string WelcomeConfigFile = "welcome.cfg";
+
     private OSBase? osbase;
     private Config? config;
 
-    float delay = 5.0f;
+    private bool handlersLoaded = false;
+    private bool isActive = false;
+
+    private float delay = 5.0f;
+
+    private readonly List<CounterStrikeSharp.API.Modules.Timers.Timer> pendingWelcomeTimers = new();
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
+        isActive = true;
 
-        // Register required global config values
-        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
-
-        if (osbase == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
-            return;
-        } else if (config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
+        if (osbase == null || config == null) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
+            isActive = false;
             return;
         }
 
-        if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
-            createCustomConfigs();
-            loadEventHandlers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
-        } else {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
+        config.RegisterGlobalConfigValue(ModuleName, "1");
+        config.RegisterGlobalConfigValue($"{ModuleName}_delay", "5.0");
+
+        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
+            isActive = false;
+            return;
         }
+
+        CreateCustomConfigs();
+        LoadConfig();
+        LoadHandlers();
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
-    private void createCustomConfigs() {
-        if (config == null) return;
-        config.CreateCustomConfig("welcome.cfg", "// Welcome message\n// Example: Welcome to the server!\n");
+    public void Unload() {
+        isActive = false;
+
+        KillPendingWelcomeTimers();
+
+        if (osbase != null && handlersLoaded) {
+            osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+            handlersLoaded = false;
+        }
+
+        config = null;
+        osbase = null;
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    private void loadEventHandlers() {
-        if(osbase == null) return;
+    public void ReloadConfig(Config inConfig) {
+        config = inConfig;
+        LoadConfig();
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
+    }
+
+    private void LoadHandlers() {
+        if (osbase == null || handlersLoaded) {
+            return;
+        }
+
         osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+        handlersLoaded = true;
+    }
+
+    private void LoadConfig() {
+        if (config == null) {
+            return;
+        }
+
+        delay = 5.0f;
+        string rawDelay = config.GetGlobalConfigValue($"{ModuleName}_delay", "5.0");
+
+        if (!float.TryParse(rawDelay, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out delay)) {
+            delay = 5.0f;
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}] Invalid {ModuleName}_delay '{rawDelay}', using {delay:0.0}");
+        }
+
+        if (delay < 0.0f) {
+            delay = 0.0f;
+        }
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config loaded. delay={delay:0.0}");
+    }
+
+    private void CreateCustomConfigs() {
+        config?.CreateCustomConfig(
+            WelcomeConfigFile,
+            "// Welcome message\n// Example: Welcome to the server!\n"
+        );
     }
 
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
-        if (config == null) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Config module is null, skipping welcome message.");
+        if (!isActive || osbase == null || config == null) {
             return HookResult.Continue;
         }
-        
-        // Get the player's UserId
-        var playerId = eventInfo.Userid;
-        
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending welcome message to Player ID: {playerId}");
 
-        // Fetch the welcome messages from the configuration file
-        List<string> messages = config.FetchCustomConfig("welcome.cfg");
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Fetched {messages.Count} lines from welcome.cfg");
-
-        // Send the message specifically to the connecting player
-        if (osbase != null) {
-            if (playerId != null && playerId.IsValid && !playerId.IsBot && !playerId.IsHLTV) {
-                osbase.AddTimer(delay, () => {
-                    foreach (string message in messages) {
-                        if (playerId == null) break; // Ensure playerId is valid
-                        if (message.StartsWith("//") || string.IsNullOrWhiteSpace(message)) {
-                            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Skipping line: {message}");
-                            continue;
-                        }
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Sending message to Player: {playerId.PlayerName ?? "Unknown"}");
-                        playerId.PrintToChat(message);
-                    }
-                });
-            } else {
-                Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: Player ID is null, cannot send message.");
-            }
-        } else {
-            Console.WriteLine("[DEBUG] OSBase[{ModuleName}]: osbase is null, cannot send message.");
+        var player = eventInfo.Userid;
+        if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) {
+            return HookResult.Continue;
         }
+
+        List<string> messages = GetWelcomeMessages();
+        if (messages.Count == 0) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] No welcome messages to send.");
+            return HookResult.Continue;
+        }
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Scheduling welcome message for {player.PlayerName ?? "Unknown"} in {delay:0.0}s");
+
+        CounterStrikeSharp.API.Modules.Timers.Timer? timer = null;
+        timer = osbase.AddTimer(delay, () => {
+            try {
+                if (!isActive) {
+                    return;
+                }
+
+                if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) {
+                    return;
+                }
+
+                foreach (string message in messages) {
+                    if (string.IsNullOrWhiteSpace(message) || message.StartsWith("//")) {
+                        continue;
+                    }
+
+                    player.PrintToChat(message);
+                }
+
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Welcome messages sent to {player.PlayerName ?? "Unknown"}");
+            } finally {
+                if (timer != null) {
+                    pendingWelcomeTimers.Remove(timer);
+                }
+            }
+        });
+
+        pendingWelcomeTimers.Add(timer);
         return HookResult.Continue;
     }
 
+    private List<string> GetWelcomeMessages() {
+        if (config == null) {
+            return new List<string>();
+        }
+
+        List<string> rawLines = config.FetchCustomConfig(WelcomeConfigFile);
+        List<string> messages = new();
+
+        foreach (string line in rawLines) {
+            string trimmed = line.Trim();
+
+            if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("//")) {
+                continue;
+            }
+
+            messages.Add(trimmed);
+        }
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Loaded {messages.Count} welcome message lines.");
+        return messages;
+    }
+
+    private void KillPendingWelcomeTimers() {
+        foreach (var timer in pendingWelcomeTimers) {
+            try {
+                timer.Kill();
+            } catch {
+            }
+        }
+
+        pendingWelcomeTimers.Clear();
+    }
 }

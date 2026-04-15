@@ -13,6 +13,7 @@ using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Timers;
 using MySqlConnector;
 using OSBase.Helpers;
+using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
 
 namespace OSBase.Modules;
 
@@ -25,6 +26,9 @@ public class Faceit : IModule {
     private Config? config;
     private Database? db;
     private HttpClient? httpClient;
+
+    private bool handlersLoaded = false;
+    private bool isActive = false;
 
     // cfg (faceit.cfg)
     private string apiKey = "";
@@ -42,15 +46,25 @@ public class Faceit : IModule {
     private readonly Queue<ulong> lookupQueue = new();
     private readonly HashSet<ulong> queuedSteamIds = new();
     private bool workerBusy = false;
-    private CounterStrikeSharp.API.Modules.Timers.Timer? workerTimer;
+    private Timer? workerTimer;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
+        isActive = true;
+
+        if (osbase == null || config == null) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
+            isActive = false;
+            return;
+        }
 
         config.RegisterGlobalConfigValue(ModuleName, "0");
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1")
+        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
+            isActive = false;
             return;
+        }
 
         CreateModuleConfig();
         LoadModuleConfig();
@@ -58,18 +72,13 @@ public class Faceit : IModule {
         db = new Database(osbase, config);
         db.Initialize();
 
-        httpClient = new HttpClient();
-        httpClient.Timeout = TimeSpan.FromSeconds(Math.Max(1, httpTimeoutSeconds));
+        httpClient = new HttpClient {
+            Timeout = TimeSpan.FromSeconds(Math.Max(1, httpTimeoutSeconds))
+        };
 
         EnsureFaceitCacheTable();
         CleanupOldCacheRows();
-
-        osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-        osbase.RegisterEventHandler<EventMapTransition>((_, __) => {
-            StopWorker();
-            ClearQueue();
-            return HookResult.Continue;
-        });
+        LoadHandlers();
 
         if (debug) {
             Console.WriteLine("[DEBUG] OSBase[faceit]: loaded successfully!");
@@ -78,8 +87,65 @@ public class Faceit : IModule {
         }
     }
 
+    public void Unload() {
+        isActive = false;
+
+        StopWorker();
+        ClearQueue();
+
+        if (osbase != null && handlersLoaded) {
+            osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+            osbase.DeregisterEventHandler<EventMapTransition>(OnMapTransition);
+            handlersLoaded = false;
+        }
+
+        httpClient?.Dispose();
+        httpClient = null;
+
+        db = null;
+        config = null;
+        osbase = null;
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
+    }
+
+    public void ReloadConfig(Config inConfig) {
+        config = inConfig;
+
+        CreateModuleConfig();
+        LoadModuleConfig();
+
+        if (httpClient != null) {
+            httpClient.Timeout = TimeSpan.FromSeconds(Math.Max(1, httpTimeoutSeconds));
+        }
+
+        CleanupOldCacheRows();
+
+        if (debug) {
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: config reloaded. timeout={httpTimeoutSeconds}, cleanup_after_days={cleanupAfterDays}, notify_admins_on_connect={notifyAdminsOnConnect}, only_notify_on_ban={onlyNotifyOnBan}");
+        }
+    }
+
+    private void LoadHandlers() {
+        if (osbase == null || handlersLoaded) {
+            return;
+        }
+
+        osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
+
+        handlersLoaded = true;
+    }
+
+    private HookResult OnMapTransition(EventMapTransition _, GameEventInfo __) {
+        StopWorker();
+        ClearQueue();
+        return HookResult.Continue;
+    }
+
     private void CreateModuleConfig() {
-        config?.CreateCustomConfig("faceit.cfg",
+        config?.CreateCustomConfig(
+            "faceit.cfg",
             "// Faceit module\n" +
             "api_key \n" +
             "admin_permission @css/generic\n" +
@@ -92,14 +158,24 @@ public class Faceit : IModule {
     }
 
     private void LoadModuleConfig() {
+        apiKey = "";
+        adminPermission = "@css/generic";
+        notifyAdminsOnConnect = true;
+        onlyNotifyOnBan = false;
+        httpTimeoutSeconds = 5;
+        cleanupAfterDays = 365;
+        debug = false;
+
         foreach (var line in config?.FetchCustomConfig("faceit.cfg") ?? new List<string>()) {
             var s = line.Trim();
-            if (s.Length == 0 || s.StartsWith("//"))
+            if (s.Length == 0 || s.StartsWith("//")) {
                 continue;
+            }
 
             var kv = s.Split(' ', 2, StringSplitOptions.TrimEntries);
-            if (kv.Length != 2)
+            if (kv.Length != 2) {
                 continue;
+            }
 
             switch (kv[0].ToLowerInvariant()) {
                 case "api_key":
@@ -115,12 +191,14 @@ public class Faceit : IModule {
                     onlyNotifyOnBan = kv[1] == "1";
                     break;
                 case "http_timeout_seconds":
-                    if (int.TryParse(kv[1], out var timeout))
+                    if (int.TryParse(kv[1], out var timeout)) {
                         httpTimeoutSeconds = Math.Max(1, timeout);
+                    }
                     break;
                 case "cleanup_after_days":
-                    if (int.TryParse(kv[1], out var cleanup))
+                    if (int.TryParse(kv[1], out var cleanup)) {
                         cleanupAfterDays = Math.Max(30, cleanup);
+                    }
                     break;
                 case "debug":
                     debug = kv[1] == "1";
@@ -136,7 +214,7 @@ public class Faceit : IModule {
         }
 
         string query = @"
-            TABLE IF NOT EXISTS `faceit_cache` (
+            CREATE TABLE IF NOT EXISTS `faceit_cache` (
                 `steamid64` BIGINT UNSIGNED NOT NULL,
                 `faceit_player_id` VARCHAR(64) DEFAULT NULL,
                 `faceit_nickname` VARCHAR(64) DEFAULT NULL,
@@ -163,34 +241,43 @@ public class Faceit : IModule {
 
         int result = db.create(query);
 
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: EnsureFaceitCacheTable result={result}");
+        }
     }
 
     private void CleanupOldCacheRows() {
-        if (db == null)
+        if (db == null) {
             return;
+        }
 
         string query = @"
-            FROM `faceit_cache`
+            DELETE FROM `faceit_cache`
             WHERE `last_seen_at` IS NOT NULL
               AND `last_seen_at` < UTC_TIMESTAMP() - INTERVAL @days DAY";
 
         int result = db.delete(query, new MySqlParameter("@days", cleanupAfterDays));
 
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: CleanupOldCacheRows result={result}");
+        }
     }
 
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
         try {
             var player = @event.Userid;
-            if (!IsValidHuman(player))
+            if (!IsValidHuman(player)) {
                 return HookResult.Continue;
+            }
 
             ulong steamId64 = player!.SteamID;
-            if (steamId64 == 0)
+            if (steamId64 == 0) {
                 return HookResult.Continue;
+            }
 
             HandlePlayerConnect(player, steamId64);
         } catch (Exception ex) {
@@ -206,8 +293,9 @@ public class Faceit : IModule {
         if (row == null) {
             InsertPendingRow(steamId64);
 
-            if (debug)
+            if (debug) {
                 Console.WriteLine($"[DEBUG] OSBase[faceit]: inserted pending row for {steamId64}");
+            }
 
             EnqueueLookup(steamId64);
             return;
@@ -216,42 +304,48 @@ public class Faceit : IModule {
         UpdateLastSeen(steamId64);
 
         if (ShouldEnqueueLookup(row)) {
-            if (debug)
+            if (debug) {
                 Console.WriteLine($"[DEBUG] OSBase[faceit]: stale cache for {steamId64}, queueing lookup");
+            }
 
             EnqueueLookup(steamId64);
             return;
         }
 
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: cache still fresh for {steamId64}");
+        }
 
-        if (notifyAdminsOnConnect)
+        if (notifyAdminsOnConnect) {
             NotifyAdminsFromCache(player, row);
+        }
     }
 
     private DataRow? GetCacheRow(ulong steamId64) {
-        if (db == null)
+        if (db == null) {
             return null;
+        }
 
         string query = @"
-            * FROM `faceit_cache`
+            SELECT * FROM `faceit_cache`
             WHERE `steamid64` = @steamid64
             LIMIT 1";
 
         var table = db.select(query, new MySqlParameter("@steamid64", steamId64));
-        if (table.Rows.Count == 0)
+        if (table.Rows.Count == 0) {
             return null;
+        }
 
         return table.Rows[0];
     }
 
     private void InsertPendingRow(ulong steamId64) {
-        if (db == null)
+        if (db == null) {
             return;
+        }
 
         string query = @"
-            INTO `faceit_cache`
+            INSERT INTO `faceit_cache`
             (`steamid64`, `has_faceit_account`, `active_ban`, `cache_level`, `last_seen_at`, `next_check_at`, `status`)
             VALUES
             (@steamid64, 0, 0, 0, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 'pending')
@@ -262,11 +356,12 @@ public class Faceit : IModule {
     }
 
     private void UpdateLastSeen(ulong steamId64) {
-        if (db == null)
+        if (db == null) {
             return;
+        }
 
         string query = @"
-            `faceit_cache`
+            UPDATE `faceit_cache`
             SET `last_seen_at` = UTC_TIMESTAMP()
             WHERE `steamid64` = @steamid64";
 
@@ -274,55 +369,75 @@ public class Faceit : IModule {
     }
 
     private bool ShouldEnqueueLookup(DataRow row) {
-        if (row["next_check_at"] == DBNull.Value)
+        if (row["next_check_at"] == DBNull.Value) {
             return true;
+        }
 
-        if (!DateTime.TryParse(row["next_check_at"].ToString(), out var nextCheckAt))
+        if (!DateTime.TryParse(row["next_check_at"].ToString(), out var nextCheckAt)) {
             return true;
+        }
 
         return nextCheckAt <= DateTime.UtcNow;
     }
 
     private void EnqueueLookup(ulong steamId64) {
+        if (!isActive) {
+            return;
+        }
+
         if (queuedSteamIds.Contains(steamId64)) {
-            if (debug)
+            if (debug) {
                 Console.WriteLine($"[DEBUG] OSBase[faceit]: already queued {steamId64}");
+            }
             return;
         }
 
         lookupQueue.Enqueue(steamId64);
         queuedSteamIds.Add(steamId64);
 
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: queued {steamId64}, queueCount={lookupQueue.Count}");
+        }
 
-        if (workerTimer == null) {
-            if (debug)
+        if (workerTimer == null && !workerBusy) {
+            if (debug) {
                 Console.WriteLine("[DEBUG] OSBase[faceit]: worker not running, starting now");
+            }
 
             StartWorker();
         }
     }
 
     private void StartWorker() {
-        if (debug)
+        if (!isActive || osbase == null) {
+            return;
+        }
+
+        if (debug) {
             Console.WriteLine("[DEBUG] OSBase[faceit]: StartWorker called");
+        }
 
         StopWorker();
 
-        workerTimer = osbase!.AddTimer(
+        workerTimer = osbase.AddTimer(
             2.0f,
             () => {
-                if (debug)
+                if (!isActive) {
+                    return;
+                }
+
+                if (debug) {
                     Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+                }
 
                 WorkerTick();
             },
             TimerFlags.STOP_ON_MAPCHANGE
         );
 
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: workerTimer null? {workerTimer == null}");
+        }
     }
 
     private void StopWorker() {
@@ -331,37 +446,53 @@ public class Faceit : IModule {
     }
 
     private void WorkerTick() {
-        if (debug)
+        if (!isActive) {
+            StopWorker();
+            return;
+        }
+
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: WorkerTick fired, busy={workerBusy}, queue={lookupQueue.Count}");
+        }
 
         try {
-            if (workerBusy || lookupQueue.Count == 0)
+            if (workerBusy || lookupQueue.Count == 0) {
                 return;
+            }
 
             ulong steamId64 = lookupQueue.Dequeue();
             queuedSteamIds.Remove(steamId64);
 
-            if (debug)
+            if (debug) {
                 Console.WriteLine($"[DEBUG] OSBase[faceit]: dequeued {steamId64}");
+            }
 
             _ = ProcessLookupAsync(steamId64);
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[faceit]: WorkerTick failed: {ex.Message}");
         } finally {
-            if (lookupQueue.Count > 0 || workerBusy) {
-                workerTimer = osbase!.AddTimer(
+            if (!isActive || osbase == null) {
+                StopWorker();
+            } else if (lookupQueue.Count > 0 || workerBusy) {
+                workerTimer = osbase.AddTimer(
                     2.0f,
                     () => {
-                        if (debug)
+                        if (!isActive) {
+                            return;
+                        }
+
+                        if (debug) {
                             Console.WriteLine("[DEBUG] OSBase[faceit]: TIMER CALLBACK FIRED");
+                        }
 
                         WorkerTick();
                     },
                     TimerFlags.STOP_ON_MAPCHANGE
                 );
             } else {
-                if (debug)
+                if (debug) {
                     Console.WriteLine("[DEBUG] OSBase[faceit]: queue empty, stopping worker");
+                }
 
                 StopWorker();
             }
@@ -369,19 +500,33 @@ public class Faceit : IModule {
     }
 
     private async Task ProcessLookupAsync(ulong steamId64) {
-        if (debug)
+        if (!isActive) {
+            return;
+        }
+
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: ProcessLookupAsync started for {steamId64}");
+        }
 
         workerBusy = true;
 
         try {
-            if (debug)
+            if (debug) {
                 Console.WriteLine($"[DEBUG] OSBase[faceit]: processing lookup for {steamId64}");
+            }
 
             var result = await FetchFaceitDataAsync(steamId64);
+            if (!isActive) {
+                return;
+            }
+
             ApplyLookupResult(steamId64, result);
 
             Server.NextWorldUpdate(() => {
+                if (!isActive) {
+                    return;
+                }
+
                 try {
                     NotifyAdminsIfRelevant(steamId64, result);
                 } catch (Exception ex) {
@@ -390,18 +535,23 @@ public class Faceit : IModule {
             });
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[faceit]: ProcessLookupAsync failed for {steamId64}: {ex.Message}");
-            ApplyTemporaryError(steamId64, ex.Message);
+
+            if (isActive) {
+                ApplyTemporaryError(steamId64, ex.Message);
+            }
         } finally {
             workerBusy = false;
         }
     }
 
     private async Task<FaceitLookupResult> FetchFaceitDataAsync(ulong steamId64) {
-        if (httpClient == null)
+        if (httpClient == null) {
             throw new InvalidOperationException("HttpClient is null");
+        }
 
-        if (string.IsNullOrWhiteSpace(apiKey))
+        if (string.IsNullOrWhiteSpace(apiKey)) {
             throw new InvalidOperationException("FACEIT api_key is missing in faceit.cfg");
+        }
 
         string url = $"https://open.faceit.com/data/v4/players?game=cs2&game_player_id={steamId64}";
 
@@ -416,8 +566,9 @@ public class Faceit : IModule {
 
         using var response = await httpClient.SendAsync(request);
 
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: FACEIT lookup status={(int)response.StatusCode} for steamid64={steamId64}");
+        }
 
         if (response.StatusCode == HttpStatusCode.NotFound) {
             string notFoundBody = await response.Content.ReadAsStringAsync();
@@ -436,14 +587,17 @@ public class Faceit : IModule {
             };
         }
 
-        if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+        if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden) {
             throw new Exception($"FACEIT auth failed: {(int)response.StatusCode}");
+        }
 
-        if ((int)response.StatusCode == 429)
+        if ((int)response.StatusCode == 429) {
             throw new Exception("FACEIT rate limited");
+        }
 
-        if (!response.IsSuccessStatusCode)
+        if (!response.IsSuccessStatusCode) {
             throw new Exception($"FACEIT lookup failed: {(int)response.StatusCode} {response.ReasonPhrase}");
+        }
 
         string body = await response.Content.ReadAsStringAsync();
 
@@ -463,8 +617,9 @@ public class Faceit : IModule {
         }
 
         FaceitGameData? cs2 = null;
-        if (player.Games != null)
+        if (player.Games != null) {
             player.Games.TryGetValue("cs2", out cs2);
+        }
 
         if (cs2 == null) {
             return new FaceitLookupResult {
@@ -495,8 +650,9 @@ public class Faceit : IModule {
             try {
                 await PopulateBanInfoAsync(result, player.PlayerId!);
             } catch (Exception ex) {
-                if (debug)
+                if (debug) {
                     Console.WriteLine($"[DEBUG] OSBase[faceit]: bans lookup failed for {steamId64}: {ex.Message}");
+                }
             }
         }
 
@@ -504,8 +660,9 @@ public class Faceit : IModule {
     }
 
     private async Task PopulateBanInfoAsync(FaceitLookupResult result, string faceitPlayerId) {
-        if (httpClient == null)
+        if (httpClient == null) {
             return;
+        }
 
         string url = $"https://open.faceit.com/data/v4/players/{faceitPlayerId}/bans";
 
@@ -515,14 +672,17 @@ public class Faceit : IModule {
 
         using var response = await httpClient.SendAsync(request);
 
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: FACEIT bans status={(int)response.StatusCode} for player_id={faceitPlayerId}");
+        }
 
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        if (response.StatusCode == HttpStatusCode.NotFound) {
             return;
+        }
 
-        if (!response.IsSuccessStatusCode)
+        if (!response.IsSuccessStatusCode) {
             return;
+        }
 
         string body = await response.Content.ReadAsStringAsync();
 
@@ -531,12 +691,14 @@ public class Faceit : IModule {
         };
 
         var bans = JsonSerializer.Deserialize<FaceitBansResponse>(body, options);
-        if (bans?.Items == null || bans.Items.Count == 0)
+        if (bans?.Items == null || bans.Items.Count == 0) {
             return;
+        }
 
         foreach (var ban in bans.Items) {
-            if (!IsBanActive(ban))
+            if (!IsBanActive(ban)) {
                 continue;
+            }
 
             result.ActiveBan = true;
             result.BanReason =
@@ -549,35 +711,43 @@ public class Faceit : IModule {
     }
 
     private bool IsBanActive(FaceitBanItem? ban) {
-        if (ban == null)
+        if (ban == null) {
             return false;
+        }
 
         if (!string.IsNullOrWhiteSpace(ban.Status)) {
             string status = ban.Status.Trim().ToLowerInvariant();
-            if (status == "active")
+            if (status == "active") {
                 return true;
-            if (status == "expired" || status == "inactive")
+            }
+
+            if (status == "expired" || status == "inactive") {
                 return false;
+            }
         }
 
-        if (ban.ExpiresAt.HasValue)
+        if (ban.ExpiresAt.HasValue) {
             return ban.ExpiresAt.Value > DateTime.UtcNow;
+        }
 
         return true;
     }
 
     private void ApplyLookupResult(ulong steamId64, FaceitLookupResult result) {
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: ApplyLookupResult for {steamId64}, status={result.Status}");
+        }
 
-        if (db == null)
+        if (db == null) {
             return;
+        }
 
         var existingRow = GetCacheRow(steamId64);
         int currentLevel = 0;
 
-        if (existingRow != null && existingRow["cache_level"] != DBNull.Value)
+        if (existingRow != null && existingRow["cache_level"] != DBNull.Value) {
             int.TryParse(existingRow["cache_level"].ToString(), out currentLevel);
+        }
 
         bool changed = HasMeaningfulChanges(existingRow, result);
 
@@ -595,7 +765,7 @@ public class Faceit : IModule {
         DateTime nextCheckAt = GetNextCheckAt(appliedLevel);
 
         string query = @"
-            `faceit_cache`
+            UPDATE `faceit_cache`
             SET
                 `faceit_player_id` = @faceit_player_id,
                 `faceit_nickname` = @faceit_nickname,
@@ -631,18 +801,20 @@ public class Faceit : IModule {
             new MySqlParameter("@steamid64", steamId64)
         );
 
-        if (debug)
+        if (debug) {
             Console.WriteLine($"[DEBUG] OSBase[faceit]: updated cache for {steamId64}, changed={changed}, appliedLevel={appliedLevel}, storedLevel={storedLevel}");
+        }
     }
 
     private void ApplyTemporaryError(ulong steamId64, string errorMessage) {
-        if (db == null)
+        if (db == null) {
             return;
+        }
 
         DateTime retryAt = DateTime.UtcNow.AddHours(1);
 
         string query = @"
-            `faceit_cache`
+            UPDATE `faceit_cache`
             SET
                 `last_checked_at` = UTC_TIMESTAMP(),
                 `next_check_at` = @next_check_at,
@@ -658,8 +830,9 @@ public class Faceit : IModule {
     }
 
     private bool HasMeaningfulChanges(DataRow? row, FaceitLookupResult result) {
-        if (row == null)
+        if (row == null) {
             return true;
+        }
 
         string oldPlayerId = row["faceit_player_id"] == DBNull.Value ? "" : row["faceit_player_id"].ToString() ?? "";
         string oldNickname = row["faceit_nickname"] == DBNull.Value ? "" : row["faceit_nickname"].ToString() ?? "";
@@ -668,28 +841,41 @@ public class Faceit : IModule {
         bool oldBan = row["active_ban"] != DBNull.Value && Convert.ToInt32(row["active_ban"]) == 1;
         bool oldHasAccount = row["has_faceit_account"] != DBNull.Value && Convert.ToInt32(row["has_faceit_account"]) == 1;
 
-        if (oldPlayerId != (result.FaceitPlayerId ?? ""))
+        if (oldPlayerId != (result.FaceitPlayerId ?? "")) {
             return true;
-        if (oldNickname != (result.FaceitNickname ?? ""))
+        }
+
+        if (oldNickname != (result.FaceitNickname ?? "")) {
             return true;
-        if (oldSkill != (result.SkillLevel ?? -1))
+        }
+
+        if (oldSkill != (result.SkillLevel ?? -1)) {
             return true;
-        if (oldElo != (result.FaceitElo ?? -1))
+        }
+
+        if (oldElo != (result.FaceitElo ?? -1)) {
             return true;
-        if (oldBan != result.ActiveBan)
+        }
+
+        if (oldBan != result.ActiveBan) {
             return true;
-        if (oldHasAccount != result.HasFaceitAccount)
+        }
+
+        if (oldHasAccount != result.HasFaceitAccount) {
             return true;
+        }
 
         return false;
     }
 
     private int GetNextCacheLevel(int currentLevel) {
-        if (currentLevel < 0)
+        if (currentLevel < 0) {
             return 0;
+        }
 
-        if (currentLevel >= cacheDays.Length - 1)
+        if (currentLevel >= cacheDays.Length - 1) {
             return cacheDays.Length - 1;
+        }
 
         return currentLevel + 1;
     }
@@ -700,8 +886,9 @@ public class Faceit : IModule {
     }
 
     private void NotifyAdminsFromCache(CCSPlayerController player, DataRow row) {
-        if (!notifyAdminsOnConnect)
+        if (!notifyAdminsOnConnect) {
             return;
+        }
 
         bool hasFaceit = row["has_faceit_account"] != DBNull.Value && Convert.ToInt32(row["has_faceit_account"]) == 1;
         bool activeBan = row["active_ban"] != DBNull.Value && Convert.ToInt32(row["active_ban"]) == 1;
@@ -716,10 +903,11 @@ public class Faceit : IModule {
             return;
         }
 
-        if (onlyNotifyOnBan && !activeBan)
+        if (onlyNotifyOnBan && !activeBan) {
             return;
+        }
 
-        string nickname = row["faceit_nickname"] == DBNull.Value ? player.PlayerName : row["faceit_nickname"].ToString() ?? player.PlayerName;
+        string nickname = row["faceit_nickname"] == DBNull.Value ? player.PlayerName ?? "unknown" : row["faceit_nickname"].ToString() ?? player.PlayerName ?? "unknown";
         string level = row["skill_level"] == DBNull.Value ? "?" : row["skill_level"].ToString() ?? "?";
         string elo = row["faceit_elo"] == DBNull.Value ? "?" : row["faceit_elo"].ToString() ?? "?";
 
@@ -731,12 +919,14 @@ public class Faceit : IModule {
     }
 
     private void NotifyAdminsIfRelevant(ulong steamId64, FaceitLookupResult result) {
-        if (!notifyAdminsOnConnect)
+        if (!notifyAdminsOnConnect) {
             return;
+        }
 
         var player = FindOnlinePlayer(steamId64);
-        if (!IsValidHuman(player))
+        if (!IsValidHuman(player)) {
             return;
+        }
 
         if (!result.HasFaceitAccount) {
             ChatHelper.PrintToAdmins(
@@ -747,8 +937,9 @@ public class Faceit : IModule {
             return;
         }
 
-        if (onlyNotifyOnBan && !result.ActiveBan)
+        if (onlyNotifyOnBan && !result.ActiveBan) {
             return;
+        }
 
         string message = result.ActiveBan
             ? $"{player!.PlayerName} | FACEIT: {result.FaceitNickname ?? "unknown"} | lvl {result.SkillLevel?.ToString() ?? "?"} | elo {result.FaceitElo?.ToString() ?? "?"} | ACTIVE BAN: {result.BanReason ?? "unknown"}"
@@ -759,22 +950,26 @@ public class Faceit : IModule {
 
     private CCSPlayerController? FindOnlinePlayer(ulong steamId64) {
         foreach (var player in Utilities.GetPlayers()) {
-            if (!IsValidHuman(player))
+            if (!IsValidHuman(player)) {
                 continue;
+            }
 
-            if (player!.SteamID == steamId64)
+            if (player!.SteamID == steamId64) {
                 return player;
+            }
         }
 
         return null;
     }
 
     private bool IsValidHuman(CCSPlayerController? player) {
-        if (player == null || !player.IsValid || player.IsBot || player.IsHLTV)
+        if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) {
             return false;
+        }
 
-        if (player.Connected != PlayerConnectedState.PlayerConnected)
+        if (player.Connected != PlayerConnectedState.PlayerConnected) {
             return false;
+        }
 
         return true;
     }

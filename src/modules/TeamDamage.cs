@@ -1,94 +1,152 @@
-using System.IO;
+using System;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.Cvars;
-using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Events;
-using System.Diagnostics.Tracing;
-using System.Reflection;
+using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules;
 
-using System.IO;
-
 public class TeamDamage : IModule {
-    public string ModuleName => "teamdamage";    
+    public string ModuleName => "teamdamage";
+
     private OSBase? osbase;
     private Config? config;
+
+    private bool handlersLoaded = false;
+    private bool isActive = false;
+
+    private const int TEAM_T = (int)CsTeam.Terrorist;
+    private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
+        isActive = true;
 
-        // Register required global config values
-        config.RegisterGlobalConfigValue($"{ModuleName}", "1");
-
-        if (osbase == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
-            return;
-        } else if (config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
+        if (osbase == null || config == null) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
+            isActive = false;
             return;
         }
 
-        if (config?.GetGlobalConfigValue($"{ModuleName}", "0") == "1") {
-            loadEventHandlers();
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
-        } else {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
+        config.RegisterGlobalConfigValue(ModuleName, "1");
+
+        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
+            isActive = false;
+            return;
         }
+
+        LoadHandlers();
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
-    private void loadEventHandlers() {
-        if(osbase == null) return;
-        osbase.RegisterEventHandler<EventPlayerHurt>(onPlayerHurt);
-        osbase.RegisterEventHandler<EventPlayerDeath>(onPlayerDeath);
+    public void Unload() {
+        isActive = false;
+
+        if (osbase != null && handlersLoaded) {
+            osbase.DeregisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
+            osbase.DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+            handlersLoaded = false;
+        }
+
+        config = null;
+        osbase = null;
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    /* PLAYER HURT */
-    private HookResult onPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
-        if (eventInfo.DmgHealth == 0) 
+    public void ReloadConfig(Config inConfig) {
+        config = inConfig;
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
+    }
+
+    private void LoadHandlers() {
+        if (osbase == null || handlersLoaded) {
+            return;
+        }
+
+        osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
+        osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+
+        handlersLoaded = true;
+    }
+
+    private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
+        if (!isActive) {
             return HookResult.Continue;
-        
+        }
+
+        if (eventInfo.DmgHealth <= 0) {
+            return HookResult.Continue;
+        }
 
         var attacker = eventInfo.Attacker;
         var victim = eventInfo.Userid;
 
-        if (attacker != null && 
-            victim != null &&
-            attacker.Team == victim.Team) {
-                if ( attacker == victim ) {
-                    return HookResult.Continue;
-                }
-                osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
-                Server.PrintToChatAll($"[TeamDamage] {attacker.PlayerName} hurt {victim.PlayerName}");
+        if (!IsValidFriendlyFire(attacker, victim)) {
+            return HookResult.Continue;
         }
-        
+
+        int attackerUserId = attacker!.UserId!.Value;
+        string attackerName = attacker.PlayerName ?? "Unknown";
+        string victimName = victim!.PlayerName ?? "Unknown";
+
+        osbase?.SendCommand($"css_slap \"#{attackerUserId}\" {eventInfo.DmgHealth}");
+        Server.PrintToChatAll($"[TeamDamage] {attackerName} hurt {victimName}");
+
         return HookResult.Continue;
     }
 
-    /* PLAYER DEATH */  
-    private HookResult onPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
-        if (eventInfo.DmgHealth == 0) 
+    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+        if (!isActive) {
             return HookResult.Continue;
-        
+        }
 
         var attacker = eventInfo.Attacker;
         var victim = eventInfo.Userid;
 
-        if (attacker != null && 
-            victim != null &&
-            attacker.Team == victim.Team) {
-                if ( attacker == victim ) {
-                    return HookResult.Continue;
-                }
-                osbase?.SendCommand($"css_slap \"#{attacker.UserId}\" {eventInfo.DmgHealth}");
-                Server.PrintToChatAll($"[TeamKill] {attacker.PlayerName} killed {victim.PlayerName}");
-                attacker.PrintToCenterAlert($"!![TeamKill] You killed {victim.PlayerName}!!");
+        if (!IsValidFriendlyFire(attacker, victim)) {
+            return HookResult.Continue;
         }
-        
+
+        int slapDamage = eventInfo.DmgHealth > 0 ? eventInfo.DmgHealth : 1;
+        int attackerUserId = attacker!.UserId!.Value;
+        string attackerName = attacker.PlayerName ?? "Unknown";
+        string victimName = victim!.PlayerName ?? "Unknown";
+
+        osbase?.SendCommand($"css_slap \"#{attackerUserId}\" {slapDamage}");
+        Server.PrintToChatAll($"[TeamKill] {attackerName} killed {victimName}");
+        attacker.PrintToCenterAlert($"!![TeamKill] You killed {victimName}!!");
+
         return HookResult.Continue;
     }
 
+    private bool IsValidFriendlyFire(CCSPlayerController? attacker, CCSPlayerController? victim) {
+        if (attacker == null || victim == null) {
+            return false;
+        }
+
+        if (!attacker.IsValid || !victim.IsValid) {
+            return false;
+        }
+
+        if (!attacker.UserId.HasValue || !victim.UserId.HasValue) {
+            return false;
+        }
+
+        if (attacker.UserId.Value == victim.UserId.Value) {
+            return false;
+        }
+
+        if (attacker.TeamNum != victim.TeamNum) {
+            return false;
+        }
+
+        if (attacker.TeamNum != TEAM_T && attacker.TeamNum != TEAM_CT) {
+            return false;
+        }
+
+        return true;
+    }
 }

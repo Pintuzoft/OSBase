@@ -14,6 +14,7 @@ public class QuickDefuse : IModule {
 
     private const float SessionTimeoutSeconds = 10.0f;
     private const float ConfirmTimeoutSeconds = 3.0f;
+    private bool handlersLoaded = false;
 
     private OSBase? osbase;
     private Config? config;
@@ -23,7 +24,6 @@ public class QuickDefuse : IModule {
     private readonly Dictionary<IntPtr, ActiveDefuseSession> activeDefuseSessions = new();
 
     private PlayerButtons? activeBombDirection = null;
-    private bool handlersLoaded = false;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
