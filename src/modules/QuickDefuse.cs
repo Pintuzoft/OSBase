@@ -23,6 +23,7 @@ public class QuickDefuse : IModule {
     private readonly Dictionary<IntPtr, ActiveDefuseSession> activeDefuseSessions = new();
 
     private PlayerButtons? activeBombDirection = null;
+    private bool handlersLoaded = false;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -47,12 +48,49 @@ public class QuickDefuse : IModule {
         }
 
         LoadHandlers();
+        ClearAllState();
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
+    public void Unload() {
+        if (osbase != null && handlersLoaded) {
+            osbase.RemoveListener<CoreListeners.OnTick>(OnTick);
+            osbase.RemoveListener<CoreListeners.OnMapEnd>(OnMapEnd);
+            osbase.RemoveListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
+
+            osbase.DeregisterEventHandler<EventRoundStart>(OnRoundStart);
+
+            osbase.DeregisterEventHandler<EventBombBeginplant>(OnBombBeginPlant);
+            osbase.DeregisterEventHandler<EventBombAbortplant>(OnBombAbortPlant);
+            osbase.DeregisterEventHandler<EventBombPlanted>(OnBombPlanted);
+
+            osbase.DeregisterEventHandler<EventBombBegindefuse>(OnBombBeginDefuse);
+            osbase.DeregisterEventHandler<EventBombAbortdefuse>(OnBombAbortDefuse);
+            osbase.DeregisterEventHandler<EventBombDefused>(OnBombDefused);
+            osbase.DeregisterEventHandler<EventBombExploded>(OnBombExploded);
+
+            osbase.DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+            osbase.DeregisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+
+            handlersLoaded = false;
+        }
+
+        ClearAllState();
+
+        osbase = null;
+        config = null;
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
+    }
+
+    public void ReloadConfig(Config inConfig) {
+        config = inConfig;
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
+    }
+
     private void LoadHandlers() {
-        if (osbase == null) {
+        if (osbase == null || handlersLoaded) {
             return;
         }
 
@@ -73,6 +111,8 @@ public class QuickDefuse : IModule {
 
         osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+
+        handlersLoaded = true;
     }
 
     private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
