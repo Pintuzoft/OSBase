@@ -13,6 +13,7 @@ public class QuickDefuse : IModule {
     public string ModuleName => "quickdefuse";
 
     private const float SessionTimeoutSeconds = 10.0f;
+    private const float ConfirmTimeoutSeconds = 3.0f;
 
     private OSBase? osbase;
     private Config? config;
@@ -108,7 +109,9 @@ public class QuickDefuse : IModule {
         PlayerButtons chosenDirection;
         bool wasRandom = true;
 
-        if (player != null && activePlantSessions.TryGetValue(player.Handle, out ActivePlantSession? session) && session.SelectedDirection != null) {
+        if (player != null &&
+            activePlantSessions.TryGetValue(player.Handle, out ActivePlantSession? session) &&
+            session.SelectedDirection != null) {
             chosenDirection = session.SelectedDirection.Value;
             wasRandom = false;
         } else {
@@ -218,7 +221,12 @@ public class QuickDefuse : IModule {
             }
 
             CPlantedC4? bomb = FindPlantedBomb();
-            if (bomb == null || bomb.HasExploded || bomb.BombDefused || !bomb.BombTicking || !bomb.BeingDefused || bomb.CannotBeDefused) {
+            if (bomb == null ||
+                bomb.HasExploded ||
+                bomb.BombDefused ||
+                !bomb.BombTicking ||
+                !bomb.BeingDefused ||
+                bomb.CannotBeDefused) {
                 EndDefuseSession(player);
                 continue;
             }
@@ -227,7 +235,15 @@ public class QuickDefuse : IModule {
                 continue;
             }
 
-            player.PrintToCenterHtml(BuildDefuseMenuHtml());
+            if (session.IsConfirming && Server.CurrentTime >= session.ConfirmExpiresAt) {
+                ResetDefuseConfirm(session);
+            }
+
+            if (session.IsConfirming && session.PendingDirection != null) {
+                player.PrintToCenterHtml(BuildDefuseConfirmMenuHtml(session.PendingDirection.Value));
+            } else {
+                player.PrintToCenterHtml(BuildDefuseMenuHtml());
+            }
         }
     }
 
@@ -242,23 +258,52 @@ public class QuickDefuse : IModule {
         }
 
         if (activeDefuseSessions.TryGetValue(player.Handle, out ActiveDefuseSession? defuseSession)) {
-            if (!defuseSession.SelectionLocked) {
-                defuseSession.SelectionLocked = true;
-                HandleDefuseSelection(player, selectedDirection.Value, defuseSession.CorrectDirection, defuseSession.HasDefuseKit);
-            }
-
+            HandleDefuseInput(player, defuseSession, selectedDirection.Value);
             return;
         }
 
         if (activePlantSessions.TryGetValue(player.Handle, out ActivePlantSession? plantSession)) {
-            if (!plantSession.SelectionLocked) {
-                plantSession.SelectionLocked = true;
-                plantSession.SelectedDirection = selectedDirection.Value;
-
-                ClearCenter(player);
-                PrintPlantSelection(player, selectedDirection.Value);
-            }
+            HandlePlantInput(player, plantSession, selectedDirection.Value);
         }
+    }
+
+    private void HandlePlantInput(CCSPlayerController player, ActivePlantSession session, PlayerButtons direction) {
+        if (session.SelectionLocked) {
+            return;
+        }
+
+        session.SelectionLocked = true;
+        session.SelectedDirection = direction;
+
+        ClearCenter(player);
+        PrintPlantSelection(player, direction);
+    }
+
+    private void HandleDefuseInput(CCSPlayerController player, ActiveDefuseSession session, PlayerButtons direction) {
+        if (session.SelectionLocked) {
+            return;
+        }
+
+        if (!session.IsConfirming) {
+            session.IsConfirming = true;
+            session.PendingDirection = direction;
+            session.ConfirmExpiresAt = Server.CurrentTime + ConfirmTimeoutSeconds;
+            return;
+        }
+
+        if (session.PendingDirection == direction) {
+            session.SelectionLocked = true;
+            HandleDefuseSelection(player, direction, session.CorrectDirection, session.HasDefuseKit);
+            return;
+        }
+
+        ResetDefuseConfirm(session);
+    }
+
+    private static void ResetDefuseConfirm(ActiveDefuseSession session) {
+        session.IsConfirming = false;
+        session.PendingDirection = null;
+        session.ConfirmExpiresAt = 0.0f;
     }
 
     private void StartPlantSession(CCSPlayerController player) {
@@ -279,8 +324,11 @@ public class QuickDefuse : IModule {
             Player = player,
             HasDefuseKit = hasDefuseKit,
             CorrectDirection = activeBombDirection.Value,
+            SelectionLocked = false,
             ExpiresAt = Server.CurrentTime + SessionTimeoutSeconds,
-            SelectionLocked = false
+            IsConfirming = false,
+            PendingDirection = null,
+            ConfirmExpiresAt = 0.0f
         };
 
         if (IsDebugEnabled()) {
@@ -439,6 +487,33 @@ public class QuickDefuse : IModule {
         });
     }
 
+    private static string BuildDefuseConfirmMenuHtml(PlayerButtons direction) {
+        return string.Join("<br>", new[] {
+            "<b>Quick Defuse</b>",
+            "",
+            $"<font color='white'>Press the same movement key again to cut {GetCenterColorNameHtml(direction)}</font>",
+            $"<font color='grey'>Confirm expires in {ConfirmTimeoutSeconds:0} seconds</font>",
+            "",
+            "<font color='grey'>Press another movement key to cancel</font>"
+        });
+    }
+
+    private static string GetCenterColorNameHtml(PlayerButtons direction) {
+        if (direction == PlayerButtons.Forward) {
+            return "<font color='red'>Red</font>";
+        }
+
+        if (direction == PlayerButtons.Moveleft) {
+            return "<font color='deepskyblue'>Blue</font>";
+        }
+
+        if (direction == PlayerButtons.Back) {
+            return "<font color='yellow'>Yellow</font>";
+        }
+
+        return "<font color='lime'>Green</font>";
+    }
+
     private static string ColorWord(string text, char color) {
         return $"{color}{text}{ChatColors.Default}";
     }
@@ -478,20 +553,20 @@ public class QuickDefuse : IModule {
     }
 
     private void PrintCorrectResult(CCSPlayerController player, PlayerButtons selectedDirection, bool hasDefuseKit) {
-        player.PrintToChat(
-            $"[OSBase] {ChatColors.Green}Correct{ChatColors.Default} | Cut: {GetColorNameText(selectedDirection)} | Odds: {GetOddsText(hasDefuseKit)}"
+        Server.PrintToChatAll(
+            $"[OSBase] {player.PlayerName} cut: {GetColorNameText(selectedDirection)} | Result: {ChatColors.Green}Correct{ChatColors.Default} | Odds: {GetOddsText(hasDefuseKit)}"
         );
     }
 
     private void PrintIncorrectResult(CCSPlayerController player, PlayerButtons selectedDirection, PlayerButtons correctDirection, bool hasDefuseKit) {
-        player.PrintToChat(
-            $"[OSBase] {ChatColors.Red}Incorrect{ChatColors.Default} | Cut: {GetColorNameText(selectedDirection)} | Correct: {GetColorNameText(correctDirection)} | Odds: {GetOddsText(hasDefuseKit)}"
+        Server.PrintToChatAll(
+            $"[OSBase] {player.PlayerName} cut: {GetColorNameText(selectedDirection)} | Result: {ChatColors.Red}Incorrect{ChatColors.Default} | Correct: {GetColorNameText(correctDirection)} | Odds: {GetOddsText(hasDefuseKit)}"
         );
     }
 
     private void PrintNoKitFailResult(CCSPlayerController player, PlayerButtons selectedDirection) {
-        player.PrintToChat(
-            $"[OSBase] {ChatColors.Red}Incorrect{ChatColors.Default} | Cut: {GetColorNameText(selectedDirection)} | Correct cable, but without a defuse kit the bomb exploded anyway | Odds: {GetOddsText(false)}"
+        Server.PrintToChatAll(
+            $"[OSBase] {player.PlayerName} cut: {GetColorNameText(selectedDirection)} | Result: {ChatColors.Red}Incorrect{ChatColors.Default} | Correct: {GetColorNameText(selectedDirection)} | Odds: {GetOddsText(false)}"
         );
     }
 
@@ -508,5 +583,8 @@ public class QuickDefuse : IModule {
         public bool HasDefuseKit { get; set; }
         public bool SelectionLocked { get; set; }
         public float ExpiresAt { get; set; }
+        public bool IsConfirming { get; set; }
+        public PlayerButtons? PendingDirection { get; set; }
+        public float ConfirmExpiresAt { get; set; }
     }
 }
