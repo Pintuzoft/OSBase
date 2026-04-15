@@ -26,9 +26,9 @@ public class AutoAssign : IModule {
     // Guard recent team to fight engine SPEC fallback
     private readonly Dictionary<ulong, (CsTeam team, DateTime until)> teamGuards = new();
 
-    // Track who we actually auto-assigned from SPEC/UNASSIGNED.
-    // Only these are eligible for the post-assign correction pass.
-    private readonly HashSet<ulong> justAutoAssigned = new();
+    // Track which team we intentionally assigned.
+    // Correction pass may only restore this exact team, never recalculate.
+    private readonly Dictionary<ulong, CsTeam> justAutoAssigned = new();
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -97,9 +97,7 @@ public class AutoAssign : IModule {
     }
 
     private void OnMapStart(string mapName) {
-        warmupActive = true;
-        teamGuards.Clear();
-        justAutoAssigned.Clear();
+        ResetState();
     }
 
     private HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup ev, GameEventInfo info) {
@@ -115,14 +113,8 @@ public class AutoAssign : IModule {
     }
 
     private HookResult OnMapTransition(EventMapTransition ev, GameEventInfo info) {
-        warmupActive = true;
-        teamGuards.Clear();
-        justAutoAssigned.Clear();
+        ResetState();
         return HookResult.Continue;
-    }
-
-    private static bool IsPlayable(byte teamNum) {
-        return teamNum == (byte)CsTeam.Terrorist || teamNum == (byte)CsTeam.CounterTerrorist;
     }
 
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull ev, GameEventInfo info) {
@@ -131,7 +123,7 @@ public class AutoAssign : IModule {
         }
 
         var player = ev.Userid;
-        if (player == null || !player.IsValid || player.IsHLTV || player.IsBot) {
+        if (!IsEligiblePlayer(player)) {
             return HookResult.Continue;
         }
 
@@ -141,75 +133,68 @@ public class AutoAssign : IModule {
                     return;
                 }
 
-                if (player == null || !player.IsValid || player.IsHLTV || player.IsBot) {
+                if (!IsEligiblePlayer(player)) {
                     return;
                 }
 
-                // If the engine already placed them on a playable team, DO NOT MOVE THEM.
-                // This avoids cross-team spawns caused by late swaps.
-                if (IsPlayable(player.TeamNum)) {
-                    var teamNow = (CsTeam)player.TeamNum;
-                    teamGuards[player.SteamID] = (teamNow, DateTime.UtcNow.AddSeconds(1));
+                var safePlayer = player!;
 
-                    // Warmup-only respawn if they happen to be dead for some reason
-                    if (warmupActive && !player.PawnIsAlive) {
-                        TryForceSpawn(player);
+                // Engine already placed the player on a real team. Leave it alone.
+                if (IsPlayable(safePlayer.TeamNum)) {
+                    var teamNow = (CsTeam)safePlayer.TeamNum;
+                    teamGuards[safePlayer.SteamID] = (teamNow, DateTime.UtcNow.AddSeconds(1));
+
+                    if (warmupActive && !safePlayer.PawnIsAlive) {
+                        TryForceSpawn(safePlayer);
                     }
 
                     return;
                 }
 
-                // Only assign if currently non-playable (Unassigned/Spectator)
-                CsTeam finalTeam;
+                CsTeam intendedTeam;
                 lock (TeamAssignLock) {
-                    var all = Utilities.GetPlayers().Where(x => x != null && x.IsValid && !x.IsHLTV);
+                    var all = Utilities.GetPlayers().Where(x => x != null && x.IsValid && !x.IsHLTV && !x.IsBot);
                     int ct = all.Count(x => x.TeamNum == (byte)CsTeam.CounterTerrorist);
                     int tt = all.Count(x => x.TeamNum == (byte)CsTeam.Terrorist);
 
-                    finalTeam = DecideTeamForJoin(ct, tt);
-                    player.SwitchTeam(finalTeam);
+                    intendedTeam = DecideTeamForJoin(ct, tt);
+                    safePlayer.SwitchTeam(intendedTeam);
                 }
 
-                // Mark that we auto-assigned this player from non-playable → eligible for correction
-                justAutoAssigned.Add(player.SteamID);
+                justAutoAssigned[safePlayer.SteamID] = intendedTeam;
 
-                // Correction pass ONLY for those we just assigned
                 osbase.AddTimer(CorrectionDelay, () => {
                     try {
                         if (!isActive) {
                             return;
                         }
 
-                        if (player == null || !player.IsValid || player.IsHLTV || player.IsBot) {
+                        if (!IsEligiblePlayer(safePlayer)) {
                             return;
                         }
 
-                        // If they already spawned, do NOT switch anymore.
-                        if (!player.PawnIsAlive && justAutoAssigned.Contains(player.SteamID)) {
-                            lock (TeamAssignLock) {
-                                var all2 = Utilities.GetPlayers().Where(x => x != null && x.IsValid && !x.IsHLTV);
-                                int ct2 = all2.Count(x => x.TeamNum == (byte)CsTeam.CounterTerrorist);
-                                int tt2 = all2.Count(x => x.TeamNum == (byte)CsTeam.Terrorist);
-
-                                var corrected = DecideTeamForJoin(ct2, tt2);
-                                if ((byte)corrected != player.TeamNum) {
-                                    player.SwitchTeam(corrected);
-                                }
-                            }
+                        if (!justAutoAssigned.TryGetValue(safePlayer.SteamID, out var storedTeam)) {
+                            return;
                         }
 
-                        var teamNow = (CsTeam)player.TeamNum;
-                        string color = teamNow == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
-                        player.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{teamNow}\x01 team.");
-
-                        teamGuards[player.SteamID] = (teamNow, DateTime.UtcNow.AddSeconds(1));
-
-                        if (warmupActive && !player.PawnIsAlive) {
-                            TryForceSpawn(player);
+                        // Only restore if engine bounced the player back to a non-playable team.
+                        if (!safePlayer.PawnIsAlive && !IsPlayable(safePlayer.TeamNum)) {
+                            safePlayer.SwitchTeam(storedTeam);
                         }
-                    } catch {
+
+                        CsTeam finalTeam = IsPlayable(safePlayer.TeamNum) ? (CsTeam)safePlayer.TeamNum : storedTeam;
+                        string color = finalTeam == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
+
+                        safePlayer.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{finalTeam}\x01 team.");
+                        teamGuards[safePlayer.SteamID] = (finalTeam, DateTime.UtcNow.AddSeconds(1));
+
+                        if (warmupActive && !safePlayer.PawnIsAlive) {
+                            TryForceSpawn(safePlayer);
+                        }
+                    } catch (Exception ex) {
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}] correction failed: {ex.Message}");
                     } finally {
-                        justAutoAssigned.Remove(player.SteamID);
+                        justAutoAssigned.Remove(safePlayer.SteamID);
                     }
                 });
             } catch (Exception ex) {
@@ -227,34 +212,36 @@ public class AutoAssign : IModule {
 
         try {
             var player = ev.Userid;
-            if (player == null || !player.IsValid || player.IsHLTV || player.IsBot) {
+            if (!IsEligiblePlayer(player)) {
                 return HookResult.Continue;
             }
+
+            var safePlayer = player!;
 
             if (!warmupActive) {
                 return HookResult.Continue;
             }
 
-            if (!teamGuards.TryGetValue(player.SteamID, out var guard)) {
+            if (!teamGuards.TryGetValue(safePlayer.SteamID, out var guard)) {
                 return HookResult.Continue;
             }
 
             if (DateTime.UtcNow > guard.until) {
-                teamGuards.Remove(player.SteamID);
+                teamGuards.Remove(safePlayer.SteamID);
                 return HookResult.Continue;
             }
 
-            // If engine bounces them to SPEC right after join, push them back
-            if (player.TeamNum == (byte)CsTeam.Spectator && !player.PawnIsAlive) {
-                player.SwitchTeam(guard.team);
+            // If engine bounces them right back to SPEC during warmup, restore intended team.
+            if (!IsPlayable(safePlayer.TeamNum) && !safePlayer.PawnIsAlive) {
+                safePlayer.SwitchTeam(guard.team);
             }
-        } catch {
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] OnPlayerTeam failed: {ex.Message}");
         }
 
         return HookResult.Continue;
     }
 
-    // New: joining decision ONLY
     private static CsTeam DecideTeamForJoin(int ct, int tt) {
         int dCT = Math.Abs((ct + 1) - tt);
         int dT = Math.Abs(ct - (tt + 1));
@@ -286,11 +273,11 @@ public class AutoAssign : IModule {
                     return;
                 }
 
-                if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) {
+                if (!IsEligiblePlayer(player)) {
                     return;
                 }
 
-                if (!player.PawnIsAlive) {
+                if (!player!.PawnIsAlive) {
                     try {
                         player.Respawn();
                     } catch {
@@ -304,5 +291,13 @@ public class AutoAssign : IModule {
         warmupActive = true;
         teamGuards.Clear();
         justAutoAssigned.Clear();
+    }
+
+    private static bool IsPlayable(byte teamNum) {
+        return teamNum == (byte)CsTeam.Terrorist || teamNum == (byte)CsTeam.CounterTerrorist;
+    }
+
+    private static bool IsEligiblePlayer(CCSPlayerController? player) {
+        return player != null && player.IsValid && !player.IsHLTV && !player.IsBot;
     }
 }
