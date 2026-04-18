@@ -20,6 +20,7 @@ public class AutoAssign : IModule {
 
     private const float AssignDelay = 0.50f;
     private const float RetryDelay = 0.40f;
+    private const float WarmupRespawnDelay = 0.20f;
     private const float GuardSeconds = 2.50f;
     private const float AutoAssignCloseAt = 55.0f;
 
@@ -30,7 +31,10 @@ public class AutoAssign : IModule {
     // Prevent duplicate join flows for the same player.
     private readonly HashSet<ulong> pendingAssignments = new();
 
-    // Lets TeamBalancer skip freshly auto-assigned players if you want.
+    // Prevent duplicate warmup respawn timers per player.
+    private readonly HashSet<ulong> pendingWarmupRespawns = new();
+
+    // Lets TeamBalancer skip freshly auto-assigned players if it wants to.
     private readonly Dictionary<ulong, DateTime> recentAutoAssign = new();
 
     public void Load(OSBase inOsbase, Config inConfig) {
@@ -55,7 +59,8 @@ public class AutoAssign : IModule {
         ResetState();
         LoadHandlers();
 
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (assign={AssignDelay:0.00}s retry={RetryDelay:0.00}s close={AutoAssignCloseAt:0.00}s).");
+        Console.WriteLine(
+            $"[DEBUG] OSBase[{ModuleName}] loaded (assign={AssignDelay:0.00}s retry={RetryDelay:0.00}s respawn={WarmupRespawnDelay:0.00}s close={AutoAssignCloseAt:0.00}s).");
     }
 
     public void Unload() {
@@ -106,6 +111,7 @@ public class AutoAssign : IModule {
         warmupActive = true;
         autoAssignOpen = true;
         pendingAssignments.Clear();
+        pendingWarmupRespawns.Clear();
         recentAutoAssign.Clear();
 
         int generation = stateGeneration;
@@ -127,6 +133,7 @@ public class AutoAssign : IModule {
         warmupActive = false;
         autoAssignOpen = false;
         pendingAssignments.Clear();
+        pendingWarmupRespawns.Clear();
         recentAutoAssign.Clear();
         return HookResult.Continue;
     }
@@ -191,8 +198,15 @@ public class AutoAssign : IModule {
 
             var player = livePlayer!;
 
-            // If engine or another module already put them on a real team, stop.
+            // If engine or another module already put them on a real team, leave team selection alone,
+            // but still make sure they spawn during warmup.
             if (IsPlayable(player.TeamNum)) {
+                recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
+
+                if (!player.PawnIsAlive) {
+                    ScheduleWarmupRespawn(steamId, generation);
+                }
+
                 return;
             }
 
@@ -216,9 +230,48 @@ public class AutoAssign : IModule {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {(retry ? "retry" : "assign")} steamid={steamId} ct={ct} t={tt} -> {intendedTeam}");
             player.ChangeTeam(intendedTeam);
+
+            ScheduleWarmupRespawn(steamId, generation);
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] TryAssignPlayer failed for {steamId}: {ex.Message}");
         }
+    }
+
+    private void ScheduleWarmupRespawn(ulong steamId, int generation, float delay = WarmupRespawnDelay) {
+        if (!isActive || osbase == null || !warmupActive) {
+            return;
+        }
+
+        if (!pendingWarmupRespawns.Add(steamId)) {
+            return;
+        }
+
+        osbase.AddTimer(delay, () => {
+            try {
+                if (!isActive || osbase == null || !warmupActive || generation != stateGeneration) {
+                    return;
+                }
+
+                var player = FindHumanBySteamId(steamId);
+                if (!IsEligiblePlayer(player)) {
+                    return;
+                }
+
+                var p = player!;
+                if (!IsPlayable(p.TeamNum)) {
+                    return;
+                }
+
+                if (!p.PawnIsAlive) {
+                    p.Respawn();
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] respawned {steamId} after autoassign.");
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] warmup respawn failed for {steamId}: {ex.Message}");
+            } finally {
+                pendingWarmupRespawns.Remove(steamId);
+            }
+        }, TimerFlags.STOP_ON_MAPCHANGE);
     }
 
     private void AnnounceFinalTeam(ulong steamId, int generation) {
@@ -307,6 +360,7 @@ public class AutoAssign : IModule {
         warmupActive = false;
         autoAssignOpen = false;
         pendingAssignments.Clear();
+        pendingWarmupRespawns.Clear();
         recentAutoAssign.Clear();
     }
 
