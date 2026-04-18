@@ -20,6 +20,7 @@ namespace OSBase.Modules {
         private Config? config;
         private GameStats? gameStats;
         private bool isActive = false;
+
         // Teams
         private const int TEAM_S  = (int)CsTeam.Spectator;
         private const int TEAM_T  = (int)CsTeam.Terrorist;
@@ -33,10 +34,8 @@ namespace OSBase.Modules {
 
         // Warmup policy
         private const float WARMUP_TARGET_DEVIATION = 1500f;
-
-        // Safer than 44s (44 was too close to warmup end, could miss and roundNumber becomes 1)
-        private const float WARMUP_BURST_AT        = 40f;
-        private const int   WARMUP_FINAL_MAX_SWAPS = 10;
+        private const float WARMUP_BURST_AT = 42f;
+        private const int WARMUP_FINAL_MAX_SWAPS = 10;
         private bool warmupBalancedThisMap = false;
 
         // Round 1 safety-net (size-fix only)
@@ -44,20 +43,20 @@ namespace OSBase.Modules {
 
         // Game structure (you run 10 + 10)
         private const int HALF_ROUNDS = 10;
-        private const int MAX_ROUNDS  = 20;
+        private const int MAX_ROUNDS = 20;
 
         // Swap thresholds (mid/late)
-        private const float MID_SWAP_THRESHOLD  = 1500f;
+        private const float MID_SWAP_THRESHOLD = 1500f;
         private const float LATE_SWAP_THRESHOLD = 1900f;
-        private const float LATE_HYSTERESIS     = 700f;
-        private const float MIN_PROJECTED_GAIN  = 800f;
+        private const float LATE_HYSTERESIS = 700f;
+        private const float MIN_PROJECTED_GAIN = 800f;
 
         // Anti-churn
         private const int MIN_ROUNDS_BETWEEN_SWAPS = 3;
-        private const int NO_SWAP_LAST_N_ROUNDS    = 3;
-        private const int MAX_LATE_SWAPS           = 1;
-        private const int MAX_SWAPS_PER_MAP        = 3;
-        private const float EMERGENCY_GAP          = 3500f;
+        private const int NO_SWAP_LAST_N_ROUNDS = 3;
+        private const int MAX_LATE_SWAPS = 1;
+        private const int MAX_SWAPS_PER_MAP = 3;
+        private const float EMERGENCY_GAP = 3500f;
 
         private int lastSwapRound = -999;
         private int lateSwapsThisHalf = 0;
@@ -99,6 +98,7 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] registering: {ex.Message}");
             }
         }
+
         private void LoadHandlers() {
             if (osbase == null || handlersLoaded) {
                 return;
@@ -114,6 +114,7 @@ namespace OSBase.Modules {
 
             handlersLoaded = true;
         }
+
         public void Unload() {
             warmupBalanceTimer?.Kill();
             warmupBalanceTimer = null;
@@ -153,6 +154,7 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
         }
+
         public void ReloadConfig(Config inConfig) {
             config = inConfig;
             gameStats = osbase?.GetGameStats();
@@ -161,6 +163,7 @@ namespace OSBase.Modules {
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
         }
+
         private void LoadMapInfo() {
             mapBombsites.Clear();
 
@@ -179,6 +182,7 @@ namespace OSBase.Modules {
                 }
             }
         }
+
         private void OnMapStart(string mapName) {
             currentMap = mapName;
             swapsThisMap = 0;
@@ -220,13 +224,11 @@ namespace OSBase.Modules {
         // ===== Team snapshot + halftime latch helpers =====
 
         private void SyncTeams(GameStats gs) {
-            // Keep snapshot fresh before any reads during warmup/roundend timers.
             gs.SyncTeamsNow();
             UpdateThreePlayerHalftimeMode(gs);
         }
 
         private void UpdateThreePlayerHalftimeMode(GameStats gs) {
-            // Self-healing: if playercount changes away from 3, drop immediately.
             int total = gs.getTeam(TEAM_T).numPlayers() + gs.getTeam(TEAM_CT).numPlayers();
 
             if (total != 3) {
@@ -237,19 +239,17 @@ namespace OSBase.Modules {
                 return;
             }
 
-            // Never active on 2-bombsite maps.
             if (bombsites != 1) {
                 threePlayerHalftimeMode = false;
                 return;
             }
 
-            // Do not auto-enable here; we only latch it at halftime.
+            // Do not auto-enable here; latch only at halftime.
         }
 
         // ===== Event handlers =====
 
         private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
-            // Only clear immunity; do not move after warmup to avoid spawn bugs
             var gs = osbase?.GetGameStats();
             if (gs != null) {
                 gs.SyncTeamsNow();
@@ -278,7 +278,6 @@ namespace OSBase.Modules {
                 gs.SyncTeamsNow();
                 int total = gs.getTeam(TEAM_T).numPlayers() + gs.getTeam(TEAM_CT).numPlayers();
 
-                // Latch ONLY if we truly had 3 players at halftime and map has 1 bombsite
                 threePlayerHalftimeMode = (bombsites == 1 && total == 3);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Halftime: threePlayerHalftimeMode={threePlayerHalftimeMode} total={total}");
             } else {
@@ -289,6 +288,17 @@ namespace OSBase.Modules {
         }
 
         private HookResult OnRoundEnd(EventRoundEnd ev, GameEventInfo info) {
+            var gs = osbase?.GetGameStats();
+            if (gs == null) {
+                return HookResult.Continue;
+            }
+
+            // Never run normal round-end balancing during warmup.
+            // Warmup balancing is handled only by WarmupFinalBalance().
+            if (gs.roundNumber == 0) {
+                return HookResult.Continue;
+            }
+
             osbase?.AddTimer(6.5f, () => BalanceAtRoundEnd());
             return HookResult.Continue;
         }
@@ -376,7 +386,6 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}] WarmupFinalBalance size-fix: T={tCount},CT={cCount} -> T={idealT},CT={idealCT} moves={moves} from={(moveFromT ? "T" : "CT")}");
                 EvenTeamSizesWarmup(gs, tStats, cStats, moveFromT, moves, reason: "warmup_sizefix");
 
-                // refresh
                 tStats = gs.getTeam(TEAM_T);
                 cStats = gs.getTeam(TEAM_CT);
                 tCount = tStats.numPlayers();
@@ -424,7 +433,6 @@ namespace OSBase.Modules {
 
                 swapsDone++;
 
-                // refresh
                 tStats = gs.getTeam(TEAM_T);
                 cStats = gs.getTeam(TEAM_CT);
             }
@@ -441,6 +449,11 @@ namespace OSBase.Modules {
             if (!isActive) return;
             var gs = osbase?.GetGameStats();
             if (gs == null) return;
+
+            // Safety guard: no live round-end balancing during warmup.
+            if (gs.roundNumber == 0) {
+                return;
+            }
 
             SyncTeams(gs);
 
@@ -623,7 +636,6 @@ namespace OSBase.Modules {
         }
 
         private (int idealT, int idealCT) ComputeIdealSizesForRound(GameStats gs, int tCount, int ctCount) {
-            // Keep halftime-mode up-to-date; auto-resets on join/leave via playercount change.
             UpdateThreePlayerHalftimeMode(gs);
 
             int total = tCount + ctCount;
@@ -634,13 +646,10 @@ namespace OSBase.Modules {
             bool isOdd = (total % 2) != 0;
             bool lastRoundFirstHalf = (gs.roundNumber == HALF_ROUNDS);
 
-            // Prevent halftime pendulum for 2v1 (don’t “prep flip” on the halftime round)
             if (isOdd && lastRoundFirstHalf && total == 3) {
                 return (baseT, baseCT);
             }
 
-            // If we latched at halftime AND still total==3 on 1-bombsite maps:
-            // after halftime, enforce 1T vs 2CT (best-solo rule will place best on solo side).
             if (threePlayerHalftimeMode && bombsites == 1 && total == 3 && gs.roundNumber > HALF_ROUNDS) {
                 return (1, 2);
             }
@@ -649,7 +658,6 @@ namespace OSBase.Modules {
                 return (baseT, baseCT);
             }
 
-            // Existing odd special-case for larger odd playercounts (kept)
             if (bombsites == 2) {
                 if (baseCT > baseT) {
                     baseCT--;
