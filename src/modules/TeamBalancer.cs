@@ -34,7 +34,7 @@ namespace OSBase.Modules {
 
         // Warmup policy
         private const float WARMUP_TARGET_DEVIATION = 1500f;
-        private const float WARMUP_BURST_AT = 42f;
+        private const float WARMUP_BURST_AT = 57.0f;
         private const int WARMUP_FINAL_MAX_SWAPS = 10;
         private bool warmupBalancedThisMap = false;
 

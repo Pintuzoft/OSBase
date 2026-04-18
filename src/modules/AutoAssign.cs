@@ -21,7 +21,7 @@ public class AutoAssign : IModule {
     private const float AssignDelay = 0.50f;
     private const float RetryDelay = 0.40f;
     private const float GuardSeconds = 2.50f;
-    private const float AutoAssignCloseAt = 40.0f;
+    private const float AutoAssignCloseAt = 55.0f;
 
     private int stateGeneration = 0;
     private bool warmupActive = false;
