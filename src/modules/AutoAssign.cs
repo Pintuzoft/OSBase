@@ -373,6 +373,6 @@ public class AutoAssign : IModule {
                player.IsValid &&
                !player.IsHLTV &&
                !player.IsBot &&
-               player.Connected == PlayerConnectedState.PlayerConnected;
+               player.Connected == PlayerConnectedState.Connected;
     }
 }

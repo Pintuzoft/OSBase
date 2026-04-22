@@ -257,7 +257,7 @@ public class Idle : IModule {
                 return;
             }
 
-            if (p.Connected != PlayerConnectedState.PlayerConnected) {
+            if (p.Connected != PlayerConnectedState.Connected) {
                 return;
             }
 
@@ -476,7 +476,7 @@ public class Idle : IModule {
             return false;
         }
 
-        if (p.Connected != PlayerConnectedState.PlayerConnected) {
+        if (p.Connected != PlayerConnectedState.Connected) {
             return false;
         }
 
@@ -527,7 +527,7 @@ public class Idle : IModule {
                 continue;
             }
 
-            if (pl.Connected != PlayerConnectedState.PlayerConnected) {
+            if (pl.Connected != PlayerConnectedState.Connected) {
                 continue;
             }
 

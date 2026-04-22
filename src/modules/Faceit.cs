@@ -967,7 +967,7 @@ public class Faceit : IModule {
             return false;
         }
 
-        if (player.Connected != PlayerConnectedState.PlayerConnected) {
+        if (player.Connected != PlayerConnectedState.Connected) {
             return false;
         }
 
