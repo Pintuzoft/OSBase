@@ -192,6 +192,9 @@ namespace OSBase.Modules {
             warmupBalancedThisMap = false;
             firstRoundSizeFixDone = false;
             threePlayerHalftimeMode = false;
+            lastSwapRound = -999;
+
+            playerSwapRound.Clear();
 
             warmupBalanceTimer?.Kill();
             warmupBalanceTimer = null;
@@ -233,6 +236,37 @@ namespace OSBase.Modules {
         private void SyncTeams(GameStats gs) {
             gs.SyncTeamsNow();
             UpdateThreePlayerHalftimeMode(gs);
+        }
+
+        private static bool IsHumanPlayer(CCSPlayerController? player) {
+            return player != null
+                && player.IsValid
+                && player.UserId.HasValue
+                && !player.IsBot;
+        }
+
+        private static bool IsPlayingTeam(CCSPlayerController player) {
+            return player.TeamNum == TEAM_T || player.TeamNum == TEAM_CT;
+        }
+
+        private int CountHumansOnTeams() {
+            try {
+                return Utilities.GetPlayers()
+                    .Count(p => IsHumanPlayer(p) && IsPlayingTeam(p));
+            } catch {
+                return 0;
+            }
+        }
+
+        private bool SkipBalanceDueToTooFewHumans(string source) {
+            int humans = CountHumansOnTeams();
+
+            if (humans < 2) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {source} skipped: humans_on_teams={humans} < 2");
+                return true;
+            }
+
+            return false;
         }
 
         private void UpdateThreePlayerHalftimeMode(GameStats gs) {
@@ -281,7 +315,7 @@ namespace OSBase.Modules {
                 gs.SyncTeamsNow();
                 int total = gs.getTeam(TEAM_T).numPlayers() + gs.getTeam(TEAM_CT).numPlayers();
 
-                threePlayerHalftimeMode = (bombsites == 1 && total == 3);
+                threePlayerHalftimeMode = (bombsites == 1 && total == 3 && CountHumansOnTeams() == 3);
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Halftime: threePlayerHalftimeMode={threePlayerHalftimeMode} total={total}");
             } else {
                 threePlayerHalftimeMode = false;
@@ -327,6 +361,10 @@ namespace OSBase.Modules {
 
             SyncTeams(gs);
 
+            if (SkipBalanceDueToTooFewHumans("round1_sizefix")) {
+                return;
+            }
+
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
 
@@ -355,6 +393,10 @@ namespace OSBase.Modules {
             if (gs == null) return;
 
             SyncTeams(gs);
+
+            if (SkipBalanceDueToTooFewHumans("warmup_final")) {
+                return;
+            }
 
             if (warmupBalancedThisMap) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupFinalBalance skipped: already ran.");
@@ -411,8 +453,8 @@ namespace OSBase.Modules {
                     break;
                 }
 
-                if (!FindBestSwapPairWithGain_Warmup(gs, tStats, cStats, out int uA, out int uB, out float gain)) {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupFinalBalance no swap pair found.");
+                if (!FindBestSwapPairWithGain_Warmup(gs, tStats, cStats, out int uA, out int uB, out float gain) || gain <= 0f) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupFinalBalance no useful swap pair found. gain={gain:0}");
                     break;
                 }
 
@@ -453,6 +495,10 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] BalanceAtRoundEnd RUN source=roundend_live phase={PhaseName(gs)}");
 
             SyncTeams(gs);
+
+            if (SkipBalanceDueToTooFewHumans("roundend_live")) {
+                return;
+            }
 
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
@@ -556,6 +602,11 @@ namespace OSBase.Modules {
 
         private void EnsureBestIsSoloIf2v1(GameStats gs) {
             SyncTeams(gs);
+
+            int humans = CountHumansOnTeams();
+            if (humans != 3) {
+                return;
+            }
 
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
