@@ -17,18 +17,12 @@ public class AutoAssign : IModule {
     private bool handlersLoaded = false;
     private bool isActive = false;
 
-    private const float AssignDelay = 0.15f;
-    private const float RetryDelay = 0.35f;
-    private const int AssignAttempts = 8;
-
+    private const float AssignDelay = 1.00f;
     private const float WarmupRespawnDelay = 0.20f;
-    private const float SweepDelay = 0.75f;
     private const float GuardSeconds = 2.50f;
-    private const float AutoAssignCloseAt = 55.0f;
 
     private int stateGeneration = 0;
     private bool warmupActive = false;
-    private bool autoAssignOpen = false;
 
     private readonly HashSet<ulong> pendingAssignments = new();
     private readonly HashSet<ulong> pendingWarmupRespawns = new();
@@ -58,8 +52,7 @@ public class AutoAssign : IModule {
         ResetState();
         LoadHandlers();
 
-        Console.WriteLine(
-            $"[DEBUG] OSBase[{ModuleName}] loaded (assign={AssignDelay:0.00}s retry={RetryDelay:0.00}s attempts={AssignAttempts} respawn={WarmupRespawnDelay:0.00}s close={AutoAssignCloseAt:0.00}s).");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (assign_delay={AssignDelay:0.00}s).");
     }
 
     public void Unload() {
@@ -70,7 +63,6 @@ public class AutoAssign : IModule {
             osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
             osbase.DeregisterEventHandler<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
             osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-            osbase.DeregisterEventHandler<EventRoundStart>(OnRoundStart);
             osbase.DeregisterEventHandler<EventMapTransition>(OnMapTransition);
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
 
@@ -96,7 +88,6 @@ public class AutoAssign : IModule {
         osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
         osbase.RegisterEventHandler<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
         osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-        osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
         osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
 
@@ -107,212 +98,107 @@ public class AutoAssign : IModule {
         ResetState();
     }
 
-    private HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup ev, GameEventInfo info) {
-        stateGeneration++;
-        warmupActive = true;
-        autoAssignOpen = true;
-
-        pendingAssignments.Clear();
-        pendingWarmupRespawns.Clear();
-        recentAutoAssign.Clear();
-
-        int generation = stateGeneration;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup started, autoassign open.");
-
-        osbase?.AddTimer(0.10f, () => {
-            QueueUnassignedWarmupPlayers(generation);
-        }, TimerFlags.STOP_ON_MAPCHANGE);
-
-        ScheduleWarmupSweep(generation);
-
-        osbase?.AddTimer(AutoAssignCloseAt, () => {
-            if (!isActive || generation != stateGeneration) {
-                return;
-            }
-
-            autoAssignOpen = false;
-            pendingAssignments.Clear();
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] autoassign closed for warmup.");
-        }, TimerFlags.STOP_ON_MAPCHANGE);
-
-        return HookResult.Continue;
-    }
-
-    private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
-        ResetState();
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup ended.");
-        return HookResult.Continue;
-    }
-
-    private HookResult OnRoundStart(EventRoundStart ev, GameEventInfo info) {
-        if (warmupActive && autoAssignOpen) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] ignored round_start while warmup autoassign window is open.");
-            return HookResult.Continue;
-        }
-
-        ResetState();
-        return HookResult.Continue;
-    }
-
     private HookResult OnMapTransition(EventMapTransition ev, GameEventInfo info) {
         ResetState();
         return HookResult.Continue;
     }
 
+    private HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup ev, GameEventInfo info) {
+        warmupActive = true;
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup started.");
+        return HookResult.Continue;
+    }
+
+    private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
+        warmupActive = false;
+        pendingWarmupRespawns.Clear();
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup ended.");
+        return HookResult.Continue;
+    }
+
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull ev, GameEventInfo info) {
-        if (!isActive || osbase == null || !warmupActive || !autoAssignOpen) {
+        if (!isActive || osbase == null) {
             return HookResult.Continue;
         }
 
         var player = ev.Userid;
-        if (!IsKnownHuman(player)) {
+        if (!IsKnownHuman(player) || player!.SteamID == 0) {
+            return HookResult.Continue;
+        }
+
+        ulong steamId = player.SteamID;
+
+        if (!pendingAssignments.Add(steamId)) {
             return HookResult.Continue;
         }
 
         int generation = stateGeneration;
-        TryQueuePlayer(player, generation, "connect_full");
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] queued connected player steamid={steamId}.");
+
+        osbase.AddTimer(AssignDelay, () => {
+            TryAssignConnectedPlayer(steamId, generation);
+        }, TimerFlags.STOP_ON_MAPCHANGE);
 
         return HookResult.Continue;
     }
 
-    private void ScheduleWarmupSweep(int generation) {
-        osbase?.AddTimer(SweepDelay, () => {
-            if (!isActive || osbase == null || generation != stateGeneration || !warmupActive || !autoAssignOpen) {
-                return;
-            }
-
-            QueueUnassignedWarmupPlayers(generation);
-            ScheduleWarmupSweep(generation);
-        }, TimerFlags.STOP_ON_MAPCHANGE);
-    }
-
-    private void QueueUnassignedWarmupPlayers(int generation) {
-        if (!isActive || osbase == null || generation != stateGeneration || !warmupActive || !autoAssignOpen) {
+    private void TryAssignConnectedPlayer(ulong steamId, int generation) {
+        if (!isActive || osbase == null || generation != stateGeneration) {
+            pendingAssignments.Remove(steamId);
             return;
         }
 
-        foreach (var player in Utilities.GetPlayers()) {
-            if (!IsEligiblePlayer(player)) {
-                continue;
-            }
-
-            if (IsPlayable(player.TeamNum)) {
-                continue;
-            }
-
-            TryQueuePlayer(player, generation, "sweep");
-        }
-    }
-
-    private bool TryQueuePlayer(CCSPlayerController? player, int generation, string source) {
-        if (!isActive || osbase == null || generation != stateGeneration || !warmupActive || !autoAssignOpen) {
-            return false;
-        }
-
-        if (!IsKnownHuman(player)) {
-            return false;
-        }
-
-        ulong steamId = player!.SteamID;
-        if (steamId == 0) {
-            return false;
-        }
-
-        if (IsPlayable(player.TeamNum)) {
-            recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
-
-            if (!player.PawnIsAlive) {
-                ScheduleWarmupRespawn(steamId, generation);
-            }
-
-            return false;
-        }
-
-        if (!pendingAssignments.Add(steamId)) {
-            return false;
-        }
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] queued steamid={steamId} source={source}.");
-
-        for (int i = 0; i < AssignAttempts; i++) {
-            int attempt = i + 1;
-            float delay = AssignDelay + (RetryDelay * i);
-
-            osbase.AddTimer(delay, () => {
-                TryAssignPlayer(steamId, generation, attempt, source);
-            }, TimerFlags.STOP_ON_MAPCHANGE);
-        }
-
-        osbase.AddTimer(AssignDelay + (RetryDelay * AssignAttempts) + 0.25f, () => {
-            FinishAssignment(steamId, generation);
-        }, TimerFlags.STOP_ON_MAPCHANGE);
-
-        return true;
-    }
-
-    private void TryAssignPlayer(ulong steamId, int generation, int attempt, string source) {
-        if (!isActive || osbase == null || generation != stateGeneration || !warmupActive || !autoAssignOpen) {
+        if (!pendingAssignments.Contains(steamId)) {
             return;
         }
 
         try {
             var player = FindHumanBySteamId(steamId);
             if (!IsEligiblePlayer(player)) {
+                pendingAssignments.Remove(steamId);
                 return;
             }
 
             var safePlayer = player!;
 
+            // Already on a real team. AutoAssign is done and must not fight TeamBalancer.
             if (IsPlayable(safePlayer.TeamNum)) {
-                recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
+                pendingAssignments.Remove(steamId);
 
-                if (!safePlayer.PawnIsAlive) {
+                if (warmupActive && !safePlayer.PawnIsAlive) {
                     ScheduleWarmupRespawn(steamId, generation);
                 }
 
                 return;
             }
 
-            CountTeams(out int ct, out int tt);
+            // Critical guard: only move fresh connects that are still Unassigned/Spectator.
+            if (!IsAutoAssignableTeam(safePlayer.TeamNum)) {
+                pendingAssignments.Remove(steamId);
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] skipped steamid={steamId}; current_team={safePlayer.TeamNum}.");
+                return;
+            }
 
+            CountTeams(out int ct, out int tt);
             var intendedTeam = DecideTeamForJoin(ct, tt);
-            recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
 
             Console.WriteLine(
-                $"[DEBUG] OSBase[{ModuleName}] assign steamid={steamId} source={source} attempt={attempt}/{AssignAttempts} ct={ct} t={tt} -> {intendedTeam}");
+                $"[DEBUG] OSBase[{ModuleName}] autoassign steamid={steamId} current_team={safePlayer.TeamNum} ct={ct} t={tt} -> {intendedTeam}");
+
+            // Release before moving so AutoAssign cannot fight any later module logic.
+            pendingAssignments.Remove(steamId);
+            recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
 
             safePlayer.ChangeTeam(intendedTeam);
-            ScheduleWarmupRespawn(steamId, generation);
-        } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] TryAssignPlayer failed for {steamId}: {ex.Message}");
-        }
-    }
 
-    private void FinishAssignment(ulong steamId, int generation) {
-        if (!isActive || generation != stateGeneration) {
-            return;
-        }
-
-        pendingAssignments.Remove(steamId);
-        CleanupExpiredGuard(steamId);
-
-        try {
-            var player = FindHumanBySteamId(steamId);
-            if (!IsEligiblePlayer(player)) {
-                return;
+            if (warmupActive) {
+                ScheduleWarmupRespawn(steamId, generation);
             }
-
-            var safePlayer = player!;
-            if (!IsPlayable(safePlayer.TeamNum)) {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] failed to autoassign steamid={steamId}; player still has team={safePlayer.TeamNum}.");
-                return;
-            }
-
-            AnnounceFinalTeam(safePlayer);
         } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] FinishAssignment failed for {steamId}: {ex.Message}");
+            pendingAssignments.Remove(steamId);
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] TryAssignConnectedPlayer failed for {steamId}: {ex.Message}");
         }
     }
 
@@ -327,7 +213,7 @@ public class AutoAssign : IModule {
 
         osbase.AddTimer(delay, () => {
             try {
-                if (!isActive || osbase == null || !warmupActive || generation != stateGeneration) {
+                if (!isActive || osbase == null || generation != stateGeneration || !warmupActive) {
                     return;
                 }
 
@@ -353,17 +239,6 @@ public class AutoAssign : IModule {
         }, TimerFlags.STOP_ON_MAPCHANGE);
     }
 
-    private void AnnounceFinalTeam(CCSPlayerController player) {
-        if (!IsEligiblePlayer(player) || !IsPlayable(player!.TeamNum)) {
-            return;
-        }
-
-        var finalTeam = (CsTeam)player.TeamNum;
-        string color = finalTeam == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
-
-        player.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{finalTeam}\x01 team.");
-    }
-
     public bool WasRecentlyAutoAssigned(ulong steamId) {
         if (!recentAutoAssign.TryGetValue(steamId, out var until)) {
             return false;
@@ -375,16 +250,6 @@ public class AutoAssign : IModule {
         }
 
         return true;
-    }
-
-    private void CleanupExpiredGuard(ulong steamId) {
-        if (!recentAutoAssign.TryGetValue(steamId, out var until)) {
-            return;
-        }
-
-        if (DateTime.UtcNow > until) {
-            recentAutoAssign.Remove(steamId);
-        }
     }
 
     private void CountTeams(out int ct, out int tt) {
@@ -436,7 +301,6 @@ public class AutoAssign : IModule {
     private void ResetState() {
         stateGeneration++;
         warmupActive = false;
-        autoAssignOpen = false;
         pendingAssignments.Clear();
         pendingWarmupRespawns.Clear();
         recentAutoAssign.Clear();
@@ -444,6 +308,10 @@ public class AutoAssign : IModule {
 
     private static bool IsPlayable(int teamNum) {
         return teamNum == (int)CsTeam.Terrorist || teamNum == (int)CsTeam.CounterTerrorist;
+    }
+
+    private static bool IsAutoAssignableTeam(int teamNum) {
+        return teamNum == 0 || teamNum == (int)CsTeam.Spectator;
     }
 
     private static bool IsKnownHuman(CCSPlayerController? player) {
