@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
@@ -18,9 +17,12 @@ public class AutoAssign : IModule {
     private bool handlersLoaded = false;
     private bool isActive = false;
 
-    private const float AssignDelay = 0.50f;
-    private const float RetryDelay = 0.40f;
+    private const float AssignDelay = 0.15f;
+    private const float RetryDelay = 0.35f;
+    private const int AssignAttempts = 8;
+
     private const float WarmupRespawnDelay = 0.20f;
+    private const float SweepDelay = 0.75f;
     private const float GuardSeconds = 2.50f;
     private const float AutoAssignCloseAt = 55.0f;
 
@@ -28,10 +30,7 @@ public class AutoAssign : IModule {
     private bool warmupActive = false;
     private bool autoAssignOpen = false;
 
-    // Prevent duplicate join flows for the same player.
     private readonly HashSet<ulong> pendingAssignments = new();
-
-    // Prevent duplicate warmup respawn timers per player.
     private readonly HashSet<ulong> pendingWarmupRespawns = new();
 
     // Lets TeamBalancer skip freshly auto-assigned players if it wants to.
@@ -60,7 +59,7 @@ public class AutoAssign : IModule {
         LoadHandlers();
 
         Console.WriteLine(
-            $"[DEBUG] OSBase[{ModuleName}] loaded (assign={AssignDelay:0.00}s retry={RetryDelay:0.00}s respawn={WarmupRespawnDelay:0.00}s close={AutoAssignCloseAt:0.00}s).");
+            $"[DEBUG] OSBase[{ModuleName}] loaded (assign={AssignDelay:0.00}s retry={RetryDelay:0.00}s attempts={AssignAttempts} respawn={WarmupRespawnDelay:0.00}s close={AutoAssignCloseAt:0.00}s).");
     }
 
     public void Unload() {
@@ -70,6 +69,7 @@ public class AutoAssign : IModule {
         if (osbase != null && handlersLoaded) {
             osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
             osbase.DeregisterEventHandler<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
+            osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
             osbase.DeregisterEventHandler<EventRoundStart>(OnRoundStart);
             osbase.DeregisterEventHandler<EventMapTransition>(OnMapTransition);
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
@@ -95,6 +95,7 @@ public class AutoAssign : IModule {
 
         osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
         osbase.RegisterEventHandler<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
+        osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
         osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
         osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
@@ -110,11 +111,20 @@ public class AutoAssign : IModule {
         stateGeneration++;
         warmupActive = true;
         autoAssignOpen = true;
+
         pendingAssignments.Clear();
         pendingWarmupRespawns.Clear();
         recentAutoAssign.Clear();
 
         int generation = stateGeneration;
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup started, autoassign open.");
+
+        osbase?.AddTimer(0.10f, () => {
+            QueueUnassignedWarmupPlayers(generation);
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+
+        ScheduleWarmupSweep(generation);
 
         osbase?.AddTimer(AutoAssignCloseAt, () => {
             if (!isActive || generation != stateGeneration) {
@@ -122,19 +132,27 @@ public class AutoAssign : IModule {
             }
 
             autoAssignOpen = false;
+            pendingAssignments.Clear();
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] autoassign closed for warmup.");
         }, TimerFlags.STOP_ON_MAPCHANGE);
 
         return HookResult.Continue;
     }
 
+    private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
+        ResetState();
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup ended.");
+        return HookResult.Continue;
+    }
+
     private HookResult OnRoundStart(EventRoundStart ev, GameEventInfo info) {
-        stateGeneration++;
-        warmupActive = false;
-        autoAssignOpen = false;
-        pendingAssignments.Clear();
-        pendingWarmupRespawns.Clear();
-        recentAutoAssign.Clear();
+        if (warmupActive && autoAssignOpen) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] ignored round_start while warmup autoassign window is open.");
+            return HookResult.Continue;
+        }
+
+        ResetState();
         return HookResult.Continue;
     }
 
@@ -149,91 +167,152 @@ public class AutoAssign : IModule {
         }
 
         var player = ev.Userid;
-        if (!IsEligiblePlayer(player)) {
+        if (!IsKnownHuman(player)) {
             return HookResult.Continue;
         }
 
-        ulong steamId = player!.SteamID;
         int generation = stateGeneration;
-
-        if (!pendingAssignments.Add(steamId)) {
-            return HookResult.Continue;
-        }
-
-        osbase.AddTimer(AssignDelay, () => {
-            TryAssignPlayer(steamId, generation, false);
-        }, TimerFlags.STOP_ON_MAPCHANGE);
-
-        osbase.AddTimer(AssignDelay + RetryDelay, () => {
-            TryAssignPlayer(steamId, generation, true);
-        }, TimerFlags.STOP_ON_MAPCHANGE);
-
-        osbase.AddTimer(AssignDelay + RetryDelay + 0.25f, () => {
-            if (generation != stateGeneration) {
-                return;
-            }
-
-            pendingAssignments.Remove(steamId);
-            CleanupExpiredGuard(steamId);
-            AnnounceFinalTeam(steamId, generation);
-        }, TimerFlags.STOP_ON_MAPCHANGE);
+        TryQueuePlayer(player, generation, "connect_full");
 
         return HookResult.Continue;
     }
 
-    private void TryAssignPlayer(ulong steamId, int generation, bool retry) {
-        if (!isActive || osbase == null || !warmupActive || !autoAssignOpen) {
+    private void ScheduleWarmupSweep(int generation) {
+        osbase?.AddTimer(SweepDelay, () => {
+            if (!isActive || osbase == null || generation != stateGeneration || !warmupActive || !autoAssignOpen) {
+                return;
+            }
+
+            QueueUnassignedWarmupPlayers(generation);
+            ScheduleWarmupSweep(generation);
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+    }
+
+    private void QueueUnassignedWarmupPlayers(int generation) {
+        if (!isActive || osbase == null || generation != stateGeneration || !warmupActive || !autoAssignOpen) {
             return;
         }
 
-        if (generation != stateGeneration) {
+        foreach (var player in Utilities.GetPlayers()) {
+            if (!IsEligiblePlayer(player)) {
+                continue;
+            }
+
+            if (IsPlayable(player.TeamNum)) {
+                continue;
+            }
+
+            TryQueuePlayer(player, generation, "sweep");
+        }
+    }
+
+    private bool TryQueuePlayer(CCSPlayerController? player, int generation, string source) {
+        if (!isActive || osbase == null || generation != stateGeneration || !warmupActive || !autoAssignOpen) {
+            return false;
+        }
+
+        if (!IsKnownHuman(player)) {
+            return false;
+        }
+
+        ulong steamId = player!.SteamID;
+        if (steamId == 0) {
+            return false;
+        }
+
+        if (IsPlayable(player.TeamNum)) {
+            recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
+
+            if (!player.PawnIsAlive) {
+                ScheduleWarmupRespawn(steamId, generation);
+            }
+
+            return false;
+        }
+
+        if (!pendingAssignments.Add(steamId)) {
+            return false;
+        }
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] queued steamid={steamId} source={source}.");
+
+        for (int i = 0; i < AssignAttempts; i++) {
+            int attempt = i + 1;
+            float delay = AssignDelay + (RetryDelay * i);
+
+            osbase.AddTimer(delay, () => {
+                TryAssignPlayer(steamId, generation, attempt, source);
+            }, TimerFlags.STOP_ON_MAPCHANGE);
+        }
+
+        osbase.AddTimer(AssignDelay + (RetryDelay * AssignAttempts) + 0.25f, () => {
+            FinishAssignment(steamId, generation);
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+
+        return true;
+    }
+
+    private void TryAssignPlayer(ulong steamId, int generation, int attempt, string source) {
+        if (!isActive || osbase == null || generation != stateGeneration || !warmupActive || !autoAssignOpen) {
             return;
         }
 
         try {
-            var livePlayer = FindHumanBySteamId(steamId);
-            if (!IsEligiblePlayer(livePlayer)) {
+            var player = FindHumanBySteamId(steamId);
+            if (!IsEligiblePlayer(player)) {
                 return;
             }
 
-            var player = livePlayer!;
+            var safePlayer = player!;
 
-            // If engine or another module already put them on a real team, leave team selection alone,
-            // but still make sure they spawn during warmup.
-            if (IsPlayable(player.TeamNum)) {
+            if (IsPlayable(safePlayer.TeamNum)) {
                 recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
 
-                if (!player.PawnIsAlive) {
+                if (!safePlayer.PawnIsAlive) {
                     ScheduleWarmupRespawn(steamId, generation);
                 }
 
                 return;
             }
 
-            int ct = 0;
-            int tt = 0;
-
-            foreach (var p in Utilities.GetPlayers()) {
-                if (!IsEligiblePlayer(p)) {
-                    continue;
-                }
-
-                if (p!.TeamNum == (int)CsTeam.CounterTerrorist) {
-                    ct++;
-                } else if (p.TeamNum == (int)CsTeam.Terrorist) {
-                    tt++;
-                }
-            }
+            CountTeams(out int ct, out int tt);
 
             var intendedTeam = DecideTeamForJoin(ct, tt);
             recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {(retry ? "retry" : "assign")} steamid={steamId} ct={ct} t={tt} -> {intendedTeam}");
-            player.ChangeTeam(intendedTeam);
+            Console.WriteLine(
+                $"[DEBUG] OSBase[{ModuleName}] assign steamid={steamId} source={source} attempt={attempt}/{AssignAttempts} ct={ct} t={tt} -> {intendedTeam}");
 
+            safePlayer.ChangeTeam(intendedTeam);
             ScheduleWarmupRespawn(steamId, generation);
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] TryAssignPlayer failed for {steamId}: {ex.Message}");
+        }
+    }
+
+    private void FinishAssignment(ulong steamId, int generation) {
+        if (!isActive || generation != stateGeneration) {
+            return;
+        }
+
+        pendingAssignments.Remove(steamId);
+        CleanupExpiredGuard(steamId);
+
+        try {
+            var player = FindHumanBySteamId(steamId);
+            if (!IsEligiblePlayer(player)) {
+                return;
+            }
+
+            var safePlayer = player!;
+            if (!IsPlayable(safePlayer.TeamNum)) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] failed to autoassign steamid={steamId}; player still has team={safePlayer.TeamNum}.");
+                return;
+            }
+
+            AnnounceFinalTeam(safePlayer);
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] FinishAssignment failed for {steamId}: {ex.Message}");
         }
     }
 
@@ -257,13 +336,13 @@ public class AutoAssign : IModule {
                     return;
                 }
 
-                var p = player!;
-                if (!IsPlayable(p.TeamNum)) {
+                var safePlayer = player!;
+                if (!IsPlayable(safePlayer.TeamNum)) {
                     return;
                 }
 
-                if (!p.PawnIsAlive) {
-                    p.Respawn();
+                if (!safePlayer.PawnIsAlive) {
+                    safePlayer.Respawn();
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] respawned {steamId} after autoassign.");
                 }
             } catch (Exception ex) {
@@ -274,33 +353,15 @@ public class AutoAssign : IModule {
         }, TimerFlags.STOP_ON_MAPCHANGE);
     }
 
-    private void AnnounceFinalTeam(ulong steamId, int generation) {
-        if (!isActive) {
+    private void AnnounceFinalTeam(CCSPlayerController player) {
+        if (!IsEligiblePlayer(player) || !IsPlayable(player!.TeamNum)) {
             return;
         }
 
-        if (generation != stateGeneration) {
-            return;
-        }
+        var finalTeam = (CsTeam)player.TeamNum;
+        string color = finalTeam == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
 
-        try {
-            var player = FindHumanBySteamId(steamId);
-            if (!IsEligiblePlayer(player)) {
-                return;
-            }
-
-            var safePlayer = player!;
-            if (!IsPlayable(safePlayer.TeamNum)) {
-                return;
-            }
-
-            var finalTeam = (CsTeam)safePlayer.TeamNum;
-            string color = finalTeam == CsTeam.CounterTerrorist ? "\x0B" : "\x02";
-
-            safePlayer.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{finalTeam}\x01 team.");
-        } catch (Exception ex) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] AnnounceFinalTeam failed for {steamId}: {ex.Message}");
-        }
+        player.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{finalTeam}\x01 team.");
     }
 
     public bool WasRecentlyAutoAssigned(ulong steamId) {
@@ -323,6 +384,23 @@ public class AutoAssign : IModule {
 
         if (DateTime.UtcNow > until) {
             recentAutoAssign.Remove(steamId);
+        }
+    }
+
+    private void CountTeams(out int ct, out int tt) {
+        ct = 0;
+        tt = 0;
+
+        foreach (var player in Utilities.GetPlayers()) {
+            if (!IsEligiblePlayer(player)) {
+                continue;
+            }
+
+            if (player!.TeamNum == (int)CsTeam.CounterTerrorist) {
+                ct++;
+            } else if (player.TeamNum == (int)CsTeam.Terrorist) {
+                tt++;
+            }
         }
     }
 
@@ -368,11 +446,16 @@ public class AutoAssign : IModule {
         return teamNum == (int)CsTeam.Terrorist || teamNum == (int)CsTeam.CounterTerrorist;
     }
 
-    private static bool IsEligiblePlayer(CCSPlayerController? player) {
+    private static bool IsKnownHuman(CCSPlayerController? player) {
         return player != null &&
                player.IsValid &&
                !player.IsHLTV &&
-               !player.IsBot &&
-               player.Connected == PlayerConnectedState.Connected;
+               !player.IsBot;
+    }
+
+    private static bool IsEligiblePlayer(CCSPlayerController? player) {
+        return IsKnownHuman(player) &&
+               player!.Connected == PlayerConnectedState.Connected &&
+               player.SteamID != 0;
     }
 }
