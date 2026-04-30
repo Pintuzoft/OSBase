@@ -40,6 +40,7 @@ public class KnifeWeekend : IModule {
     private int normalPoints = 5;
     private int adminPoints = 10;
     private int topLimit = 10;
+    private int minimumPlayers = 4;
     private int warmupMessageCooldownSeconds = 10;
 
     private List<string> weaponKeywords = new();
@@ -150,6 +151,7 @@ public class KnifeWeekend : IModule {
             "warmup_message_cooldown_seconds 10\n" +
             "normal_points 5\n" +
             "admin_points 10\n" +
+            "minimum_players 4\n" +
             "top_limit 10\n" +
             "weapon_keywords " + string.Join(',', DefaultKnifeKeywords) + "\n"
         );
@@ -165,6 +167,7 @@ public class KnifeWeekend : IModule {
         createTables = true;
         normalPoints = 5;
         adminPoints = 10;
+        minimumPlayers = 4;
         topLimit = 10;
         warmupMessageCooldownSeconds = 10;
         weaponKeywords = DefaultKnifeKeywords.ToList();
@@ -217,6 +220,9 @@ public class KnifeWeekend : IModule {
                 case "admin_points":
                     adminPoints = ParseInt(value, 10, 0, 1000);
                     break;
+                case "minimum_players":
+                    minimumPlayers = ParseInt(value, 4, 0, 64);
+                    break;
                 case "top_limit":
                     topLimit = ParseInt(value, 10, 1, 50);
                     break;
@@ -242,7 +248,7 @@ public class KnifeWeekend : IModule {
 
         Console.WriteLine(
             $"[DEBUG] OSBase[{ModuleName}] config loaded. prefix={tablePrefix}, adminPoints={adminPointsEnabled}, " +
-            $"normal={normalPoints}, admin={adminPoints}, top={topLimit}, ignoreWarmup={ignoreWarmup}, " +
+            $"normal={normalPoints}, admin={adminPoints}, minPlayers={minimumPlayers}, top={topLimit}, ignoreWarmup={ignoreWarmup}, " +
             $"weaponKeywords={string.Join(',', weaponKeywords)}"
         );
     }
@@ -321,6 +327,12 @@ public class KnifeWeekend : IModule {
 
         string weapon = eventInfo.Weapon ?? string.Empty;
         if (!IsKnifeWeapon(weapon)) {
+            return HookResult.Continue;
+        }
+
+        int activeHumans = CountActiveHumans();
+        if (activeHumans < minimumPlayers) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Knife ignored: only {activeHumans}/{minimumPlayers} active human players in T/CT.");
             return HookResult.Continue;
         }
 
@@ -520,6 +532,13 @@ public class KnifeWeekend : IModule {
 
         string normalized = weapon.Trim().ToLowerInvariant();
         return weaponKeywords.Any(keyword => normalized.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private int CountActiveHumans() {
+        return Utilities.GetPlayers().Count(player =>
+            IsRealPlayer(player) &&
+            (player.TeamNum == (int)CsTeam.Terrorist || player.TeamNum == (int)CsTeam.CounterTerrorist)
+        );
     }
 
     private void EnsureDefaultKnifeKeywords() {
