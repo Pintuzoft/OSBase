@@ -462,22 +462,39 @@ public class KnifeWeekend : IModule {
     }
 
     private void PrintKnifeMessage(string attacker, bool attackerIsAdmin, string victim, bool victimIsAdmin, int points, bool teamKill) {
-        string attackerAdmin = attackerIsAdmin ? " (admin)" : string.Empty;
-        string victimAdmin = victimIsAdmin ? " (admin)" : string.Empty;
+        string attackerStatus = attackerIsAdmin ? "admin" : "inte admin";
+        string victimStatus = victimIsAdmin ? "admin" : "inte admin";
 
         if (teamKill) {
+            string logMessage =
+                $"{attacker} ({attackerStatus}) knife-teamkillade {victim} ({victimStatus}). " +
+                $"{attacker} tappade -{points}p, {victim} fick +{points}p. {victim} är {victimStatus}.";
+
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] {logMessage}");
+
             Server.PrintToChatAll(
                 $" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: " +
-                $"{ChatColors.Red}{attacker}{attackerAdmin}{ChatColors.Default} (-{points}p) knife-teamkilled " +
-                $"{ChatColors.Gold}{victim}{victimAdmin}{ChatColors.Default} (+{points}p)"
+                $"{ChatColors.Red}{attacker}{ChatColors.Default} ({attackerStatus}) knife-teamkillade " +
+                $"{ChatColors.Gold}{victim}{ChatColors.Default} ({victimStatus}). " +
+                $"{ChatColors.Red}{attacker} tappade -{points}p{ChatColors.Default}, " +
+                $"{ChatColors.Green}{victim} fick +{points}p{ChatColors.Default}. " +
+                $"{victim} är {victimStatus}."
             );
             return;
         }
 
+        string normalLogMessage =
+            $"{attacker} ({attackerStatus}) knivade {victim} ({victimStatus}). " +
+            $"{attacker} fick +{points}p. {victim} är {victimStatus}.";
+
+        Console.WriteLine($"[INFO] OSBase[{ModuleName}] {normalLogMessage}");
+
         Server.PrintToChatAll(
             $" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: " +
-            $"{ChatColors.Gold}{attacker}{attackerAdmin}{ChatColors.Default} (+{points}p) knifed " +
-            $"{ChatColors.Red}{victim}{victimAdmin}{ChatColors.Default}"
+            $"{ChatColors.Gold}{attacker}{ChatColors.Default} ({attackerStatus}) knivade " +
+            $"{ChatColors.Red}{victim}{ChatColors.Default} ({victimStatus}). " +
+            $"{ChatColors.Green}{attacker} fick +{points}p{ChatColors.Default}. " +
+            $"{victim} är {victimStatus}."
         );
     }
 
