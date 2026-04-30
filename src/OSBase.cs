@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.490";
+    public override string ModuleVersion => "0.0.491";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for managing CS2 servers";
 
@@ -88,6 +88,7 @@ public class OSBase : BasePlugin {
         }
 
         gameStats?.ReloadConfig(config);
+        RegisterDiscoveredModulesInConfig();
 
         foreach (var kvp in discoveredModules) {
             var moduleName = kvp.Key;
@@ -108,6 +109,16 @@ public class OSBase : BasePlugin {
             if (shouldBeEnabled && isLoaded) {
                 TryReloadModuleConfig(moduleName);
             }
+        }
+    }
+
+    private void RegisterDiscoveredModulesInConfig() {
+        if (config == null) {
+            return;
+        }
+
+        foreach (var moduleName in discoveredModules.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase)) {
+            config.RegisterGlobalConfigValue(moduleName, "0");
         }
     }
 
