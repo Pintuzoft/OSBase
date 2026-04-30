@@ -44,6 +44,15 @@ public class KnifeWeekend : IModule {
 
     private List<string> weaponKeywords = new();
 
+    private static readonly string[] DefaultKnifeKeywords = {
+        "knife", "bayonet", "m9_bayonet", "karambit", "butterfly",
+        "daggers", "shadow", "push", "falchion", "flip", "gut",
+        "huntsman", "tactical", "navaja", "gypsy_jackknife", "nomad", "outdoor",
+        "paracord", "cord", "skeleton", "stiletto", "survival", "canis",
+        "talon", "widowmaker", "ursus", "kukri", "bowie", "survival_bowie",
+        "classic", "css", "default"
+    };
+
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
         config = inConfig;
@@ -142,7 +151,7 @@ public class KnifeWeekend : IModule {
             "normal_points 5\n" +
             "admin_points 10\n" +
             "top_limit 10\n" +
-            "weapon_keywords knife,bayonet,karambit,butterfly,daggers,falchion,flip,gut,huntsman,navaja,nomad,paracord,skeleton,stiletto,survival,talon,ursus,kukri\n"
+            "weapon_keywords " + string.Join(',', DefaultKnifeKeywords) + "\n"
         );
     }
 
@@ -158,10 +167,7 @@ public class KnifeWeekend : IModule {
         adminPoints = 10;
         topLimit = 10;
         warmupMessageCooldownSeconds = 10;
-        weaponKeywords = new List<string> {
-            "knife", "bayonet", "karambit", "butterfly", "daggers", "falchion", "flip", "gut",
-            "huntsman", "navaja", "nomad", "paracord", "skeleton", "stiletto", "survival", "talon", "ursus", "kukri"
-        };
+        weaponKeywords = DefaultKnifeKeywords.ToList();
 
         List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
@@ -232,13 +238,12 @@ public class KnifeWeekend : IModule {
             tablePrefix = "knivhelg";
         }
 
-        if (weaponKeywords.Count == 0) {
-            weaponKeywords.Add("knife");
-        }
+        EnsureDefaultKnifeKeywords();
 
         Console.WriteLine(
             $"[DEBUG] OSBase[{ModuleName}] config loaded. prefix={tablePrefix}, adminPoints={adminPointsEnabled}, " +
-            $"normal={normalPoints}, admin={adminPoints}, top={topLimit}, ignoreWarmup={ignoreWarmup}"
+            $"normal={normalPoints}, admin={adminPoints}, top={topLimit}, ignoreWarmup={ignoreWarmup}, " +
+            $"weaponKeywords={string.Join(',', weaponKeywords)}"
         );
     }
 
@@ -447,7 +452,7 @@ public class KnifeWeekend : IModule {
                 int points = Convert.ToInt32(row["points"]);
                 TryGetUInt64(row["steamid64"], out ulong steamId64);
 
-                string color = steamId64 == self ? ChatColors.Green.ToString() : ChatColors.Grey.ToString();
+                string color = steamId64 == self ? ChatColors.Green.ToString() : ChatColors.Default.ToString();
                 player.PrintToChat($"  {color}{rank}. {name}: {points}p{ChatColors.Default}");
                 rank++;
             }
@@ -462,40 +467,36 @@ public class KnifeWeekend : IModule {
     }
 
     private void PrintKnifeMessage(string attacker, bool attackerIsAdmin, string victim, bool victimIsAdmin, int points, bool teamKill) {
-        string attackerStatus = attackerIsAdmin ? "admin" : "inte admin";
-        string victimStatus = victimIsAdmin ? "admin" : "inte admin";
+        string attackerDisplay = attacker + AdminSuffix(attackerIsAdmin);
+        string victimDisplay = victim + AdminSuffix(victimIsAdmin);
 
         if (teamKill) {
-            string logMessage =
-                $"{attacker} ({attackerStatus}) knife-teamkillade {victim} ({victimStatus}). " +
-                $"{attacker} tappade -{points}p, {victim} fick +{points}p. {victim} är {victimStatus}.";
-
+            string logMessage = $"{attackerDisplay} knife-teamkillade {victimDisplay}. {attacker} tappade -{points}p, {victim} fick +{points}p.";
             Console.WriteLine($"[INFO] OSBase[{ModuleName}] {logMessage}");
 
             Server.PrintToChatAll(
                 $" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: " +
-                $"{ChatColors.Red}{attacker}{ChatColors.Default} ({attackerStatus}) knife-teamkillade " +
-                $"{ChatColors.Gold}{victim}{ChatColors.Default} ({victimStatus}). " +
+                $"{ChatColors.Red}{attackerDisplay}{ChatColors.Default} knife-teamkillade " +
+                $"{victimDisplay}. " +
                 $"{ChatColors.Red}{attacker} tappade -{points}p{ChatColors.Default}, " +
-                $"{ChatColors.Green}{victim} fick +{points}p{ChatColors.Default}. " +
-                $"{victim} är {victimStatus}."
+                $"{ChatColors.Green}{victim} fick +{points}p{ChatColors.Default}."
             );
             return;
         }
 
-        string normalLogMessage =
-            $"{attacker} ({attackerStatus}) knivade {victim} ({victimStatus}). " +
-            $"{attacker} fick +{points}p. {victim} är {victimStatus}.";
-
+        string normalLogMessage = $"{attackerDisplay} knivade {victimDisplay} och fick +{points}p.";
         Console.WriteLine($"[INFO] OSBase[{ModuleName}] {normalLogMessage}");
 
         Server.PrintToChatAll(
             $" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: " +
-            $"{ChatColors.Gold}{attacker}{ChatColors.Default} ({attackerStatus}) knivade " +
-            $"{ChatColors.Red}{victim}{ChatColors.Default} ({victimStatus}). " +
-            $"{ChatColors.Green}{attacker} fick +{points}p{ChatColors.Default}. " +
-            $"{victim} är {victimStatus}."
+            $"{ChatColors.Green}{attackerDisplay}{ChatColors.Default} knivade " +
+            $"{ChatColors.Red}{victimDisplay}{ChatColors.Default} och fick " +
+            $"{ChatColors.Green}+{points}p{ChatColors.Default}."
         );
+    }
+
+    private static string AdminSuffix(bool isAdmin) {
+        return isAdmin ? " (admin)" : string.Empty;
     }
 
     private void MaybePrintWarmupMessage() {
@@ -519,6 +520,21 @@ public class KnifeWeekend : IModule {
 
         string normalized = weapon.Trim().ToLowerInvariant();
         return weaponKeywords.Any(keyword => normalized.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void EnsureDefaultKnifeKeywords() {
+        var seen = new HashSet<string>(weaponKeywords, StringComparer.OrdinalIgnoreCase);
+
+        foreach (string keyword in DefaultKnifeKeywords) {
+            string normalized = keyword.Trim().ToLowerInvariant();
+            if (normalized.Length > 0 && seen.Add(normalized)) {
+                weaponKeywords.Add(normalized);
+            }
+        }
+
+        if (weaponKeywords.Count == 0) {
+            weaponKeywords.Add("knife");
+        }
     }
 
     private static bool IsRealPlayer(CCSPlayerController? player) {
