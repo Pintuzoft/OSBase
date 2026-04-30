@@ -30,7 +30,7 @@ public class KnifeWeekend : IModule {
 
     private string tablePrefix = "knivhelg";
     private string statsUrl = "https://oldswedes.se/knivhelg";
-    private string chatPrefix = "[OSKnivHelg]";
+    private string chatPrefix = "[KnivHelg]";
 
     private bool adminPointsEnabled = true;
     private bool ignoreWarmup = true;
