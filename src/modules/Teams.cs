@@ -20,11 +20,13 @@ namespace OSBase.Modules {
         private bool handlersLoaded = false;
         private bool isActive = false;
         private bool warmupActive = false;
+        private bool matchLive = false;
 
         private CounterStrikeSharp.API.Modules.Timers.Timer? pendingCheckTeamsTimer;
         private CounterStrikeSharp.API.Modules.Timers.Timer? teamPollTimer;
 
         private readonly Dictionary<string, TeamInfo> tList = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, ulong> playerAliases = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, int> teamWins = new(StringComparer.OrdinalIgnoreCase);
 
         private const int TEAM_T = (int)CounterStrikeSharp.API.Modules.Utils.CsTeam.Terrorist;
@@ -33,7 +35,6 @@ namespace OSBase.Modules {
         private const float TEAM_DETECT_DELAY = 0.75f;
         private const float TEAM_DETECT_RETRY_DELAY = 1.0f;
         private const float TEAM_POLL_INTERVAL = 1.0f;
-        private const float ROUND_START_TEAM_CHECK_DELAY = 0.25f;
 
         private const int TEAM_DETECT_MAX_RETRIES = 10;
         private const int MIN_SIDE_MATCHES = 1;
@@ -84,19 +85,14 @@ namespace OSBase.Modules {
         public void Unload() {
             isActive = false;
 
-            pendingCheckTeamsTimer?.Kill();
-            pendingCheckTeamsTimer = null;
-
-            teamPollTimer?.Kill();
-            teamPollTimer = null;
+            StopTimers();
 
             if (osbase != null && handlersLoaded) {
                 osbase.DeregisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
                 osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd);
                 osbase.DeregisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
-                osbase.DeregisterEventHandler<EventStartHalftime>(OnStartHalftime);
                 osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-                osbase.DeregisterEventHandler<EventRoundStart>(OnRoundStart);
+                osbase.DeregisterEventHandler<EventRoundAnnounceMatchStart>(OnMatchStart);
 
                 osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
                 osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
@@ -106,6 +102,7 @@ namespace OSBase.Modules {
 
             ResetMatchState();
             tList.Clear();
+            playerAliases.Clear();
             teamWins.Clear();
 
             db = null;
@@ -138,9 +135,8 @@ namespace OSBase.Modules {
             osbase.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
             osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
-            osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
             osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-            osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
+            osbase.RegisterEventHandler<EventRoundAnnounceMatchStart>(OnMatchStart);
 
             osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
@@ -152,6 +148,7 @@ namespace OSBase.Modules {
             ResetMatchState();
 
             warmupActive = true;
+            matchLive = false;
 
             ApplyScoreboardTeamNameForSide(TEAM_CT, currentCTTeamName);
             ApplyScoreboardTeamNameForSide(TEAM_T, currentTTeamName);
@@ -161,21 +158,17 @@ namespace OSBase.Modules {
             ScheduleCheckTeams(0.25f, allowRetries: true);
             StartTeamPoller();
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] map start: {mapName}, warmup team poll started.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] map start: {mapName}, warmup team detection started.");
         }
 
         private void OnMapEnd() {
-            pendingCheckTeamsTimer?.Kill();
-            pendingCheckTeamsTimer = null;
-
-            teamPollTimer?.Kill();
-            teamPollTimer = null;
-
+            StopTimers();
             warmupActive = false;
+            matchLive = false;
         }
 
         private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
-            if (!isActive) {
+            if (!isActive || matchLive) {
                 return HookResult.Continue;
             }
 
@@ -184,27 +177,24 @@ namespace OSBase.Modules {
             teamPollTimer?.Kill();
             teamPollTimer = null;
 
-            // Final quick check before live match starts. No retry-loop leaking into match.
             ScheduleCheckTeams(0.05f, allowRetries: false);
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup ended, team poll stopped.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup ended, final team check scheduled.");
 
             return HookResult.Continue;
         }
 
-        private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+        private HookResult OnMatchStart(EventRoundAnnounceMatchStart eventInfo, GameEventInfo gameEventInfo) {
             if (!isActive) {
                 return HookResult.Continue;
             }
 
-            if (warmupActive) {
-                return HookResult.Continue;
-            }
+            matchLive = true;
+            warmupActive = false;
 
-            // One light sanity check during freezetime.
-            ScheduleCheckTeams(ROUND_START_TEAM_CHECK_DELAY, allowRetries: false);
+            StopTimers();
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] round start, scheduled freezetime team check.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] match started, team name updates stopped.");
 
             return HookResult.Continue;
         }
@@ -213,57 +203,143 @@ namespace OSBase.Modules {
             config?.CreateCustomConfig(
                 $"{ModuleName}.cfg",
                 "// Teams Configuration\n" +
-                "// Ex:\n" +
-                "// teamname1 steamid1:steamid2:steamid3:steamid4:steamid5:steamid6\n" +
-                "// teamname2 steamid7:steamid8:steamid9:steamid10:steamid11:steamid12\n"
+                "//\n" +
+                "// Player aliases:\n" +
+                "// pintuz 76561198002264250\n" +
+                "// trewe 76561197960943367\n" +
+                "//\n" +
+                "// Teams using aliases:\n" +
+                "// Fyfan4 \"pintuz,trewe\"\n" +
+                "// Lett \"nisse,76561197974257474\"\n" +
+                "//\n" +
+                "// Old format still works:\n" +
+                "// OldTeam 76561197960943367:76561197988583488\n"
             );
         }
 
         private void LoadConfig() {
             tList.Clear();
+            playerAliases.Clear();
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Loading config...");
 
             List<string> teamcfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
+            var entries = new List<ConfigEntry>();
 
             foreach (var rawLine in teamcfg) {
-                string trimmedLine = rawLine.Trim();
+                string trimmedLine = StripInlineComment(rawLine).Trim();
 
-                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("//")) {
+                if (string.IsNullOrEmpty(trimmedLine)) {
                     continue;
                 }
 
                 var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
 
                 if (parts.Length != 2) {
-                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Invalid config line skipped: {trimmedLine}");
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Invalid config line skipped: {rawLine}");
                     continue;
                 }
 
-                string teamName = parts[0].Trim();
+                string name = parts[0].Trim();
+                string value = Unquote(parts[1].Trim());
 
-                if (string.IsNullOrEmpty(teamName)) {
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(value)) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Empty config entry skipped: {rawLine}");
                     continue;
                 }
 
-                TeamInfo team = new(teamName);
-                var steamids = parts[1].Split(':', StringSplitOptions.RemoveEmptyEntries);
-
-                foreach (var steamidRaw in steamids) {
-                    string steamid = steamidRaw.Trim();
-
-                    try {
-                        team.addPlayer(ulong.Parse(steamid));
-                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Added steamid {steamid} to team {teamName}");
-                    } catch (Exception e) {
-                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Failed to parse steamid {steamid} for team {teamName} -> {e.Message}");
-                    }
-                }
-
-                tList[teamName] = team;
+                entries.Add(new ConfigEntry(name, value, rawLine));
             }
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Loaded {tList.Count} teams.");
+            // Pass 1: player aliases.
+            // Format:
+            // pintuz 76561198002264250
+            foreach (var entry in entries) {
+                if (!ulong.TryParse(entry.Value, out ulong steamid)) {
+                    continue;
+                }
+
+                playerAliases[entry.Name] = steamid;
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Added player alias {entry.Name} -> {steamid}");
+            }
+
+            // Pass 2: teams.
+            // Format:
+            // Fyfan4 \"pintuz,trewe\"
+            // OldTeam 76561197960943367:76561197988583488
+            foreach (var entry in entries) {
+                // A pure numeric value is treated as a player alias line.
+                if (ulong.TryParse(entry.Value, out _)) {
+                    continue;
+                }
+
+                TeamInfo team = new(entry.Name);
+
+                var members = entry.Value
+                    .Split(new[] { ',', ':' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => Unquote(x.Trim()))
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+
+                if (members.Count == 0) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Team {entry.Name} has no members.");
+                    continue;
+                }
+
+                foreach (string member in members) {
+                    if (ulong.TryParse(member, out ulong directSteamid)) {
+                        team.addPlayer(directSteamid);
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Added steamid {directSteamid} to team {entry.Name}");
+                        continue;
+                    }
+
+                    if (playerAliases.TryGetValue(member, out ulong aliasSteamid)) {
+                        team.addPlayer(aliasSteamid);
+                        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Added alias {member} ({aliasSteamid}) to team {entry.Name}");
+                        continue;
+                    }
+
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Unknown player alias/steamid '{member}' in team {entry.Name}");
+                }
+
+                if (team.playerCount() == 0) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Team {entry.Name} skipped, no valid players.");
+                    continue;
+                }
+
+                tList[entry.Name] = team;
+            }
+
+            Console.WriteLine(
+                $"[DEBUG] OSBase[{ModuleName}]: Loaded {playerAliases.Count} player aliases and {tList.Count} teams."
+            );
+        }
+
+        private static string StripInlineComment(string line) {
+            bool inQuote = false;
+
+            for (int i = 0; i < line.Length - 1; i++) {
+                if (line[i] == '"') {
+                    inQuote = !inQuote;
+                    continue;
+                }
+
+                if (!inQuote && line[i] == '/' && line[i + 1] == '/') {
+                    return line[..i];
+                }
+            }
+
+            return line;
+        }
+
+        private static string Unquote(string value) {
+            value = value.Trim();
+
+            if (value.Length >= 2 && value.StartsWith("\"") && value.EndsWith("\"")) {
+                return value[1..^1].Trim();
+            }
+
+            return value;
         }
 
         private void CreateTables() {
@@ -307,19 +383,6 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnStartHalftime(EventStartHalftime eventInfo, GameEventInfo gameEventInfo) {
-            if (!isActive) {
-                return HookResult.Continue;
-            }
-
-            // Halftime/sideswap sanity check. No retry-loop.
-            ScheduleCheckTeams(ROUND_START_TEAM_CHECK_DELAY, allowRetries: false);
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] halftime triggered, scheduled team check.");
-
-            return HookResult.Continue;
-        }
-
         private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
             if (!isActive || db == null) {
                 return HookResult.Continue;
@@ -339,6 +402,9 @@ namespace OSBase.Modules {
 
             if (string.IsNullOrWhiteSpace(teamOne) || string.IsNullOrWhiteSpace(teamTwo)) {
                 Console.WriteLine($"[WARN] OSBase[{ModuleName}] Match end logging skipped: could not resolve both team names.");
+                matchLive = false;
+                warmupActive = false;
+                matchIsNotActive();
                 return HookResult.Continue;
             }
 
@@ -357,7 +423,10 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error inserting into table: {e.Message}");
             }
 
+            matchLive = false;
+            warmupActive = false;
             matchIsNotActive();
+
             teamWins.Clear();
             matchTeamOneName = string.Empty;
             matchTeamTwoName = string.Empty;
@@ -369,13 +438,7 @@ namespace OSBase.Modules {
         }
 
         private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
-            if (!isActive) {
-                return HookResult.Continue;
-            }
-
-            // Aggressive debounce only during warmup.
-            // During live match we avoid extra work and let round_start/freezetime do one sanity check.
-            if (!warmupActive) {
+            if (!isActive || matchLive || !warmupActive) {
                 return HookResult.Continue;
             }
 
@@ -386,7 +449,7 @@ namespace OSBase.Modules {
         }
 
         private void ScheduleCheckTeams(float delay, bool allowRetries) {
-            if (!isActive || osbase == null) {
+            if (!isActive || osbase == null || matchLive) {
                 return;
             }
 
@@ -397,13 +460,13 @@ namespace OSBase.Modules {
                 try {
                     pendingCheckTeamsTimer = null;
 
-                    if (!isActive) {
+                    if (!isActive || matchLive) {
                         return;
                     }
 
                     bool fullyResolved = CheckTeams();
 
-                    if (allowRetries && !fullyResolved && teamDetectRetries < TEAM_DETECT_MAX_RETRIES) {
+                    if (allowRetries && warmupActive && !fullyResolved && teamDetectRetries < TEAM_DETECT_MAX_RETRIES) {
                         teamDetectRetries++;
 
                         Console.WriteLine(
@@ -420,7 +483,7 @@ namespace OSBase.Modules {
         }
 
         private void StartTeamPoller() {
-            if (!isActive || osbase == null || !warmupActive) {
+            if (!isActive || osbase == null || !warmupActive || matchLive) {
                 return;
             }
 
@@ -430,7 +493,7 @@ namespace OSBase.Modules {
             teamPollTimer = osbase.AddTimer(TEAM_POLL_INTERVAL, () => {
                 teamPollTimer = null;
 
-                if (!isActive || !warmupActive) {
+                if (!isActive || !warmupActive || matchLive) {
                     return;
                 }
 
@@ -445,7 +508,7 @@ namespace OSBase.Modules {
         }
 
         private bool CheckTeams() {
-            if (!isActive || osbase == null) {
+            if (!isActive || osbase == null || matchLive) {
                 return false;
             }
 
@@ -462,10 +525,7 @@ namespace OSBase.Modules {
 
             if (tResolution.IsResolved) {
                 if (string.Equals(currentCTTeamName, tResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
-                    Console.WriteLine(
-                        $"[DEBUG] OSBase[{ModuleName}]: T resolved as {tResolution.TeamName}, clearing stale CT name first."
-                    );
-
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: T resolved as {tResolution.TeamName}, clearing stale CT name first.");
                     ResetSideToDefault(TEAM_CT);
                 }
 
@@ -476,10 +536,7 @@ namespace OSBase.Modules {
 
             if (ctResolution.IsResolved) {
                 if (string.Equals(currentTTeamName, ctResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
-                    Console.WriteLine(
-                        $"[DEBUG] OSBase[{ModuleName}]: CT resolved as {ctResolution.TeamName}, clearing stale T name first."
-                    );
-
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: CT resolved as {ctResolution.TeamName}, clearing stale T name first.");
                     ResetSideToDefault(TEAM_T);
                 }
 
@@ -496,6 +553,10 @@ namespace OSBase.Modules {
         }
 
         public bool PrepareMatchZyTeamNames() {
+            if (matchLive) {
+                return false;
+            }
+
             pendingCheckTeamsTimer?.Kill();
             pendingCheckTeamsTimer = null;
 
@@ -673,7 +734,7 @@ namespace OSBase.Modules {
         }
 
         private void ApplyScoreboardTeamNameForSide(int side, string teamName) {
-            if (osbase == null) {
+            if (osbase == null || matchLive) {
                 return;
             }
 
@@ -696,7 +757,6 @@ namespace OSBase.Modules {
 
             if (side == TEAM_T) {
                 osbase.SendCommand($"css_team2 {safeTeamName};");
-                return;
             }
         }
 
@@ -799,15 +859,20 @@ namespace OSBase.Modules {
             currentCTTeam.setWins(GetTeamWins(currentCTTeamName));
         }
 
-        private void ResetMatchState() {
+        private void StopTimers() {
             pendingCheckTeamsTimer?.Kill();
             pendingCheckTeamsTimer = null;
 
             teamPollTimer?.Kill();
             teamPollTimer = null;
+        }
+
+        private void ResetMatchState() {
+            StopTimers();
 
             teamDetectRetries = 0;
             warmupActive = false;
+            matchLive = false;
 
             currentTTeamName = "Terrorists";
             currentCTTeamName = "CounterTerrorists";
@@ -848,6 +913,18 @@ namespace OSBase.Modules {
 
         public static void matchIsNotActive() {
             matchActive = false;
+        }
+
+        private sealed class ConfigEntry {
+            public string Name { get; }
+            public string Value { get; }
+            public string RawLine { get; }
+
+            public ConfigEntry(string name, string value, string rawLine) {
+                Name = name;
+                Value = value;
+                RawLine = rawLine;
+            }
         }
 
         private sealed class TeamResolution {
