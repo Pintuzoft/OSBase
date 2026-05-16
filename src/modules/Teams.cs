@@ -19,6 +19,7 @@ namespace OSBase.Modules {
 
         private bool handlersLoaded = false;
         private bool isActive = false;
+        private bool warmupActive = false;
 
         private CounterStrikeSharp.API.Modules.Timers.Timer? pendingCheckTeamsTimer;
         private CounterStrikeSharp.API.Modules.Timers.Timer? teamPollTimer;
@@ -32,6 +33,7 @@ namespace OSBase.Modules {
         private const float TEAM_DETECT_DELAY = 0.75f;
         private const float TEAM_DETECT_RETRY_DELAY = 1.0f;
         private const float TEAM_POLL_INTERVAL = 1.0f;
+        private const float ROUND_START_TEAM_CHECK_DELAY = 0.25f;
 
         private const int TEAM_DETECT_MAX_RETRIES = 10;
         private const int MIN_SIDE_MATCHES = 1;
@@ -93,6 +95,8 @@ namespace OSBase.Modules {
                 osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd);
                 osbase.DeregisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
                 osbase.DeregisterEventHandler<EventStartHalftime>(OnStartHalftime);
+                osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+                osbase.DeregisterEventHandler<EventRoundStart>(OnRoundStart);
 
                 osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
                 osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
@@ -135,6 +139,8 @@ namespace OSBase.Modules {
             osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
             osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
             osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
+            osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
+            osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
 
             osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
@@ -145,15 +151,17 @@ namespace OSBase.Modules {
         private void OnMapStart(string mapName) {
             ResetMatchState();
 
+            warmupActive = true;
+
             ApplyScoreboardTeamNameForSide(TEAM_CT, currentCTTeamName);
             ApplyScoreboardTeamNameForSide(TEAM_T, currentTTeamName);
 
             teamDetectRetries = 0;
 
-            ScheduleCheckTeams(0.25f);
+            ScheduleCheckTeams(0.25f, allowRetries: true);
             StartTeamPoller();
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] map start: {mapName}, state reset.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] map start: {mapName}, warmup team poll started.");
         }
 
         private void OnMapEnd() {
@@ -162,6 +170,43 @@ namespace OSBase.Modules {
 
             teamPollTimer?.Kill();
             teamPollTimer = null;
+
+            warmupActive = false;
+        }
+
+        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+            if (!isActive) {
+                return HookResult.Continue;
+            }
+
+            warmupActive = false;
+
+            teamPollTimer?.Kill();
+            teamPollTimer = null;
+
+            // Final quick check before live match starts. No retry-loop leaking into match.
+            ScheduleCheckTeams(0.05f, allowRetries: false);
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup ended, team poll stopped.");
+
+            return HookResult.Continue;
+        }
+
+        private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+            if (!isActive) {
+                return HookResult.Continue;
+            }
+
+            if (warmupActive) {
+                return HookResult.Continue;
+            }
+
+            // One light sanity check during freezetime.
+            ScheduleCheckTeams(ROUND_START_TEAM_CHECK_DELAY, allowRetries: false);
+
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] round start, scheduled freezetime team check.");
+
+            return HookResult.Continue;
         }
 
         private void CreateCustomConfigs() {
@@ -267,10 +312,10 @@ namespace OSBase.Modules {
                 return HookResult.Continue;
             }
 
-            teamDetectRetries = 0;
-            ScheduleCheckTeams(TEAM_DETECT_DELAY);
+            // Halftime/sideswap sanity check. No retry-loop.
+            ScheduleCheckTeams(ROUND_START_TEAM_CHECK_DELAY, allowRetries: false);
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] halftime triggered, scheduling fresh team detect.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] halftime triggered, scheduled team check.");
 
             return HookResult.Continue;
         }
@@ -328,13 +373,19 @@ namespace OSBase.Modules {
                 return HookResult.Continue;
             }
 
+            // Aggressive debounce only during warmup.
+            // During live match we avoid extra work and let round_start/freezetime do one sanity check.
+            if (!warmupActive) {
+                return HookResult.Continue;
+            }
+
             teamDetectRetries = 0;
-            ScheduleCheckTeams(TEAM_DETECT_DELAY);
+            ScheduleCheckTeams(TEAM_DETECT_DELAY, allowRetries: true);
 
             return HookResult.Continue;
         }
 
-        private void ScheduleCheckTeams(float delay) {
+        private void ScheduleCheckTeams(float delay, bool allowRetries) {
             if (!isActive || osbase == null) {
                 return;
             }
@@ -352,7 +403,7 @@ namespace OSBase.Modules {
 
                     bool fullyResolved = CheckTeams();
 
-                    if (!fullyResolved && teamDetectRetries < TEAM_DETECT_MAX_RETRIES) {
+                    if (allowRetries && !fullyResolved && teamDetectRetries < TEAM_DETECT_MAX_RETRIES) {
                         teamDetectRetries++;
 
                         Console.WriteLine(
@@ -360,7 +411,7 @@ namespace OSBase.Modules {
                             $"{teamDetectRetries}/{TEAM_DETECT_MAX_RETRIES} in {TEAM_DETECT_RETRY_DELAY}s."
                         );
 
-                        ScheduleCheckTeams(TEAM_DETECT_RETRY_DELAY);
+                        ScheduleCheckTeams(TEAM_DETECT_RETRY_DELAY, allowRetries: true);
                     }
                 } catch (Exception e) {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: CheckTeams timer failed: {e.Message}");
@@ -369,7 +420,7 @@ namespace OSBase.Modules {
         }
 
         private void StartTeamPoller() {
-            if (!isActive || osbase == null) {
+            if (!isActive || osbase == null || !warmupActive) {
                 return;
             }
 
@@ -379,7 +430,7 @@ namespace OSBase.Modules {
             teamPollTimer = osbase.AddTimer(TEAM_POLL_INTERVAL, () => {
                 teamPollTimer = null;
 
-                if (!isActive) {
+                if (!isActive || !warmupActive) {
                     return;
                 }
 
@@ -649,11 +700,6 @@ namespace OSBase.Modules {
             }
         }
 
-        private void ApplyScoreboardTeamNames(string tName, string ctName) {
-            ApplyScoreboardTeamNameForSide(TEAM_CT, ctName);
-            ApplyScoreboardTeamNameForSide(TEAM_T, tName);
-        }
-
         private static string SanitizeTeamName(string teamName) {
             return teamName
                 .Trim()
@@ -761,6 +807,7 @@ namespace OSBase.Modules {
             teamPollTimer = null;
 
             teamDetectRetries = 0;
+            warmupActive = false;
 
             currentTTeamName = "Terrorists";
             currentCTTeamName = "CounterTerrorists";
