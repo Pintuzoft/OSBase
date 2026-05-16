@@ -34,7 +34,7 @@ namespace OSBase.Modules {
         private const float TEAM_POLL_INTERVAL = 1.0f;
 
         private const int TEAM_DETECT_MAX_RETRIES = 10;
-        private const int MIN_SIDE_MATCHES = 2;
+        private const int MIN_SIDE_MATCHES = 1;
 
         private int teamDetectRetries = 0;
 
@@ -145,8 +145,8 @@ namespace OSBase.Modules {
         private void OnMapStart(string mapName) {
             ResetMatchState();
 
-            ApplyScoreboardTeamNameForSide(TEAM_CT, currentCTTeamName, force: true);
-            ApplyScoreboardTeamNameForSide(TEAM_T, currentTTeamName, force: true);
+            ApplyScoreboardTeamNameForSide(TEAM_CT, currentCTTeamName);
+            ApplyScoreboardTeamNameForSide(TEAM_T, currentTTeamName);
 
             teamDetectRetries = 0;
 
@@ -412,11 +412,10 @@ namespace OSBase.Modules {
             if (tResolution.IsResolved) {
                 if (string.Equals(currentCTTeamName, tResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
                     Console.WriteLine(
-                        $"[DEBUG] OSBase[{ModuleName}]: T resolved as {tResolution.TeamName}, " +
-                        "clearing stale CT name first."
+                        $"[DEBUG] OSBase[{ModuleName}]: T resolved as {tResolution.TeamName}, clearing stale CT name first."
                     );
 
-                    ResetSideToDefault(TEAM_CT, force: true);
+                    ResetSideToDefault(TEAM_CT);
                 }
 
                 appliedAny |= ApplyResolvedSide(TEAM_T, tResolution);
@@ -427,11 +426,10 @@ namespace OSBase.Modules {
             if (ctResolution.IsResolved) {
                 if (string.Equals(currentTTeamName, ctResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
                     Console.WriteLine(
-                        $"[DEBUG] OSBase[{ModuleName}]: CT resolved as {ctResolution.TeamName}, " +
-                        "clearing stale T name first."
+                        $"[DEBUG] OSBase[{ModuleName}]: CT resolved as {ctResolution.TeamName}, clearing stale T name first."
                     );
 
-                    ResetSideToDefault(TEAM_T, force: true);
+                    ResetSideToDefault(TEAM_T);
                 }
 
                 appliedAny |= ApplyResolvedSide(TEAM_CT, ctResolution);
@@ -464,7 +462,7 @@ namespace OSBase.Modules {
 
             if (tResolution.Matches > ctResolution.Matches) {
                 if (string.Equals(currentCTTeamName, tResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
-                    ResetSideToDefault(TEAM_CT, force: true);
+                    ResetSideToDefault(TEAM_CT);
                 }
 
                 ApplyResolvedSide(TEAM_T, tResolution);
@@ -476,7 +474,7 @@ namespace OSBase.Modules {
 
             if (ctResolution.Matches > tResolution.Matches) {
                 if (string.Equals(currentTTeamName, ctResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
-                    ResetSideToDefault(TEAM_T, force: true);
+                    ResetSideToDefault(TEAM_T);
                 }
 
                 ApplyResolvedSide(TEAM_CT, ctResolution);
@@ -517,8 +515,6 @@ namespace OSBase.Modules {
                 return TeamResolution.Unresolved("no players on side");
             }
 
-            int minimumRequiredMatches = Math.Max(MIN_SIDE_MATCHES, (int)Math.Ceiling(sidePlayerCount / 2.0));
-
             var ranked = tList.Values
                 .OrderByDescending(t => t.getMatches())
                 .ThenByDescending(t => t.playerCount())
@@ -532,9 +528,9 @@ namespace OSBase.Modules {
             TeamInfo best = ranked[0];
             TeamInfo? second = ranked.Count > 1 ? ranked[1] : null;
 
-            if (best.getMatches() < minimumRequiredMatches) {
+            if (best.getMatches() < MIN_SIDE_MATCHES) {
                 return TeamResolution.Unresolved(
-                    $"best={best.getTeamName()} matches={best.getMatches()} required={minimumRequiredMatches}"
+                    $"best={best.getTeamName()} matches={best.getMatches()} required={MIN_SIDE_MATCHES}"
                 );
             }
 
@@ -568,7 +564,7 @@ namespace OSBase.Modules {
                 );
 
                 resolution.Team.printTeam();
-                ApplyScoreboardTeamNameForSide(side, resolution.TeamName, force: false);
+                ApplyScoreboardTeamNameForSide(side, resolution.TeamName);
             }
 
             return changed;
@@ -606,13 +602,13 @@ namespace OSBase.Modules {
             return false;
         }
 
-        private void ResetSideToDefault(int side, bool force) {
+        private void ResetSideToDefault(int side) {
             if (side == TEAM_T) {
                 currentTTeamName = "Terrorists";
                 currentTTeam = new TeamInfo(currentTTeamName);
                 currentTTeam.setWins(0);
 
-                ApplyScoreboardTeamNameForSide(TEAM_T, currentTTeamName, force);
+                ApplyScoreboardTeamNameForSide(TEAM_T, currentTTeamName);
                 return;
             }
 
@@ -621,11 +617,11 @@ namespace OSBase.Modules {
                 currentCTTeam = new TeamInfo(currentCTTeamName);
                 currentCTTeam.setWins(0);
 
-                ApplyScoreboardTeamNameForSide(TEAM_CT, currentCTTeamName, force);
+                ApplyScoreboardTeamNameForSide(TEAM_CT, currentCTTeamName);
             }
         }
 
-        private void ApplyScoreboardTeamNameForSide(int side, string teamName, bool force) {
+        private void ApplyScoreboardTeamNameForSide(int side, string teamName) {
             if (osbase == null) {
                 return;
             }
@@ -654,8 +650,8 @@ namespace OSBase.Modules {
         }
 
         private void ApplyScoreboardTeamNames(string tName, string ctName) {
-            ApplyScoreboardTeamNameForSide(TEAM_CT, ctName, force: true);
-            ApplyScoreboardTeamNameForSide(TEAM_T, tName, force: true);
+            ApplyScoreboardTeamNameForSide(TEAM_CT, ctName);
+            ApplyScoreboardTeamNameForSide(TEAM_T, tName);
         }
 
         private static string SanitizeTeamName(string teamName) {
