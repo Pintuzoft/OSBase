@@ -21,6 +21,7 @@ namespace OSBase.Modules {
         private bool isActive = false;
 
         private CounterStrikeSharp.API.Modules.Timers.Timer? pendingCheckTeamsTimer;
+        private CounterStrikeSharp.API.Modules.Timers.Timer? teamPollTimer;
 
         private readonly Dictionary<string, TeamInfo> tList = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, int> teamWins = new(StringComparer.OrdinalIgnoreCase);
@@ -28,9 +29,12 @@ namespace OSBase.Modules {
         private const int TEAM_T = (int)CounterStrikeSharp.API.Modules.Utils.CsTeam.Terrorist;
         private const int TEAM_CT = (int)CounterStrikeSharp.API.Modules.Utils.CsTeam.CounterTerrorist;
 
-        private const float TEAM_DETECT_DELAY = 1.5f;
+        private const float TEAM_DETECT_DELAY = 0.75f;
         private const float TEAM_DETECT_RETRY_DELAY = 1.0f;
-        private const int TEAM_DETECT_MAX_RETRIES = 5;
+        private const float TEAM_POLL_INTERVAL = 1.0f;
+
+        private const int TEAM_DETECT_MAX_RETRIES = 10;
+        private const int MIN_SIDE_MATCHES = 2;
 
         private int teamDetectRetries = 0;
 
@@ -80,6 +84,9 @@ namespace OSBase.Modules {
 
             pendingCheckTeamsTimer?.Kill();
             pendingCheckTeamsTimer = null;
+
+            teamPollTimer?.Kill();
+            teamPollTimer = null;
 
             if (osbase != null && handlersLoaded) {
                 osbase.DeregisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
@@ -138,11 +145,13 @@ namespace OSBase.Modules {
         private void OnMapStart(string mapName) {
             ResetMatchState();
 
-            // Reset scoreboard to defaults until real teams are detected.
-            ApplyScoreboardTeamNames(currentTTeamName, currentCTTeamName);
+            ApplyScoreboardTeamNameForSide(TEAM_CT, currentCTTeamName, force: true);
+            ApplyScoreboardTeamNameForSide(TEAM_T, currentTTeamName, force: true);
 
             teamDetectRetries = 0;
-            ScheduleCheckTeams(TEAM_DETECT_DELAY);
+
+            ScheduleCheckTeams(0.25f);
+            StartTeamPoller();
 
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] map start: {mapName}, state reset.");
         }
@@ -150,6 +159,9 @@ namespace OSBase.Modules {
         private void OnMapEnd() {
             pendingCheckTeamsTimer?.Kill();
             pendingCheckTeamsTimer = null;
+
+            teamPollTimer?.Kill();
+            teamPollTimer = null;
         }
 
         private void CreateCustomConfigs() {
@@ -272,9 +284,9 @@ namespace OSBase.Modules {
             string teamTwo = matchTeamTwoName;
 
             if (string.IsNullOrWhiteSpace(teamOne) || string.IsNullOrWhiteSpace(teamTwo)) {
-                if (!string.Equals(currentTTeamName, currentCTTeamName, StringComparison.OrdinalIgnoreCase) &&
-                    currentTTeamName != "Terrorists" &&
-                    currentCTTeamName != "CounterTerrorists") {
+                if (!IsDefaultTeamName(currentTTeamName) &&
+                    !IsDefaultTeamName(currentCTTeamName) &&
+                    !string.Equals(currentTTeamName, currentCTTeamName, StringComparison.OrdinalIgnoreCase)) {
                     teamOne = currentTTeamName;
                     teamTwo = currentCTTeamName;
                 }
@@ -316,8 +328,6 @@ namespace OSBase.Modules {
                 return HookResult.Continue;
             }
 
-            // Debounce: every team change pushes detection forward.
-            // If 10 players join quickly, only the final timer should run.
             teamDetectRetries = 0;
             ScheduleCheckTeams(TEAM_DETECT_DELAY);
 
@@ -340,13 +350,13 @@ namespace OSBase.Modules {
                         return;
                     }
 
-                    bool resolved = CheckTeams();
+                    bool fullyResolved = CheckTeams();
 
-                    if (!resolved && teamDetectRetries < TEAM_DETECT_MAX_RETRIES) {
+                    if (!fullyResolved && teamDetectRetries < TEAM_DETECT_MAX_RETRIES) {
                         teamDetectRetries++;
 
                         Console.WriteLine(
-                            $"[DEBUG] OSBase[{ModuleName}]: Team detect unresolved, retry " +
+                            $"[DEBUG] OSBase[{ModuleName}]: Team detect not fully resolved, retry " +
                             $"{teamDetectRetries}/{TEAM_DETECT_MAX_RETRIES} in {TEAM_DETECT_RETRY_DELAY}s."
                         );
 
@@ -358,66 +368,129 @@ namespace OSBase.Modules {
             });
         }
 
+        private void StartTeamPoller() {
+            if (!isActive || osbase == null) {
+                return;
+            }
+
+            teamPollTimer?.Kill();
+            teamPollTimer = null;
+
+            teamPollTimer = osbase.AddTimer(TEAM_POLL_INTERVAL, () => {
+                teamPollTimer = null;
+
+                if (!isActive) {
+                    return;
+                }
+
+                try {
+                    CheckTeams();
+                } catch (Exception e) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Team poll failed: {e.Message}");
+                }
+
+                StartTeamPoller();
+            });
+        }
+
         private bool CheckTeams() {
-            return ResolveAndApplyTeamNames();
+            if (!isActive || osbase == null) {
+                return false;
+            }
+
+            var tResolution = ResolveSideTeam(TEAM_T);
+            var ctResolution = ResolveSideTeam(TEAM_CT);
+
+            if (tResolution.IsResolved &&
+                ctResolution.IsResolved &&
+                string.Equals(tResolution.TeamName, ctResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
+                return HandleSameTeamConflict(tResolution, ctResolution);
+            }
+
+            bool appliedAny = false;
+
+            if (tResolution.IsResolved) {
+                if (string.Equals(currentCTTeamName, tResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
+                    Console.WriteLine(
+                        $"[DEBUG] OSBase[{ModuleName}]: T resolved as {tResolution.TeamName}, " +
+                        "clearing stale CT name first."
+                    );
+
+                    ResetSideToDefault(TEAM_CT, force: true);
+                }
+
+                appliedAny |= ApplyResolvedSide(TEAM_T, tResolution);
+            } else {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: T side unresolved: {tResolution.DebugText}");
+            }
+
+            if (ctResolution.IsResolved) {
+                if (string.Equals(currentTTeamName, ctResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
+                    Console.WriteLine(
+                        $"[DEBUG] OSBase[{ModuleName}]: CT resolved as {ctResolution.TeamName}, " +
+                        "clearing stale T name first."
+                    );
+
+                    ResetSideToDefault(TEAM_T, force: true);
+                }
+
+                appliedAny |= ApplyResolvedSide(TEAM_CT, ctResolution);
+            } else {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: CT side unresolved: {ctResolution.DebugText}");
+            }
+
+            if (appliedAny) {
+                RememberMatchTeamsIfReady();
+            }
+
+            return AreBothCurrentTeamsKnown();
         }
 
         public bool PrepareMatchZyTeamNames() {
             pendingCheckTeamsTimer?.Kill();
             pendingCheckTeamsTimer = null;
+
             teamDetectRetries = 0;
 
-            return ResolveAndApplyTeamNames();
+            return CheckTeams();
         }
 
-        private bool ResolveAndApplyTeamNames() {
-            if (!isActive || osbase == null) {
+        private bool HandleSameTeamConflict(TeamResolution tResolution, TeamResolution ctResolution) {
+            Console.WriteLine(
+                $"[WARN] OSBase[{ModuleName}]: Same-team conflict: {tResolution.TeamName}. " +
+                $"T={tResolution.Matches}/{tResolution.SidePlayerCount}, " +
+                $"CT={ctResolution.Matches}/{ctResolution.SidePlayerCount}"
+            );
+
+            if (tResolution.Matches > ctResolution.Matches) {
+                if (string.Equals(currentCTTeamName, tResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
+                    ResetSideToDefault(TEAM_CT, force: true);
+                }
+
+                ApplyResolvedSide(TEAM_T, tResolution);
+                RememberMatchTeamsIfReady();
+
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Conflict winner: T={tResolution.TeamName}");
                 return false;
             }
 
-            var tResolution = ResolveSideTeam(TEAM_T, null);
-            var ctResolution = ResolveSideTeam(TEAM_CT, tResolution.IsResolved ? tResolution.TeamName : null);
+            if (ctResolution.Matches > tResolution.Matches) {
+                if (string.Equals(currentTTeamName, ctResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
+                    ResetSideToDefault(TEAM_T, force: true);
+                }
 
-            if (tResolution.IsResolved && ctResolution.IsResolved &&
-                !string.Equals(tResolution.TeamName, ctResolution.TeamName, StringComparison.OrdinalIgnoreCase)) {
-                currentTTeamName = tResolution.TeamName;
-                currentCTTeamName = ctResolution.TeamName;
+                ApplyResolvedSide(TEAM_CT, ctResolution);
+                RememberMatchTeamsIfReady();
 
-                currentTTeam = tResolution.Team.Clone();
-                currentCTTeam = ctResolution.Team.Clone();
-
-                currentTTeam.setWins(GetTeamWins(currentTTeamName));
-                currentCTTeam.setWins(GetTeamWins(currentCTTeamName));
-
-                matchIsActive();
-                RememberMatchTeams(currentTTeamName, currentCTTeamName);
-
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Teams resolved: T={currentTTeamName} CT={currentCTTeamName}");
-
-                currentTTeam.printTeam();
-                currentCTTeam.printTeam();
-
-                ApplyScoreboardTeamNames(currentTTeamName, currentCTTeamName);
-                return true;
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Conflict winner: CT={ctResolution.TeamName}");
+                return false;
             }
 
-            Console.WriteLine(
-                $"[WARN] OSBase[{ModuleName}]: Team detect unresolved. " +
-                $"T={tResolution.DebugText} CT={ctResolution.DebugText}"
-            );
-
-            if (!isMatchActive()) {
-                currentTTeamName = "Terrorists";
-                currentCTTeamName = "CounterTerrorists";
-
-                currentTTeam = new TeamInfo(currentTTeamName);
-                currentCTTeam = new TeamInfo(currentCTTeamName);
-            }
-
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Same-team conflict tied, keeping current names and waiting.");
             return false;
         }
 
-        private TeamResolution ResolveSideTeam(int side, string? excludedTeamName) {
+        private TeamResolution ResolveSideTeam(int side) {
             ResetAllTeamMatches();
 
             int sidePlayerCount = 0;
@@ -434,11 +507,6 @@ namespace OSBase.Modules {
                 sidePlayerCount++;
 
                 foreach (var ti in tList) {
-                    if (!string.IsNullOrEmpty(excludedTeamName) &&
-                        string.Equals(ti.Key, excludedTeamName, StringComparison.OrdinalIgnoreCase)) {
-                        continue;
-                    }
-
                     if (ti.Value.isPlayerInTeam(player.SteamID)) {
                         ti.Value.incMatches();
                     }
@@ -449,11 +517,9 @@ namespace OSBase.Modules {
                 return TeamResolution.Unresolved("no players on side");
             }
 
-            int minimumRequiredMatches = Math.Max(2, (int)Math.Ceiling(sidePlayerCount / 2.0));
+            int minimumRequiredMatches = Math.Max(MIN_SIDE_MATCHES, (int)Math.Ceiling(sidePlayerCount / 2.0));
 
             var ranked = tList.Values
-                .Where(t => string.IsNullOrEmpty(excludedTeamName) ||
-                    !string.Equals(t.getTeamName(), excludedTeamName, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(t => t.getMatches())
                 .ThenByDescending(t => t.playerCount())
                 .ThenBy(t => t.getTeamName(), StringComparer.OrdinalIgnoreCase)
@@ -481,40 +547,115 @@ namespace OSBase.Modules {
             return TeamResolution.Resolved(
                 best.getTeamName(),
                 best.Clone(),
-                $"best={best.getTeamName()} matches={best.getMatches()}/{sidePlayerCount}"
+                $"best={best.getTeamName()} matches={best.getMatches()}/{sidePlayerCount}",
+                best.getMatches(),
+                sidePlayerCount
             );
         }
 
-        private void ResetAllTeamMatches() {
-            foreach (var ti in tList) {
-                ti.Value.resetMatches();
+        private bool ApplyResolvedSide(int side, TeamResolution resolution) {
+            if (!resolution.IsResolved) {
+                return false;
+            }
+
+            bool changed = SetCurrentSideTeam(side, resolution.TeamName, resolution.Team);
+
+            if (changed) {
+                Console.WriteLine(
+                    $"[DEBUG] OSBase[{ModuleName}]: " +
+                    $"{SideName(side)} side resolved as {resolution.TeamName} " +
+                    $"({resolution.Matches}/{resolution.SidePlayerCount})"
+                );
+
+                resolution.Team.printTeam();
+                ApplyScoreboardTeamNameForSide(side, resolution.TeamName, force: false);
+            }
+
+            return changed;
+        }
+
+        private bool SetCurrentSideTeam(int side, string teamName, TeamInfo team) {
+            string safeTeamName = SanitizeTeamName(teamName);
+
+            if (string.IsNullOrWhiteSpace(safeTeamName) ||
+                string.Equals(safeTeamName, "none", StringComparison.OrdinalIgnoreCase)) {
+                Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Refusing to set invalid team name '{teamName}'.");
+                return false;
+            }
+
+            if (side == TEAM_T) {
+                bool changed = !string.Equals(currentTTeamName, safeTeamName, StringComparison.OrdinalIgnoreCase);
+
+                currentTTeamName = safeTeamName;
+                currentTTeam = team.Clone();
+                currentTTeam.setWins(GetTeamWins(currentTTeamName));
+
+                return changed;
+            }
+
+            if (side == TEAM_CT) {
+                bool changed = !string.Equals(currentCTTeamName, safeTeamName, StringComparison.OrdinalIgnoreCase);
+
+                currentCTTeamName = safeTeamName;
+                currentCTTeam = team.Clone();
+                currentCTTeam.setWins(GetTeamWins(currentCTTeamName));
+
+                return changed;
+            }
+
+            return false;
+        }
+
+        private void ResetSideToDefault(int side, bool force) {
+            if (side == TEAM_T) {
+                currentTTeamName = "Terrorists";
+                currentTTeam = new TeamInfo(currentTTeamName);
+                currentTTeam.setWins(0);
+
+                ApplyScoreboardTeamNameForSide(TEAM_T, currentTTeamName, force);
+                return;
+            }
+
+            if (side == TEAM_CT) {
+                currentCTTeamName = "CounterTerrorists";
+                currentCTTeam = new TeamInfo(currentCTTeamName);
+                currentCTTeam.setWins(0);
+
+                ApplyScoreboardTeamNameForSide(TEAM_CT, currentCTTeamName, force);
             }
         }
 
-        private void ApplyScoreboardTeamNames(string tName, string ctName) {
+        private void ApplyScoreboardTeamNameForSide(int side, string teamName, bool force) {
             if (osbase == null) {
                 return;
             }
 
-            string safeTName = SanitizeTeamName(tName);
-            string safeCTName = SanitizeTeamName(ctName);
+            string safeTeamName = SanitizeTeamName(teamName);
 
-            if (string.IsNullOrWhiteSpace(safeTName) || string.IsNullOrWhiteSpace(safeCTName)) {
+            if (string.IsNullOrWhiteSpace(safeTeamName)) {
                 Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Refusing to apply empty team name.");
                 return;
             }
 
-            if (string.Equals(safeTName, "none", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(safeCTName, "none", StringComparison.OrdinalIgnoreCase)) {
+            if (string.Equals(safeTeamName, "none", StringComparison.OrdinalIgnoreCase)) {
                 Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Refusing to apply 'none' team name.");
                 return;
             }
 
-            // Preserving your original mapping:
-            // css_team1 <- CT
-            // css_team2 <- T
-            osbase.SendCommand($"css_team1 {safeCTName};");
-            osbase.SendCommand($"css_team2 {safeTName};");
+            if (side == TEAM_CT) {
+                osbase.SendCommand($"css_team1 {safeTeamName};");
+                return;
+            }
+
+            if (side == TEAM_T) {
+                osbase.SendCommand($"css_team2 {safeTeamName};");
+                return;
+            }
+        }
+
+        private void ApplyScoreboardTeamNames(string tName, string ctName) {
+            ApplyScoreboardTeamNameForSide(TEAM_CT, ctName, force: true);
+            ApplyScoreboardTeamNameForSide(TEAM_T, tName, force: true);
         }
 
         private static string SanitizeTeamName(string teamName) {
@@ -525,17 +666,29 @@ namespace OSBase.Modules {
                 .Replace("\n", "");
         }
 
-        private void RememberMatchTeams(string tName, string ctName) {
-            RememberMatchTeam(tName);
-            RememberMatchTeam(ctName);
+        private void ResetAllTeamMatches() {
+            foreach (var ti in tList) {
+                ti.Value.resetMatches();
+            }
         }
 
-        private void RememberMatchTeam(string teamName) {
-            if (string.IsNullOrWhiteSpace(teamName)) {
+        private void RememberMatchTeamsIfReady() {
+            if (!AreBothCurrentTeamsKnown()) {
                 return;
             }
 
-            if (teamName == "Terrorists" || teamName == "CounterTerrorists") {
+            matchIsActive();
+            RememberMatchTeam(currentTTeamName);
+            RememberMatchTeam(currentCTTeamName);
+
+            Console.WriteLine(
+                $"[DEBUG] OSBase[{ModuleName}]: Current teams ready: " +
+                $"T={currentTTeamName} CT={currentCTTeamName}"
+            );
+        }
+
+        private void RememberMatchTeam(string teamName) {
+            if (string.IsNullOrWhiteSpace(teamName) || IsDefaultTeamName(teamName)) {
                 return;
             }
 
@@ -552,6 +705,31 @@ namespace OSBase.Modules {
             if (string.IsNullOrEmpty(matchTeamTwoName)) {
                 matchTeamTwoName = teamName;
             }
+        }
+
+        private bool AreBothCurrentTeamsKnown() {
+            return
+                !IsDefaultTeamName(currentTTeamName) &&
+                !IsDefaultTeamName(currentCTTeamName) &&
+                !string.Equals(currentTTeamName, currentCTTeamName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsDefaultTeamName(string teamName) {
+            return
+                string.Equals(teamName, "Terrorists", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(teamName, "CounterTerrorists", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string SideName(int side) {
+            if (side == TEAM_T) {
+                return "T";
+            }
+
+            if (side == TEAM_CT) {
+                return "CT";
+            }
+
+            return $"team-{side}";
         }
 
         private void IncrementTeamWin(string teamName) {
@@ -582,6 +760,9 @@ namespace OSBase.Modules {
         private void ResetMatchState() {
             pendingCheckTeamsTimer?.Kill();
             pendingCheckTeamsTimer = null;
+
+            teamPollTimer?.Kill();
+            teamPollTimer = null;
 
             teamDetectRetries = 0;
 
@@ -631,20 +812,37 @@ namespace OSBase.Modules {
             public string TeamName { get; }
             public TeamInfo Team { get; }
             public string DebugText { get; }
+            public int Matches { get; }
+            public int SidePlayerCount { get; }
 
-            private TeamResolution(bool isResolved, string teamName, TeamInfo team, string debugText) {
+            private TeamResolution(
+                bool isResolved,
+                string teamName,
+                TeamInfo team,
+                string debugText,
+                int matches,
+                int sidePlayerCount
+            ) {
                 IsResolved = isResolved;
                 TeamName = teamName;
                 Team = team;
                 DebugText = debugText;
+                Matches = matches;
+                SidePlayerCount = sidePlayerCount;
             }
 
-            public static TeamResolution Resolved(string teamName, TeamInfo team, string debugText) {
-                return new TeamResolution(true, teamName, team, debugText);
+            public static TeamResolution Resolved(
+                string teamName,
+                TeamInfo team,
+                string debugText,
+                int matches,
+                int sidePlayerCount
+            ) {
+                return new TeamResolution(true, teamName, team, debugText, matches, sidePlayerCount);
             }
 
             public static TeamResolution Unresolved(string debugText) {
-                return new TeamResolution(false, "none", new TeamInfo("none"), debugText);
+                return new TeamResolution(false, "none", new TeamInfo("none"), debugText, 0, 0);
             }
         }
     }
