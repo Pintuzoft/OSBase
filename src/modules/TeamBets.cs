@@ -28,14 +28,42 @@ public class TeamBets : IModule {
     private readonly Dictionary<int, Bet> bets = new();
 
     private class Bet {
+        public string PlayerName { get; }
         public int Amount { get; }
         public int Team { get; }
         public float Odds { get; }
+        public int AliveT { get; }
+        public int AliveCt { get; }
 
-        public Bet(int amount, int team, float odds) {
+        public Bet(string playerName, int amount, int team, float odds, int aliveT, int aliveCt) {
+            PlayerName = playerName;
             Amount = amount;
             Team = team;
             Odds = odds;
+            AliveT = aliveT;
+            AliveCt = aliveCt;
+        }
+    }
+
+    private class BetResult {
+        public string PlayerName { get; }
+        public int Amount { get; }
+        public int Team { get; }
+        public float Odds { get; }
+        public int AliveT { get; }
+        public int AliveCt { get; }
+        public int NetResult { get; }
+        public string Note { get; }
+
+        public BetResult(string playerName, int amount, int team, float odds, int aliveT, int aliveCt, int netResult, string note = "") {
+            PlayerName = playerName;
+            Amount = amount;
+            Team = team;
+            Odds = odds;
+            AliveT = aliveT;
+            AliveCt = aliveCt;
+            NetResult = netResult;
+            Note = note;
         }
     }
 
@@ -229,17 +257,29 @@ public class TeamBets : IModule {
             return;
         }
 
-        RemoveMoney(player, amount);
-        bets[player.UserId.Value] = new Bet(amount, betTeam, odds);
+        string playerName = string.IsNullOrWhiteSpace(player.PlayerName)
+            ? $"UserID {player.UserId.Value}"
+            : player.PlayerName;
 
-        player.PrintToChat(
-            $"[TeamBets]: You bet ${amount} on {(betTeam == TeamT ? "T" : "CT")} " +
-            $"at {odds:0.00} odds. Alive T/CT: {aliveT}/{aliveCt}"
+        RemoveMoney(player, amount);
+
+        bets[player.UserId.Value] = new Bet(
+            playerName,
+            amount,
+            betTeam,
+            odds,
+            aliveT,
+            aliveCt
+        );
+
+        BroadcastToChat(
+            $"[TeamBets]: {playerName}: bet placed " +
+            FormatBetDetails(amount, betTeam, odds, aliveT, aliveCt)
         );
 
         Console.WriteLine(
-            $"[DEBUG] OSBase[{ModuleName}] Bet placed by {player.PlayerName}: " +
-            $"team={(betTeam == TeamT ? "T" : "CT")} amount={amount} odds={odds:0.00} aliveT={aliveT} aliveCt={aliveCt}"
+            $"[DEBUG] OSBase[{ModuleName}] Bet placed by {playerName}: " +
+            $"team={GetTeamName(betTeam)} amount={amount} odds={odds:0.00} aliveT={aliveT} aliveCt={aliveCt}"
         );
     }
 
@@ -272,7 +312,160 @@ public class TeamBets : IModule {
 
         roundLive = false;
 
+        if (bets.Count <= 0) {
+            return HookResult.Continue;
+        }
+
         int winningTeam = eventInfo.Winner;
+
+        if (!IsPlayableTeam(winningTeam)) {
+            RefundAllBets("No valid winning team.");
+            bets.Clear();
+            return HookResult.Continue;
+        }
+
+        List<BetResult> results = new();
+
+        foreach (var kvp in bets) {
+            int userId = kvp.Key;
+            Bet bet = kvp.Value;
+
+            CCSPlayerController? player = Utilities.GetPlayerFromUserid(userId);
+            bool playerOnline = player != null && player.IsValid && player.InGameMoneyServices != null;
+
+            if (bet.Team == winningTeam) {
+                int payout = (int)Math.Round(bet.Amount * (1.0f + bet.Odds));
+                int actualPaid = 0;
+                string note = "";
+
+                if (playerOnline && player != null && player.InGameMoneyServices != null) {
+                    int balanceBefore = player.InGameMoneyServices.Account;
+
+                    AddMoney(player, payout);
+
+                    int balanceAfter = player.InGameMoneyServices.Account;
+                    actualPaid = balanceAfter - balanceBefore;
+
+                    if (actualPaid < payout) {
+                        note = "cash cap";
+                    }
+                } else {
+                    note = "disconnected";
+                }
+
+                int netResult = actualPaid - bet.Amount;
+
+                results.Add(new BetResult(
+                    bet.PlayerName,
+                    bet.Amount,
+                    bet.Team,
+                    bet.Odds,
+                    bet.AliveT,
+                    bet.AliveCt,
+                    netResult,
+                    note
+                ));
+
+                Console.WriteLine(
+                    $"[DEBUG] OSBase[{ModuleName}] Bet WON by {bet.PlayerName}: " +
+                    $"amount={bet.Amount} payout={payout} actualPaid={actualPaid} net={netResult} odds={bet.Odds:0.00} online={playerOnline}"
+                );
+            } else {
+                int netResult = -bet.Amount;
+
+                results.Add(new BetResult(
+                    bet.PlayerName,
+                    bet.Amount,
+                    bet.Team,
+                    bet.Odds,
+                    bet.AliveT,
+                    bet.AliveCt,
+                    netResult
+                ));
+
+                Console.WriteLine(
+                    $"[DEBUG] OSBase[{ModuleName}] Bet LOST by {bet.PlayerName}: " +
+                    $"amount={bet.Amount} team={GetTeamName(bet.Team)} odds={bet.Odds:0.00} online={playerOnline}"
+                );
+            }
+        }
+
+        PrintBetLeaderboard(winningTeam, results);
+
+        bets.Clear();
+        return HookResult.Continue;
+    }
+
+    private void PrintBetLeaderboard(int winningTeam, List<BetResult> results) {
+        List<BetResult> sortedResults = results
+            .OrderByDescending(r => r.NetResult)
+            .ThenBy(r => r.PlayerName)
+            .ToList();
+
+        BroadcastToChat($"[TeamBets]: {GetTeamName(winningTeam)} won. Betting leaderboard:");
+
+        int rank = 1;
+
+        foreach (BetResult result in sortedResults) {
+            string moneyText = FormatMoneyResult(result.NetResult);
+            string netLabel = FormatNetLabel(result.NetResult);
+            string noteText = string.IsNullOrWhiteSpace(result.Note) ? "" : $" ({result.Note})";
+
+            BroadcastToChat(
+                $"[TeamBets]: #{rank} {result.PlayerName}: " +
+                $"{moneyText} {netLabel} " +
+                FormatBetDetails(result.Amount, result.Team, result.Odds, result.AliveT, result.AliveCt, noteText)
+            );
+
+            rank++;
+        }
+    }
+
+    private string FormatBetDetails(int amount, int team, float odds, int aliveT, int aliveCt, string noteText = "") {
+        return
+            $"{ChatColors.Grey}| bet ${amount} on {GetTeamName(team)} @ {odds:0.00}x " +
+            $"[{GetBetSituationText(team, aliveT, aliveCt)}]{noteText}" +
+            $"{ChatColors.Default}";
+    }
+
+    private string FormatMoneyResult(int amount) {
+        if (amount > 0) {
+            return $"{ChatColors.Green}+${amount}{ChatColors.Default}";
+        }
+
+        if (amount < 0) {
+            return $"{ChatColors.Red}-${Math.Abs(amount)}{ChatColors.Default}";
+        }
+
+        return $"{ChatColors.Default}$0";
+    }
+
+    private string FormatNetLabel(int amount) {
+        if (amount > 0) {
+            return $"{ChatColors.Green}profit{ChatColors.Default}";
+        }
+
+        if (amount < 0) {
+            return $"{ChatColors.Red}loss{ChatColors.Default}";
+        }
+
+        return $"{ChatColors.Default}net";
+    }
+
+    private string GetBetSituationText(int betTeam, int aliveT, int aliveCt) {
+        if (betTeam == TeamT) {
+            return $"{aliveT}v{aliveCt}";
+        }
+
+        if (betTeam == TeamCt) {
+            return $"{aliveCt}v{aliveT}";
+        }
+
+        return $"{aliveT}v{aliveCt}";
+    }
+
+    private void RefundAllBets(string reason) {
+        BroadcastToChat($"[TeamBets]: {reason} Refunding all active bets.");
 
         foreach (var kvp in bets) {
             int userId = kvp.Key;
@@ -280,37 +473,13 @@ public class TeamBets : IModule {
 
             CCSPlayerController? player = Utilities.GetPlayerFromUserid(userId);
             if (player == null || !player.IsValid || player.InGameMoneyServices == null) {
+                BroadcastToChat($"[TeamBets]: {bet.PlayerName} would have been refunded ${bet.Amount}, but is disconnected.");
                 continue;
             }
 
-            if (bet.Team == winningTeam) {
-                int payout = (int)Math.Round(bet.Amount * (1.0f + bet.Odds));
-                int profit = payout - bet.Amount;
-
-                AddMoney(player, payout);
-
-                player.PrintToChat(
-                    $"[TeamBets]: You won ${profit} betting on {(winningTeam == TeamT ? "T" : "CT")}!"
-                );
-
-                Console.WriteLine(
-                    $"[DEBUG] OSBase[{ModuleName}] Bet WON by {player.PlayerName}: " +
-                    $"amount={bet.Amount} payout={payout} profit={profit} odds={bet.Odds:0.00}"
-                );
-            } else {
-                player.PrintToChat(
-                    $"[TeamBets]: You lost ${bet.Amount} betting on {(bet.Team == TeamT ? "T" : "CT")}."
-                );
-
-                Console.WriteLine(
-                    $"[DEBUG] OSBase[{ModuleName}] Bet LOST by {player.PlayerName}: " +
-                    $"amount={bet.Amount} team={(bet.Team == TeamT ? "T" : "CT")} odds={bet.Odds:0.00}"
-                );
-            }
+            AddMoney(player, bet.Amount);
+            BroadcastToChat($"[TeamBets]: {bet.PlayerName} was refunded ${bet.Amount}.");
         }
-
-        bets.Clear();
-        return HookResult.Continue;
     }
 
     private int CountAlivePlayers(int teamNum) {
@@ -324,6 +493,20 @@ public class TeamBets : IModule {
 
     private bool IsPlayableTeam(int teamNum) {
         return teamNum == TeamT || teamNum == TeamCt;
+    }
+
+    private string GetTeamName(int teamNum) {
+        return teamNum == TeamT ? "T" : "CT";
+    }
+
+    private void BroadcastToChat(string message) {
+        foreach (CCSPlayerController player in Utilities.GetPlayers()) {
+            if (player == null || !player.IsValid) {
+                continue;
+            }
+
+            player.PrintToChat(message);
+        }
     }
 
     private void AddMoney(CCSPlayerController player, int amount) {
