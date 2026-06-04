@@ -21,6 +21,7 @@ public class TeamBets : IModule {
     private const int TeamCt = (int)CsTeam.CounterTerrorist;
     private const int MinMoney = 0;
     private const int MaxMoney = 16000;
+    private const float LeaderboardDelaySeconds = 1.5f;
 
     private bool roundLive = false;
 
@@ -272,8 +273,8 @@ public class TeamBets : IModule {
             aliveCt
         );
 
-        BroadcastToChat(
-            $"[TeamBets]: {playerName}: bet placed " +
+        player.PrintToChat(
+            $"[TeamBets]: Bet placed " +
             FormatBetDetails(amount, betTeam, odds, aliveT, aliveCt)
         );
 
@@ -390,10 +391,28 @@ public class TeamBets : IModule {
             }
         }
 
-        PrintBetLeaderboard(winningTeam, results);
+        PrintBetLeaderboardDelayed(winningTeam, results);
 
         bets.Clear();
         return HookResult.Continue;
+    }
+
+    private void PrintBetLeaderboardDelayed(int winningTeam, List<BetResult> results) {
+        if (osbase == null) {
+            PrintBetLeaderboard(winningTeam, results);
+            return;
+        }
+
+        int finalWinningTeam = winningTeam;
+        List<BetResult> finalResults = results.ToList();
+
+        osbase.AddTimer(LeaderboardDelaySeconds, () => {
+            if (!isActive) {
+                return;
+            }
+
+            PrintBetLeaderboard(finalWinningTeam, finalResults);
+        });
     }
 
     private void PrintBetLeaderboard(int winningTeam, List<BetResult> results) {
