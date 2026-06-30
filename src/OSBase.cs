@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.511";
+    public override string ModuleVersion => "0.0.512";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for managing CS2 servers";
 
@@ -45,6 +45,12 @@ public class OSBase : BasePlugin {
         RegisterEventHandler<EventRoundEnd>(OnRoundEndGlobal);
         RegisterEventHandler<EventPlayerConnect>(OnPlayerConnectGlobal);
         RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnectGlobal);
+        RegisterEventHandler<EventWarmupEnd>(OnWarmupEndGlobal);
+        RegisterEventHandler<EventStartHalftime>(OnStartHalftimeGlobal);
+        RegisterEventHandler<EventWeaponFire>(OnWeaponFireGlobal);
+        RegisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEndGlobal);
+        RegisterEventHandler<EventMapTransition>(OnMapTransitionGlobal);
+        RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFullGlobal);
 
         RegisterListener<OnMapStart>(HandleMapStart);
 
@@ -133,6 +139,36 @@ public class OSBase : BasePlugin {
     }
 
     private HookResult OnPlayerDisconnectGlobal(EventPlayerDisconnect e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnWarmupEndGlobal(EventWarmupEnd e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnStartHalftimeGlobal(EventStartHalftime e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnWeaponFireGlobal(EventWeaponFire e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnRoundFreezeEndGlobal(EventRoundFreezeEnd e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnMapTransitionGlobal(EventMapTransition e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerConnectFullGlobal(EventPlayerConnectFull e, GameEventInfo _) {
         DispatchToEventBus(e);
         return HookResult.Continue;
     }

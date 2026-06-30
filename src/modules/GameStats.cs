@@ -104,15 +104,16 @@ namespace OSBase.Modules {
                 return;
             }
 
-            osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
-            osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-            osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-            osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
+            // Use new EventBus system
+            osbase.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
+            osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+            osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+            osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
             osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
-            osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-            osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime);
-            osbase.RegisterEventHandler<EventWeaponFire>(OnWeaponFire);
+            osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase.SubscribeToEvent<EventStartHalftime>(OnStartHalftime);
+            osbase.SubscribeToEvent<EventWeaponFire>(OnWeaponFire);
 
             hasLoadedEvents = true;
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Handlers loaded.");
@@ -230,7 +231,7 @@ namespace OSBase.Modules {
             Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Saved ({reason}/{mode}): inserted={inserted}, minRounds={MIN_ROUNDS_TO_SAVE}. Match data & caches cleared (memory cleanup).");
         }
 
-        private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
+        private HookResult OnWarmupEnd(EventWarmupEnd ev) {
             isWarmup = false;
             roundNumber = 0;
             tWins = 0;
@@ -247,7 +248,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnWeaponFire(EventWeaponFire ev, GameEventInfo info) {
+        private HookResult OnWeaponFire(EventWeaponFire ev) {
             if (isWarmup) {
                 return HookResult.Continue;
             }
@@ -261,7 +262,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnPlayerHurt(EventPlayerHurt ev, GameEventInfo info) {
+        private HookResult OnPlayerHurt(EventPlayerHurt ev) {
             if (isWarmup) {
                 return HookResult.Continue;
             }
@@ -275,7 +276,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnPlayerDeath(EventPlayerDeath ev, GameEventInfo info) {
+        private HookResult OnPlayerDeath(EventPlayerDeath ev) {
             if (isWarmup) {
                 return HookResult.Continue;
             }
@@ -302,7 +303,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnRoundStart(EventRoundStart ev, GameEventInfo info) {
+        private HookResult OnRoundStart(EventRoundStart ev) {
             if (isWarmup) {
                 return HookResult.Continue;
             }
@@ -313,7 +314,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnRoundEnd(EventRoundEnd ev, GameEventInfo info) {
+        private HookResult OnRoundEnd(EventRoundEnd ev) {
             if (isWarmup) {
                 return HookResult.Continue;
             }
@@ -379,7 +380,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnStartHalftime(EventStartHalftime ev, GameEventInfo info) {
+        private HookResult OnStartHalftime(EventStartHalftime ev) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Halftime.");
 
             var buf = teamList[TEAM_T];

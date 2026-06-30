@@ -54,7 +54,8 @@ public class Welcome : IModule {
         KillPendingWelcomeTimers();
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
             handlersLoaded = false;
         }
 
@@ -76,7 +77,8 @@ public class Welcome : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
         handlersLoaded = true;
     }
 
@@ -107,7 +109,7 @@ public class Welcome : IModule {
         );
     }
 
-    private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo) {
         if (!isActive || osbase == null || config == null) {
             return HookResult.Continue;
         }

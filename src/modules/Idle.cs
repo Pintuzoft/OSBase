@@ -69,10 +69,11 @@ public class Idle : IModule {
         ClearTracked();
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEnd);
-            osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd);
-            osbase.DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-            osbase.DeregisterEventHandler<EventMapTransition>(OnMapTransition);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
+            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
             osbase.RemoveListener<Listeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
 
             handlersLoaded = false;
@@ -98,10 +99,11 @@ public class Idle : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEnd);
-        osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-        osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
+        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
         osbase.RegisterListener<Listeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
 
         handlersLoaded = true;
@@ -177,7 +179,7 @@ public class Idle : IModule {
         );
     }
 
-    private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd _, GameEventInfo __) {
+    private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd _) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -200,19 +202,19 @@ public class Idle : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnRoundEnd(EventRoundEnd _, GameEventInfo __) {
+    private HookResult OnRoundEnd(EventRoundEnd _) {
         roundActive = false;
         ClearTracked();
         return HookResult.Continue;
     }
 
-    private HookResult OnMapTransition(EventMapTransition _, GameEventInfo __) {
+    private HookResult OnMapTransition(EventMapTransition _) {
         roundActive = false;
         ClearTracked();
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo __) {
+    private HookResult OnPlayerDeath(EventPlayerDeath @event) {
         if (!isActive || !roundActive) {
             return HookResult.Continue;
         }
