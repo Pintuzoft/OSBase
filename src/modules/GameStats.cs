@@ -47,6 +47,9 @@ namespace OSBase.Modules {
         private string activeMapName = "";
         private bool savedThisMatch = false;
 
+        // === Memory tracking ===
+        private long lastMemoryMB = 0;
+
         private int tWins = 0;
         private int ctWins = 0;
 
@@ -133,7 +136,23 @@ namespace OSBase.Modules {
         }
 
         private void OnMapEnd() {
+            LogMemorySnapshot();
             SaveIfEligible("MapEnd");
+        }
+
+        private void LogMemorySnapshot() {
+            try {
+                var proc = System.Diagnostics.Process.GetCurrentProcess();
+                long currentMemoryMB = proc.WorkingSet64 / (1024 * 1024);
+                long delta = currentMemoryMB - lastMemoryMB;
+                string deltaStr = lastMemoryMB == 0 ? "initial" : (delta >= 0 ? $"+{delta}MB" : $"{delta}MB");
+
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Memory: {currentMemoryMB}MB ({deltaStr}) | Caches: matchPlayerStats={matchPlayerStats.Count}, avg90Cache={avg90Cache.Count}, userIdToSteam={userIdToSteam.Count}");
+
+                lastMemoryMB = currentMemoryMB;
+            } catch (Exception e) {
+                Console.WriteLine($"[WARN] OSBase[{ModuleName}] - Memory snapshot failed: {e.Message}");
+            }
         }
 
         private void SaveIfEligible(string reason) {
