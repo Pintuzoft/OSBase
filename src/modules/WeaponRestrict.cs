@@ -504,7 +504,7 @@ namespace OSBase.Modules {
         }
 
         private float GetPrioritySkill(CCSPlayerController player) {
-            return TeamBalancer.Current?.GetEffectiveSkillForPriority(player) ?? 0f;
+            return osbase?.GetTeamBalancer()?.GetEffectiveSkillForPriority(player) ?? 0f;
         }
 
         private int GetPriorityKills(CCSPlayerController player) {

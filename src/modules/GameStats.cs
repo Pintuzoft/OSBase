@@ -193,31 +193,20 @@ namespace OSBase.Modules {
             string mode = scoreReached ? "ScoreReached" : "MapEndFallback";
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Saving stats ({reason}/{mode}): map={activeMapName} T={tWins} CT={ctWins} rounds={roundNumber} participants={participantCount} qualified={qualifiedPlayers}");
 
-            int inserted = 0;
+            const string insertQuery =
+                "INSERT INTO skill_log (steamid, name, skill, datestr, mapname) " +
+                "VALUES (@steamid, @name, @skill, NOW(), @mapname);";
 
-            foreach (var ps in matchPlayerStats.Values) {
-                if (ps.steamid == "0" || ps.name.Length == 0 || ps.rounds < MIN_ROUNDS_TO_SAVE) {
-                    continue;
-                }
-
-                const string query =
-                    "INSERT INTO skill_log (steamid, name, skill, datestr, mapname) " +
-                    "VALUES (@steamid, @name, @skill, NOW(), @mapname);";
-
-                var parameters = new MySqlParameter[] {
+            var writes = matchPlayerStats.Values
+                .Where(ps => ps.steamid != "0" && ps.name.Length > 0 && ps.rounds >= MIN_ROUNDS_TO_SAVE)
+                .Select(ps => (insertQuery, new MySqlParameter[] {
                     new MySqlParameter("@steamid", ps.steamid),
                     new MySqlParameter("@name", ps.name),
                     new MySqlParameter("@skill", ps.calcSkill()),
                     new MySqlParameter("@mapname", activeMapName)
-                };
+                }));
 
-                try {
-                    db.insert(query, parameters);
-                    inserted++;
-                } catch (Exception e) {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - SaveInsert({reason}): {e.Message} ({ps.name}/{ps.steamid})");
-                }
-            }
+            int inserted = db.ExecuteTransaction(writes);
 
             savedThisMatch = true;
 

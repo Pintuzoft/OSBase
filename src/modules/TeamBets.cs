@@ -509,7 +509,7 @@ public class TeamBets : IModule {
     }
 
     private bool IsWarmupActive() {
-        return GameStats.Current?.IsWarmup ?? true;
+        return osbase?.GetGameStats()?.IsWarmup ?? true;
     }
 
     private bool IsPlayableTeam(int teamNum) {

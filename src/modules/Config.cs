@@ -103,7 +103,9 @@ public class Config {
             lines.Add($"{kvp.Key} {kvp.Value}");
         }
 
-        File.WriteAllLines(globalConfigPath, lines);
+        var tmpPath = globalConfigPath + ".tmp";
+        File.WriteAllLines(tmpPath, lines);
+        File.Move(tmpPath, globalConfigPath, overwrite: true);
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Global configuration saved to {globalConfigPath}");
     }
 

@@ -196,6 +196,25 @@ public class Database {
         }
     }
 
+    public int ExecuteTransaction ( IEnumerable<(string query, MySqlParameter[] parameters)> writes ) {
+        try {
+            using var conn = Open();
+            using var tx = conn.BeginTransaction();
+            int total = 0;
+            foreach (var (query, parameters) in writes) {
+                using var cmd = new MySqlCommand(query, conn, tx);
+                if (parameters != null && parameters.Length > 0) cmd.Parameters.AddRange(parameters);
+                cmd.Prepare();
+                total += cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+            return total;
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: (ExecuteTransaction): {ex.Message}");
+            return 0;
+        }
+    }
+
     private int exeChangeNoCatch ( string query, params MySqlParameter[] parameters ) {
         using var conn = Open();
         using var cmd = new MySqlCommand(query, conn);
