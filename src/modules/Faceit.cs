@@ -17,18 +17,14 @@ using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
 
 namespace OSBase.Modules;
 
-public class Faceit : IModule {
-    public string ModuleName => "faceit";
+public class Faceit : ModuleBase {
+    public override string ModuleName => "faceit";
+    protected override string DefaultEnabled => "0";
 
     private const string ChatPrefix = " \x08[OSBase(Admin)]\x01 ";
 
-    private OSBase? osbase;
-    private Config? config;
     private Database? db;
     private HttpClient? httpClient;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
 
     // cfg (faceit.cfg)
     private string apiKey = "";
@@ -51,28 +47,11 @@ public class Faceit : IModule {
 
     private const int MaxConnectChecksPerRound = 8;
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "0");
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
-
+    protected override void OnLoad() {
         CreateModuleConfig();
         LoadModuleConfig();
 
-        db = new Database(osbase, config);
+        db = new Database(osbase!, config!);
         db.Initialize();
 
         // Use HTTPS-validating handler for security
@@ -87,28 +66,16 @@ public class Faceit : IModule {
 
         EnsureFaceitCacheTable();
         CleanupOldCacheRows();
-        LoadHandlers();
 
         if (debug) {
-            Console.WriteLine("[DEBUG] OSBase[faceit]: loaded successfully!");
             Console.WriteLine($"[DEBUG] OSBase[faceit]: api key loaded={!string.IsNullOrWhiteSpace(apiKey)}, len={apiKey.Length}");
             Console.WriteLine($"[DEBUG] OSBase[faceit]: admin_permission={adminPermission}, timeout={httpTimeoutSeconds}, cleanup_after_days={cleanupAfterDays}");
         }
     }
 
-    public void Unload() {
-        isActive = false;
-
+    protected override void OnUnload() {
         StopWorker();
         ClearQueue();
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
-            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
-            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
-            handlersLoaded = false;
-        }
 
         db?.FlushPendingWrites(1500);
 
@@ -116,15 +83,9 @@ public class Faceit : IModule {
         httpClient = null;
 
         db = null;
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
-
+    protected override void OnReloadConfig() {
         CreateModuleConfig();
         LoadModuleConfig();
 
@@ -139,17 +100,18 @@ public class Faceit : IModule {
         }
     }
 
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
+    protected override void RegisterHandlers() {
         // Use new EventBus system
-        osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
-        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
-        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
+        osbase?.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.SubscribeToEvent<EventMapTransition>(OnMapTransition);
+    }
 
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        // Use new EventBus system
+        osbase?.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
     }
 
     private HookResult OnMapTransition(EventMapTransition _) {

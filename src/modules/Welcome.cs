@@ -6,80 +6,35 @@ using CounterStrikeSharp.API.Modules.Events;
 
 namespace OSBase.Modules;
 
-public class Welcome : IModule {
-    public string ModuleName => "welcome";
+public class Welcome : ModuleBase {
+    public override string ModuleName => "welcome";
 
     private const string WelcomeConfigFile = "welcome.cfg";
-
-    private OSBase? osbase;
-    private Config? config;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
 
     private float delay = 5.0f;
 
     private readonly List<CounterStrikeSharp.API.Modules.Timers.Timer> pendingWelcomeTimers = new();
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "1");
-        config.RegisterGlobalConfigValue($"{ModuleName}_delay", "5.0");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
-
+    protected override void OnLoad() {
+        config?.RegisterGlobalConfigValue($"{ModuleName}_delay", "5.0");
         CreateCustomConfigs();
         LoadConfig();
-        LoadHandlers();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
-    public void Unload() {
-        isActive = false;
-
+    protected override void OnUnload() {
         KillPendingWelcomeTimers();
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
-            handlersLoaded = false;
-        }
-
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
+    protected override void OnReloadConfig() {
         LoadConfig();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
     }
 
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
+    protected override void RegisterHandlers() {
+        osbase?.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+    }
 
-        // Use new EventBus system
-        osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        osbase?.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
     }
 
     private void LoadConfig() {

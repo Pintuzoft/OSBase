@@ -12,7 +12,6 @@ using MySqlConnector;
 namespace OSBase.Modules {
     public class GameStats {
         public string ModuleName => "gamestats";
-        public static GameStats? Current { get; private set; }
 
         private readonly OSBase osbase;
         private readonly Database db;
@@ -59,7 +58,6 @@ namespace OSBase.Modules {
         private const int MAPEND_FALLBACK_MIN_ROUNDS = 16; // save late/real matches even if nobody reached 11
 
         public GameStats(OSBase inOsbase, Config inConfig) {
-            Current = this;
             osbase = inOsbase;
             config = inConfig;
             db = new Database(osbase, config);

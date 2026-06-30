@@ -7,18 +7,14 @@ using CounterStrikeSharp.API.Modules.Events;
 using MySqlConnector;
 
 namespace OSBase.Modules {
-    public class Teams : IModule {
-        public string ModuleName => "teams";
+    public class Teams : ModuleBase {
+        public override string ModuleName => "teams";
 
         private static Teams? teams = null;
         private static bool matchActive = false;
 
-        private OSBase? osbase;
-        private Config? config;
         private Database? db;
 
-        private bool handlersLoaded = false;
-        private bool isActive = false;
         private bool warmupActive = false;
         private bool matchLive = false;
 
@@ -50,55 +46,19 @@ namespace OSBase.Modules {
         private string matchTeamOneName = string.Empty;
         private string matchTeamTwoName = string.Empty;
 
-        public void Load(OSBase inOsbase, Config inConfig) {
-            osbase = inOsbase;
-            config = inConfig;
-            isActive = true;
-
-            if (osbase == null || config == null) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-                isActive = false;
-                return;
-            }
-
-            config.RegisterGlobalConfigValue(ModuleName, "1");
-
-            if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-                isActive = false;
-                return;
-            }
-
-            db = new Database(osbase, config);
+        protected override void OnLoad() {
+            db = new Database(osbase!, config!);
 
             CreateCustomConfigs();
             LoadConfig();
             CreateTables();
             ResetMatchState();
-            LoadHandlers();
 
             teams = this;
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
         }
 
-        public void Unload() {
-            isActive = false;
-
+        protected override void OnUnload() {
             StopTimers();
-
-            if (osbase != null && handlersLoaded) {
-                osbase.UnsubscribeFromEvent<EventPlayerTeam>(OnPlayerTeam);
-                osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
-                osbase.UnsubscribeFromEvent<EventCsWinPanelMatch>(OnMatchEnd);
-                osbase.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
-                osbase.UnsubscribeFromEvent<EventRoundAnnounceMatchStart>(OnMatchStart);
-
-                osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
-                osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
-
-                handlersLoaded = false;
-            }
 
             ResetMatchState();
             tList.Clear();
@@ -106,42 +66,39 @@ namespace OSBase.Modules {
             teamWins.Clear();
 
             db = null;
-            config = null;
-            osbase = null;
 
             if (ReferenceEquals(teams, this)) {
                 teams = null;
             }
 
             matchActive = false;
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
         }
 
-        public void ReloadConfig(Config inConfig) {
-            config = inConfig;
-
+        protected override void OnReloadConfig() {
             CreateCustomConfigs();
             LoadConfig();
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
         }
 
-        private void LoadHandlers() {
-            if (osbase == null || handlersLoaded) {
-                return;
-            }
+        protected override void RegisterHandlers() {
+            osbase?.SubscribeToEvent<EventPlayerTeam>(OnPlayerTeam);
+            osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+            osbase?.SubscribeToEvent<EventCsWinPanelMatch>(OnMatchEnd);
+            osbase?.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase?.SubscribeToEvent<EventRoundAnnounceMatchStart>(OnMatchStart);
 
-            osbase.SubscribeToEvent<EventPlayerTeam>(OnPlayerTeam);
-            osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
-            osbase.SubscribeToEvent<EventCsWinPanelMatch>(OnMatchEnd);
-            osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
-            osbase.SubscribeToEvent<EventRoundAnnounceMatchStart>(OnMatchStart);
+            osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+            osbase?.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
+        }
 
-            osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-            osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
+        protected override void UnregisterHandlers() {
+            osbase?.UnsubscribeFromEvent<EventPlayerTeam>(OnPlayerTeam);
+            osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+            osbase?.UnsubscribeFromEvent<EventCsWinPanelMatch>(OnMatchEnd);
+            osbase?.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase?.UnsubscribeFromEvent<EventRoundAnnounceMatchStart>(OnMatchStart);
 
-            handlersLoaded = true;
+            osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+            osbase?.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
         }
 
         private void OnMapStart(string mapName) {

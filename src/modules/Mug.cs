@@ -5,69 +5,18 @@ using CounterStrikeSharp.API.Modules.Events;
 
 namespace OSBase.Modules;
 
-public class Mug : IModule {
-    public string ModuleName => "mug";
-
-    private OSBase? osbase;
-    private Config? config;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
+public class Mug : ModuleBase {
+    public override string ModuleName => "mug";
 
     private const int MinMoney = 0;
     private const int MaxMoney = 16000;
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "1");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
-
-        LoadHandlers();
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+    protected override void RegisterHandlers() {
+        osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
     }
 
-    public void Unload() {
-        isActive = false;
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
-            handlersLoaded = false;
-        }
-
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
-    }
-
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
-    }
-
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
-        // Use new EventBus system
-        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
     }
 
     private HookResult OnPlayerDeath(EventPlayerDeath eventInfo) {

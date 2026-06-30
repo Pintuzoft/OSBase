@@ -11,16 +11,11 @@ using MySqlConnector;
 
 namespace OSBase.Modules;
 
-public class KnifeWeekend : IModule {
-    public string ModuleName => "knifeweekend";
+public class KnifeWeekend : ModuleBase {
+    public override string ModuleName => "knifeweekend";
 
-    private OSBase? osbase;
-    private Config? config;
     private GameStats? gameStats;
     private Database? db;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
 
     private readonly HashSet<ulong> adminSteamIds = new();
     private readonly List<PendingKnifeEvent> pendingKnifeEvents = new();
@@ -70,67 +65,31 @@ public class KnifeWeekend : IModule {
         public int Delta { get; set; }
     }
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        gameStats = osbase.GetGameStats();
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "1");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
+    protected override void OnLoad() {
+        gameStats = osbase?.GetGameStats();
 
         CreateCustomConfigs();
         LoadConfig();
 
-        db = new Database(osbase, config);
+        db = new Database(osbase!, config!);
 
         if (createTables) {
             CreateTables();
         }
 
         LoadAdminSteamIds();
-        LoadHandlers();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully. admins={adminSteamIds.Count}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] admins={adminSteamIds.Count}");
     }
 
-    public void Unload() {
-        isActive = false;
-
+    protected override void OnUnload() {
         FlushPendingWrites("Unload");
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
-            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
-            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
-            osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
-            osbase.RemoveCommand("css_ktop", OnKnifeTopCommand);
-            handlersLoaded = false;
-        }
 
         adminSteamIds.Clear();
         db = null;
         gameStats = null;
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
+    protected override void OnReloadConfig() {
         gameStats = osbase?.GetGameStats();
 
         CreateCustomConfigs();
@@ -141,23 +100,25 @@ public class KnifeWeekend : IModule {
         }
 
         LoadAdminSteamIds();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded. admins={adminSteamIds.Count}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] admins={adminSteamIds.Count}");
     }
 
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
+    protected override void RegisterHandlers() {
         // Use new EventBus system
-        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
-        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
-        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
-        osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-        osbase.AddCommand("css_ktop", "Shows KnifeWeekend top list", OnKnifeTopCommand);
+        osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
+        osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.AddCommand("css_ktop", "Shows KnifeWeekend top list", OnKnifeTopCommand);
+    }
 
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        // Use new EventBus system
+        osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+        osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.RemoveCommand("css_ktop", OnKnifeTopCommand);
     }
 
     private void CreateCustomConfigs() {

@@ -8,14 +8,8 @@ using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules;
 
-public class TeamBets : IModule {
-    public string ModuleName => "teambets";
-
-    private OSBase? osbase;
-    private Config? config;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
+public class TeamBets : ModuleBase {
+    public override string ModuleName => "teambets";
 
     private const int TeamT = (int)CsTeam.Terrorist;
     private const int TeamCt = (int)CsTeam.CounterTerrorist;
@@ -68,72 +62,31 @@ public class TeamBets : IModule {
         }
     }
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "1");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
-
+    protected override void OnLoad() {
         bets.Clear();
         roundLive = false;
-
-        LoadHandlers();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
-    public void Unload() {
-        isActive = false;
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system for bomb/round events
-            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
-            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
-            osbase.UnsubscribeFromEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
-            osbase.DeregisterEventHandler<EventPlayerChat>(OnPlayerChat);
-
-            handlersLoaded = false;
-        }
-
+    protected override void OnUnload() {
         bets.Clear();
         roundLive = false;
-
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
-    }
-
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
+    protected override void RegisterHandlers() {
         // Use new EventBus system for bomb/round events
-        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
-        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
-        osbase.SubscribeToEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
-        osbase.RegisterEventHandler<EventPlayerChat>(OnPlayerChat);
+        osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
+        osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.SubscribeToEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
+        // EventPlayerChat is not on the EventBus dispatcher; register it directly.
+        osbase?.RegisterEventHandler<EventPlayerChat>(OnPlayerChat);
+    }
 
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        // Use new EventBus system for bomb/round events
+        osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+        osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.UnsubscribeFromEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
+        osbase?.DeregisterEventHandler<EventPlayerChat>(OnPlayerChat);
     }
 
     private HookResult OnPlayerChat(EventPlayerChat eventInfo, GameEventInfo gameEventInfo) {

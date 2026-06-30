@@ -8,14 +8,9 @@ using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules;
 
-public class AutoAssign : IModule {
-    public string ModuleName => "autoassign";
-
-    private OSBase? osbase;
-    private Config? config;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
+public class AutoAssign : ModuleBase {
+    public override string ModuleName => "autoassign";
+    protected override string DefaultEnabled => "0";
 
     private const float AssignDelay = 1.00f;
     private const float WarmupRespawnDelay = 0.20f;
@@ -30,70 +25,30 @@ public class AutoAssign : IModule {
     // Lets TeamBalancer skip freshly auto-assigned players if it wants to.
     private readonly Dictionary<ulong, DateTime> recentAutoAssign = new();
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "0");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in global config.");
-            isActive = false;
-            return;
-        }
-
+    protected override void OnLoad() {
         ResetState();
-        LoadHandlers();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded (assign_delay={AssignDelay:0.00}s).");
     }
 
-    public void Unload() {
-        isActive = false;
+    protected override void OnUnload() {
         ResetState();
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
-            osbase.UnsubscribeFromEvent<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
-            osbase.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
-            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
-            osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
-
-            handlersLoaded = false;
-        }
-
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
-    }
-
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
+    protected override void RegisterHandlers() {
         // Use new EventBus system
-        osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
-        osbase.SubscribeToEvent<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
-        osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
-        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
-        osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase?.SubscribeToEvent<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
+        osbase?.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+        osbase?.SubscribeToEvent<EventMapTransition>(OnMapTransition);
+        osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+    }
 
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        // Use new EventBus system
+        osbase?.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase?.UnsubscribeFromEvent<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
+        osbase?.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
+        osbase?.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
+        osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
     }
 
     private void OnMapStart(string mapName) {

@@ -10,14 +10,8 @@ using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
 
 namespace OSBase.Modules;
 
-public class DamageReport : IModule {
-    public string ModuleName => "damagereport";
-
-    private OSBase? osbase;
-    private Config? config;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
+public class DamageReport : ModuleBase {
+    public override string ModuleName => "damagereport";
 
     private const int ENVIRONMENT = -1;
     private const float DELAY_SECONDS = 3.0f;
@@ -41,72 +35,29 @@ public class DamageReport : IModule {
     private readonly Dictionary<int, string> playerNames = new();
     private readonly Dictionary<int, Timer> pendingReports = new();
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "1");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
-
-        LoadHandlers();
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
-    }
-
-    public void Unload() {
-        isActive = false;
-
+    protected override void OnUnload() {
         CancelAllPendingReports();
         ClearDamageData();
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system (Unsubscribe instead of DeregisterEventHandler)
-            osbase.UnsubscribeFromEvent<EventPlayerHurt>(OnPlayerHurt);
-            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
-            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
-            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
-            osbase.UnsubscribeFromEvent<EventPlayerConnect>(OnPlayerConnect);
-            osbase.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
-
-            handlersLoaded = false;
-        }
-
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
-    }
-
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
+    protected override void RegisterHandlers() {
         // Use new EventBus system (Subscribe instead of RegisterEventHandler)
-        osbase.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
-        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
-        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
-        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
-        osbase.SubscribeToEvent<EventPlayerConnect>(OnPlayerConnect);
-        osbase.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
+        osbase?.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
+        osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
+        osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.SubscribeToEvent<EventPlayerConnect>(OnPlayerConnect);
+        osbase?.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
+    }
 
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        // Use new EventBus system (Unsubscribe instead of DeregisterEventHandler)
+        osbase?.UnsubscribeFromEvent<EventPlayerHurt>(OnPlayerHurt);
+        osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+        osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.UnsubscribeFromEvent<EventPlayerConnect>(OnPlayerConnect);
+        osbase?.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
     }
 
     private HookResult OnPlayerHurt(EventPlayerHurt e) {

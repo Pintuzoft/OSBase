@@ -6,72 +6,20 @@ using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules;
 
-public class TeamDamage : IModule {
-    public string ModuleName => "teamdamage";
-
-    private OSBase? osbase;
-    private Config? config;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
+public class TeamDamage : ModuleBase {
+    public override string ModuleName => "teamdamage";
 
     private const int TEAM_T = (int)CsTeam.Terrorist;
     private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "1");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
-
-        LoadHandlers();
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
+    protected override void RegisterHandlers() {
+        osbase?.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
+        osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
     }
 
-    public void Unload() {
-        isActive = false;
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventPlayerHurt>(OnPlayerHurt);
-            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
-            handlersLoaded = false;
-        }
-
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
-    }
-
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
-    }
-
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
-        // Use new EventBus system
-        osbase.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
-        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
-
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        osbase?.UnsubscribeFromEvent<EventPlayerHurt>(OnPlayerHurt);
+        osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
     }
 
     private HookResult OnPlayerHurt(EventPlayerHurt eventInfo) {

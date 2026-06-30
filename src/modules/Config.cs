@@ -36,7 +36,7 @@ public class Config {
 
         if (!File.Exists(globalConfigPath)) {
             Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Global config not found. Creating default config.");
-            File.WriteAllLines(globalConfigPath, new[] {
+            WriteLinesAtomic(globalConfigPath, new[] {
                 "// OSBase.cfg",
                 "// Global configuration for OSBase plugin"
             });
@@ -103,10 +103,15 @@ public class Config {
             lines.Add($"{kvp.Key} {kvp.Value}");
         }
 
-        var tmpPath = globalConfigPath + ".tmp";
-        File.WriteAllLines(tmpPath, lines);
-        File.Move(tmpPath, globalConfigPath, overwrite: true);
+        WriteLinesAtomic(globalConfigPath, lines);
         Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Global configuration saved to {globalConfigPath}");
+    }
+
+    // Write via a temp file + atomic rename so a crash mid-write can't corrupt the config.
+    private static void WriteLinesAtomic(string path, IEnumerable<string> lines) {
+        var tmpPath = path + ".tmp";
+        File.WriteAllLines(tmpPath, lines);
+        File.Move(tmpPath, path, overwrite: true);
     }
 
     public void CreateCustomConfig(string fileName, string defaultContent) {

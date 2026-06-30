@@ -9,15 +9,12 @@ using CoreListeners = CounterStrikeSharp.API.Core.Listeners;
 
 namespace OSBase.Modules;
 
-public class QuickDefuse : IModule {
-    public string ModuleName => "quickdefuse";
+public class QuickDefuse : ModuleBase {
+    public override string ModuleName => "quickdefuse";
 
     private const float SessionTimeoutSeconds = 10.0f;
     private const float ConfirmTimeoutSeconds = 3.0f;
-    private bool handlersLoaded = false;
 
-    private OSBase? osbase;
-    private Config? config;
     private readonly Random random = new();
 
     private readonly Dictionary<IntPtr, ActivePlantSession> activePlantSessions = new();
@@ -25,93 +22,52 @@ public class QuickDefuse : IModule {
 
     private PlayerButtons? activeBombDirection = null;
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-
-        config.RegisterGlobalConfigValue(ModuleName, "1");
-        config.RegisterGlobalConfigValue($"{ModuleName}_debug", "0");
-
-        if (osbase == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] osbase is null. {ModuleName} failed to load.");
-            return;
-        }
-
-        if (config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] config is null. {ModuleName} failed to load.");
-            return;
-        }
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] {ModuleName} is disabled in the global configuration.");
-            return;
-        }
-
-        LoadHandlers();
+    protected override void OnLoad() {
+        config?.RegisterGlobalConfigValue($"{ModuleName}_debug", "0");
         ClearAllState();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
-    public void Unload() {
-        if (osbase != null && handlersLoaded) {
-            osbase.RemoveListener<CoreListeners.OnTick>(OnTick);
-            osbase.RemoveListener<CoreListeners.OnMapEnd>(OnMapEnd);
-            osbase.RemoveListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
-
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
-            osbase.UnsubscribeFromEvent<EventBombBeginplant>(OnBombBeginPlant);
-            osbase.UnsubscribeFromEvent<EventBombAbortplant>(OnBombAbortPlant);
-            osbase.UnsubscribeFromEvent<EventBombPlanted>(OnBombPlanted);
-            osbase.UnsubscribeFromEvent<EventBombBegindefuse>(OnBombBeginDefuse);
-            osbase.UnsubscribeFromEvent<EventBombAbortdefuse>(OnBombAbortDefuse);
-            osbase.UnsubscribeFromEvent<EventBombDefused>(OnBombDefused);
-            osbase.UnsubscribeFromEvent<EventBombExploded>(OnBombExploded);
-            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
-            osbase.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
-
-            handlersLoaded = false;
-        }
-
+    protected override void OnUnload() {
         ClearAllState();
-
-        osbase = null;
-        config = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
-    }
-
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
-        osbase.RegisterListener<CoreListeners.OnTick>(OnTick);
-        osbase.RegisterListener<CoreListeners.OnMapEnd>(OnMapEnd);
-        osbase.RegisterListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
+    protected override void RegisterHandlers() {
+        osbase?.RegisterListener<CoreListeners.OnTick>(OnTick);
+        osbase?.RegisterListener<CoreListeners.OnMapEnd>(OnMapEnd);
+        osbase?.RegisterListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
 
         // Use new EventBus system
-        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
+        osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
 
-        osbase.SubscribeToEvent<EventBombBeginplant>(OnBombBeginPlant);
-        osbase.SubscribeToEvent<EventBombAbortplant>(OnBombAbortPlant);
-        osbase.SubscribeToEvent<EventBombPlanted>(OnBombPlanted);
+        osbase?.SubscribeToEvent<EventBombBeginplant>(OnBombBeginPlant);
+        osbase?.SubscribeToEvent<EventBombAbortplant>(OnBombAbortPlant);
+        osbase?.SubscribeToEvent<EventBombPlanted>(OnBombPlanted);
 
-        osbase.SubscribeToEvent<EventBombBegindefuse>(OnBombBeginDefuse);
-        osbase.SubscribeToEvent<EventBombAbortdefuse>(OnBombAbortDefuse);
-        osbase.SubscribeToEvent<EventBombDefused>(OnBombDefused);
-        osbase.SubscribeToEvent<EventBombExploded>(OnBombExploded);
+        osbase?.SubscribeToEvent<EventBombBegindefuse>(OnBombBeginDefuse);
+        osbase?.SubscribeToEvent<EventBombAbortdefuse>(OnBombAbortDefuse);
+        osbase?.SubscribeToEvent<EventBombDefused>(OnBombDefused);
+        osbase?.SubscribeToEvent<EventBombExploded>(OnBombExploded);
 
-        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
-        osbase.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
+        osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
+    }
 
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        osbase?.RemoveListener<CoreListeners.OnTick>(OnTick);
+        osbase?.RemoveListener<CoreListeners.OnMapEnd>(OnMapEnd);
+        osbase?.RemoveListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
+
+        // Use new EventBus system
+        osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+        osbase?.UnsubscribeFromEvent<EventBombBeginplant>(OnBombBeginPlant);
+        osbase?.UnsubscribeFromEvent<EventBombAbortplant>(OnBombAbortPlant);
+        osbase?.UnsubscribeFromEvent<EventBombPlanted>(OnBombPlanted);
+        osbase?.UnsubscribeFromEvent<EventBombBegindefuse>(OnBombBeginDefuse);
+        osbase?.UnsubscribeFromEvent<EventBombAbortdefuse>(OnBombAbortDefuse);
+        osbase?.UnsubscribeFromEvent<EventBombDefused>(OnBombDefused);
+        osbase?.UnsubscribeFromEvent<EventBombExploded>(OnBombExploded);
+        osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
     }
 
     private HookResult OnRoundStart(EventRoundStart eventInfo) {

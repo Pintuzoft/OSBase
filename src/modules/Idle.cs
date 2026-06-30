@@ -10,14 +10,9 @@ using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
 
 namespace OSBase.Modules;
 
-public class Idle : IModule {
-    public string ModuleName => "idle";
-
-    private OSBase? osbase;
-    private Config? config;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
+public class Idle : ModuleBase {
+    public override string ModuleName => "idle";
+    protected override string DefaultEnabled => "0";
 
     private float spawnEpsilon = 0.5f;
     private float deathSpecAfterSeconds = 25f;
@@ -36,77 +31,37 @@ public class Idle : IModule {
         public Timer? MoveTimer;
     }
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "0");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
-
+    protected override void OnLoad() {
         CreateCustomConfigs();
         LoadConfig();
-        LoadHandlers();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
-    public void Unload() {
-        isActive = false;
+    protected override void OnUnload() {
         roundActive = false;
-
         ClearTracked();
-
-        if (osbase != null && handlersLoaded) {
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
-            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
-            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
-            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
-            osbase.RemoveListener<Listeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
-
-            handlersLoaded = false;
-        }
-
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
-
+    protected override void OnReloadConfig() {
         CreateCustomConfigs();
         LoadConfig();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
     }
 
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
+    protected override void RegisterHandlers() {
         // Use new EventBus system
-        osbase.SubscribeToEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
-        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
-        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
-        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
-        osbase.RegisterListener<Listeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
+        osbase?.SubscribeToEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
+        osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.SubscribeToEvent<EventMapTransition>(OnMapTransition);
+        osbase?.RegisterListener<Listeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
+    }
 
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        // Use new EventBus system
+        osbase?.UnsubscribeFromEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
+        osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
+        osbase?.RemoveListener<Listeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
     }
 
     private void CreateCustomConfigs() {

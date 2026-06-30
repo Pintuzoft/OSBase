@@ -9,77 +9,28 @@ using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
 
 namespace OSBase.Modules;
 
-public class DemosMatch : IModule {
-    public string ModuleName => "demosmatch";
+public class DemosMatch : ModuleBase {
+    public override string ModuleName => "demosmatch";
 
-    private OSBase? osbase;
-    private Config? config;
-
-    private bool handlersLoaded = false;
-    private bool isActive = false;
     private bool mapEndHandled = false;
 
     private float demoQuitDelay = 10.0f;
     private Timer? quitTimer;
 
-    public void Load(OSBase inOsbase, Config inConfig) {
-        osbase = inOsbase;
-        config = inConfig;
-        isActive = true;
-
-        if (osbase == null || config == null) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-            isActive = false;
-            return;
-        }
-
-        config.RegisterGlobalConfigValue(ModuleName, "1");
-        config.RegisterGlobalConfigValue($"{ModuleName}_quit_delay", "10");
-
-        if (config.GetGlobalConfigValue(ModuleName, "0") != "1") {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-            isActive = false;
-            return;
-        }
-
+    protected override void OnLoad() {
+        config?.RegisterGlobalConfigValue($"{ModuleName}_quit_delay", "10");
         LoadConfig();
-        LoadHandlers();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded successfully!");
     }
 
-    public void Unload() {
-        isActive = false;
-
+    protected override void OnUnload() {
         quitTimer?.Kill();
         quitTimer = null;
         mapEndHandled = false;
-
-        if (osbase != null && handlersLoaded) {
-            osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
-            // Use new EventBus system
-            osbase.UnsubscribeFromEvent<EventCsWinPanelMatch>(OnMatchEnd);
-            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
-            osbase.UnsubscribeFromEvent<EventMapShutdown>(OnMapShutdown);
-
-            osbase.RemoveCommandListener("map", OnCommandMap, HookMode.Pre);
-            osbase.RemoveCommandListener("changelevel", OnCommandMap, HookMode.Pre);
-            osbase.RemoveCommandListener("ds_workshop_changelevel", OnCommandMap, HookMode.Pre);
-
-            handlersLoaded = false;
-        }
-
-        config = null;
-        osbase = null;
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
     }
 
-    public void ReloadConfig(Config inConfig) {
-        config = inConfig;
+    protected override void OnReloadConfig() {
         LoadConfig();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded. demoQuitDelay={demoQuitDelay:0.0}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] demoQuitDelay={demoQuitDelay:0.0}");
     }
 
     private void LoadConfig() {
@@ -99,22 +50,28 @@ public class DemosMatch : IModule {
         demoQuitDelay = MathF.Max(0.0f, demoQuitDelay);
     }
 
-    private void LoadHandlers() {
-        if (osbase == null || handlersLoaded) {
-            return;
-        }
-
-        osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+    protected override void RegisterHandlers() {
+        osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         // Use new EventBus system
-        osbase.SubscribeToEvent<EventCsWinPanelMatch>(OnMatchEnd);
-        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
-        osbase.SubscribeToEvent<EventMapShutdown>(OnMapShutdown);
+        osbase?.SubscribeToEvent<EventCsWinPanelMatch>(OnMatchEnd);
+        osbase?.SubscribeToEvent<EventMapTransition>(OnMapTransition);
+        osbase?.SubscribeToEvent<EventMapShutdown>(OnMapShutdown);
 
-        osbase.AddCommandListener("map", OnCommandMap, HookMode.Pre);
-        osbase.AddCommandListener("changelevel", OnCommandMap, HookMode.Pre);
-        osbase.AddCommandListener("ds_workshop_changelevel", OnCommandMap, HookMode.Pre);
+        osbase?.AddCommandListener("map", OnCommandMap, HookMode.Pre);
+        osbase?.AddCommandListener("changelevel", OnCommandMap, HookMode.Pre);
+        osbase?.AddCommandListener("ds_workshop_changelevel", OnCommandMap, HookMode.Pre);
+    }
 
-        handlersLoaded = true;
+    protected override void UnregisterHandlers() {
+        osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+        // Use new EventBus system
+        osbase?.UnsubscribeFromEvent<EventCsWinPanelMatch>(OnMatchEnd);
+        osbase?.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
+        osbase?.UnsubscribeFromEvent<EventMapShutdown>(OnMapShutdown);
+
+        osbase?.RemoveCommandListener("map", OnCommandMap, HookMode.Pre);
+        osbase?.RemoveCommandListener("changelevel", OnCommandMap, HookMode.Pre);
+        osbase?.RemoveCommandListener("ds_workshop_changelevel", OnCommandMap, HookMode.Pre);
     }
 
     private void OnMapStart(string mapName) {

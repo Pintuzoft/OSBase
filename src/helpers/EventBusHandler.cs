@@ -58,11 +58,16 @@ public class EventBusHandler {
     public void DispatchToEventBus<TEvent>(TEvent e) {
         var eventName = typeof(TEvent).Name;
         
-        if (!eventBus.ContainsKey(eventName)) {
+        if (!eventBus.TryGetValue(eventName, out var handlers)) {
             return;
         }
 
-        foreach (var handler in eventBus[eventName]) {
+        // Snapshot before dispatch: a handler may subscribe/unsubscribe mid-dispatch
+        // (e.g. a module reload triggered by an event), which would otherwise throw
+        // "Collection was modified" and abort delivery to the remaining handlers.
+        var snapshot = handlers.ToArray();
+
+        foreach (var handler in snapshot) {
             try {
                 ((Func<TEvent, HookResult>)handler)?.Invoke(e);
             } catch (Exception ex) {

@@ -9,18 +9,12 @@ using OSBase.Helpers;
 
 namespace OSBase.Modules {
 
-    public class TeamBalancer : IModule {
-        public string ModuleName => "teambalancer";
+    public class TeamBalancer : ModuleBase {
+        public override string ModuleName => "teambalancer";
         public string ModuleNameNice => "TeamBalancer";
 
-        public static TeamBalancer? Current { get; private set; }
-
-        private bool handlersLoaded = false;
         private CounterStrikeSharp.API.Modules.Timers.Timer? warmupBalanceTimer;
-        private OSBase? osbase;
-        private Config? config;
         private GameStats? gameStats;
-        private bool isActive = false;
 
         // Teams
         private const int TEAM_S = (int)CsTeam.Spectator;
@@ -70,78 +64,16 @@ namespace OSBase.Modules {
         // 3-player halftime latch
         private bool threePlayerHalftimeMode = false;
 
-        public void Load(OSBase inOsbase, Config inConfig) {
-            Current = this;
-            isActive = true;
-
-            osbase = inOsbase;
-            config = inConfig;
-            gameStats = osbase.GetGameStats();
-
-            if (osbase == null || config == null) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-                return;
-            }
-
-            config.RegisterGlobalConfigValue(ModuleName, "1");
-            var enabled = config.GetGlobalConfigValue(ModuleName, "0");
-            if (enabled != "1") {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-                return;
-            }
-
+        protected override void OnLoad() {
+            gameStats = osbase?.GetGameStats();
             LoadMapInfo();
-
-            try {
-                LoadHandlers();
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded. warmup_final_at={WARMUP_BURST_AT:0.0}s live_roundend_only_after_warmup=true");
-            } catch (Exception ex) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] registering: {ex.Message}");
-            }
         }
 
-        private void LoadHandlers() {
-            if (osbase == null || handlersLoaded) {
-                return;
-            }
-
-            osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-            osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
-
-            // Use new EventBus system (no HookMode support yet, Post hook will be handled later)
-            osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
-            osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
-            osbase.SubscribeToEvent<EventStartHalftime>(OnStartHalftime);
-            osbase.SubscribeToEvent<EventRoundPrestart>(OnRoundPrestart);
-
-            handlersLoaded = true;
-        }
-
-        public void Unload() {
+        protected override void OnUnload() {
             warmupBalanceTimer?.Kill();
             warmupBalanceTimer = null;
-            isActive = false;
-
-            if (osbase != null && handlersLoaded) {
-                osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
-                osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
-
-                // Use new EventBus system
-                osbase.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
-                osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
-                osbase.UnsubscribeFromEvent<EventStartHalftime>(OnStartHalftime);
-                osbase.UnsubscribeFromEvent<EventRoundPrestart>(OnRoundPrestart);
-
-                handlersLoaded = false;
-            }
-
-            if (ReferenceEquals(Current, this)) {
-                Current = null;
-            }
 
             gameStats = null;
-            config = null;
-            osbase = null;
 
             currentMap = "";
             bombsites = 2;
@@ -154,17 +86,33 @@ namespace OSBase.Modules {
             currentHalfIndex = 0;
 
             playerSwapRound.Clear();
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
         }
 
-        public void ReloadConfig(Config inConfig) {
-            config = inConfig;
+        protected override void OnReloadConfig() {
             gameStats = osbase?.GetGameStats();
-
             LoadMapInfo();
+        }
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
+        protected override void RegisterHandlers() {
+            osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+            osbase?.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
+
+            // Use new EventBus system (no HookMode support yet, Post hook will be handled later)
+            osbase?.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+            osbase?.SubscribeToEvent<EventStartHalftime>(OnStartHalftime);
+            osbase?.SubscribeToEvent<EventRoundPrestart>(OnRoundPrestart);
+        }
+
+        protected override void UnregisterHandlers() {
+            osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+            osbase?.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
+
+            // Use new EventBus system
+            osbase?.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+            osbase?.UnsubscribeFromEvent<EventStartHalftime>(OnStartHalftime);
+            osbase?.UnsubscribeFromEvent<EventRoundPrestart>(OnRoundPrestart);
         }
 
         private void LoadMapInfo() {

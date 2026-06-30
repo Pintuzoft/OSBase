@@ -9,13 +9,10 @@ using CounterStrikeSharp.API.Modules.Utils;
 
 namespace OSBase.Modules {
 
-    public class WeaponRestrict : IModule {
-        public string ModuleName => "weaponrestrict";
+    public class WeaponRestrict : ModuleBase {
+        public override string ModuleName => "weaponrestrict";
         public string ModuleNameNice => "WeaponRestrict";
-        private bool handlersLoaded = false;
 
-        private OSBase? osbase;
-        private Config? config;
         private GameStats? gameStats;
 
         private const int TEAM_T  = (int)CsTeam.Terrorist;
@@ -41,72 +38,38 @@ namespace OSBase.Modules {
 
         private readonly Dictionary<int, (string WeaponName, DateTime UntilUtc)> recentNotifications = new();
 
-        public void Load(OSBase inOsbase, Config inConfig) {
-            osbase = inOsbase;
-            config = inConfig;
-            gameStats = osbase.GetGameStats();
-
-            if (osbase == null || config == null || gameStats == null) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] load failed (null deps).");
-                return;
-            }
-
-            config.RegisterGlobalConfigValue($"{ModuleName}", "1");
-            var enabled = config.GetGlobalConfigValue($"{ModuleName}", "0");
-            if (enabled != "1") {
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] disabled in config.");
-                return;
-            }
-
+        protected override void OnLoad() {
+            gameStats = osbase?.GetGameStats();
             LoadConfig();
-
-            try {
-                LoadHandlers();
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] loaded.");
-            } catch (Exception ex) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] registering: {ex.Message}");
-            }
         }
-        public void Unload() {
-            if (osbase != null && handlersLoaded) {
-                // Use new EventBus system (no HookMode support yet, Post hook will be handled later)
-                osbase.UnsubscribeFromEvent<EventRoundPrestart>(OnRoundPrestart);
-                osbase.UnsubscribeFromEvent<EventItemPurchase>(OnItemPurchase);
-                osbase.UnsubscribeFromEvent<EventItemPickup>(OnItemPickup);
-                handlersLoaded = false;
-            }
 
+        protected override void OnUnload() {
             recentNotifications.Clear();
             currentRoundEffectiveTotal = 0;
             currentRoundAwpLimit = 0;
             currentRoundAutosniperLimit = 0;
 
             gameStats = null;
-            config = null;
-            osbase = null;
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] unloaded.");
         }
 
-        public void ReloadConfig(Config inConfig) {
-            config = inConfig;
+        protected override void OnReloadConfig() {
             gameStats = osbase?.GetGameStats();
             recentNotifications.Clear();
             LoadConfig();
-
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] config reloaded.");
         }
-        private void LoadHandlers() {
-            if (osbase == null || handlersLoaded) {
-                return;
-            }
 
+        protected override void RegisterHandlers() {
             // Use new EventBus system (no HookMode support yet, Post hook will be handled later)
-            osbase.SubscribeToEvent<EventRoundPrestart>(OnRoundPrestart);
-            osbase.SubscribeToEvent<EventItemPurchase>(OnItemPurchase);
-            osbase.SubscribeToEvent<EventItemPickup>(OnItemPickup);
+            osbase?.SubscribeToEvent<EventRoundPrestart>(OnRoundPrestart);
+            osbase?.SubscribeToEvent<EventItemPurchase>(OnItemPurchase);
+            osbase?.SubscribeToEvent<EventItemPickup>(OnItemPickup);
+        }
 
-            handlersLoaded = true;
+        protected override void UnregisterHandlers() {
+            // Use new EventBus system (no HookMode support yet, Post hook will be handled later)
+            osbase?.UnsubscribeFromEvent<EventRoundPrestart>(OnRoundPrestart);
+            osbase?.UnsubscribeFromEvent<EventItemPurchase>(OnItemPurchase);
+            osbase?.UnsubscribeFromEvent<EventItemPickup>(OnItemPickup);
         }
         private void LoadConfig() {
             string defaultContent =
