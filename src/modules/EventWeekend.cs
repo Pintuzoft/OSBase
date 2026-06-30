@@ -11,36 +11,37 @@ using MySqlConnector;
 
 namespace OSBase.Modules;
 
-public class KnifeWeekend : ModuleBase {
-    public override string ModuleName => "knifeweekend";
+// Configurable "weekend event": pick which weapons score points (knife, taser, mp9, ...),
+// each with its own normal/admin point values. Generalizes the old knife-only weekend.
+public class EventWeekend : ModuleBase {
+    public override string ModuleName => "eventweekend";
 
     private GameStats? gameStats;
     private Database? db;
 
     private readonly HashSet<ulong> adminSteamIds = new();
-    private readonly List<PendingKnifeEvent> pendingKnifeEvents = new();
+    private readonly List<PendingScoreEvent> pendingScoreEvents = new();
     private readonly Dictionary<ulong, PendingPointDelta> pendingPointDeltas = new();
     private DateTime nextWarmupMessageUtc = DateTime.MinValue;
 
     private const int EventTypeNormal = 0;
     private const int EventTypeTeamKill = 1;
 
-    private string tablePrefix = "knivhelg";
-    private string statsUrl = "https://oldswedes.se/knivhelg";
-    private string chatPrefix = "[KnivHelg]";
+    private string tablePrefix = "eventweekend";
+    private string statsUrl = "https://oldswedes.se/eventweekend";
+    private string chatPrefix = "[EventWeekend]";
+    private string eventName = "Event Weekend";
 
     private bool adminPointsEnabled = true;
     private bool ignoreWarmup = true;
     private bool showWarmupMessage = false;
     private bool createTables = true;
 
-    private int normalPoints = 5;
-    private int adminPoints = 10;
     private int topLimit = 10;
     private int minimumPlayers = 4;
     private int warmupMessageCooldownSeconds = 10;
 
-    private List<string> weaponKeywords = new();
+    private readonly List<WeaponRule> weaponRules = new();
 
     private static readonly string[] DefaultKnifeKeywords = {
         "knife", "bayonet", "m9_bayonet", "karambit", "butterfly",
@@ -51,13 +52,21 @@ public class KnifeWeekend : ModuleBase {
         "classic", "css", "default"
     };
 
-    private sealed class PendingKnifeEvent {
+    private sealed class WeaponRule {
+        public string Label { get; init; } = "weapon";
+        public List<string> Keywords { get; init; } = new();
+        public int NormalPoints { get; init; }
+        public int AdminPoints { get; init; }
+    }
+
+    private sealed class PendingScoreEvent {
         public string AttackerName { get; init; } = "Unknown";
         public ulong AttackerSteamId64 { get; init; }
         public string VictimName { get; init; } = "Unknown";
         public ulong VictimSteamId64 { get; init; }
         public int Points { get; init; }
         public bool TeamKill { get; init; }
+        public string Weapon { get; init; } = "weapon";
     }
 
     private sealed class PendingPointDelta {
@@ -78,13 +87,14 @@ public class KnifeWeekend : ModuleBase {
         }
 
         LoadAdminSteamIds();
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] admins={adminSteamIds.Count}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] admins={adminSteamIds.Count}, rules={weaponRules.Count}");
     }
 
     protected override void OnUnload() {
         FlushPendingWrites("Unload");
 
         adminSteamIds.Clear();
+        weaponRules.Clear();
         db = null;
         gameStats = null;
     }
@@ -100,62 +110,68 @@ public class KnifeWeekend : ModuleBase {
         }
 
         LoadAdminSteamIds();
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] admins={adminSteamIds.Count}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] admins={adminSteamIds.Count}, rules={weaponRules.Count}");
     }
 
     protected override void RegisterHandlers() {
-        // Use new EventBus system
         osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
         osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
         osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-        osbase?.AddCommand("css_ktop", "Shows KnifeWeekend top list", OnKnifeTopCommand);
+        osbase?.AddCommand("css_etop", "Shows the EventWeekend leaderboard", OnEventTopCommand);
     }
 
     protected override void UnregisterHandlers() {
-        // Use new EventBus system
         osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
         osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
         osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
-        osbase?.RemoveCommand("css_ktop", OnKnifeTopCommand);
+        osbase?.RemoveCommand("css_etop", OnEventTopCommand);
     }
 
     private void CreateCustomConfigs() {
         config?.CreateCustomConfig(
             $"{ModuleName}.cfg",
-            "// KnifeWeekend Configuration\n" +
+            "// EventWeekend Configuration\n" +
+            "// A configurable weekend event: pick which weapons score points.\n" +
             "// Uses the same database configured in database.cfg.\n" +
-            "table_prefix knivhelg\n" +
+            "event_name \"Knife Weekend\"\n" +
+            "table_prefix eventweekend\n" +
             "create_tables 1\n" +
-            "stats_url https://oldswedes.se/knivhelg\n" +
-            "chat_prefix \"[OSKnivHelg]\"\n" +
+            "stats_url https://oldswedes.se/eventweekend\n" +
+            "chat_prefix \"[EventWeekend]\"\n" +
             "admin_points_enabled 1\n" +
             "ignore_warmup 1\n" +
             "show_warmup_message 0\n" +
             "warmup_message_cooldown_seconds 10\n" +
-            "normal_points 5\n" +
-            "admin_points 10\n" +
             "minimum_players 4\n" +
             "top_limit 10\n" +
-            "weapon_keywords " + string.Join(',', DefaultKnifeKeywords) + "\n"
+            "\n" +
+            "// One line per weapon/group that scores points. Format:\n" +
+            "//   weapon_rule <label> <normal_points> <admin_points> <keyword[,keyword,...]>\n" +
+            "// <label> shows in kill messages. Keywords are matched (case-insensitive\n" +
+            "// substring) against the kill weapon name. admin_points apply only when\n" +
+            "// admin_points_enabled is 1 and the victim is an admin.\n" +
+            "// Examples:\n" +
+            "//   weapon_rule taser 1 3 taser,zeus\n" +
+            "//   weapon_rule mp9 1 0 mp9\n" +
+            "weapon_rule knife 5 10 " + string.Join(',', DefaultKnifeKeywords) + "\n"
         );
     }
 
     private void LoadConfig() {
-        tablePrefix = "knivhelg";
-        statsUrl = "https://oldswedes.se/knivhelg";
-        chatPrefix = "[OSKnivHelg]";
+        tablePrefix = "eventweekend";
+        statsUrl = "https://oldswedes.se/eventweekend";
+        chatPrefix = "[EventWeekend]";
+        eventName = "Event Weekend";
         adminPointsEnabled = true;
         ignoreWarmup = true;
         showWarmupMessage = false;
         createTables = true;
-        normalPoints = 5;
-        adminPoints = 10;
         minimumPlayers = 4;
         topLimit = 10;
         warmupMessageCooldownSeconds = 10;
-        weaponKeywords = DefaultKnifeKeywords.ToList();
+        weaponRules.Clear();
 
         List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
@@ -175,6 +191,9 @@ public class KnifeWeekend : ModuleBase {
             string value = Unquote(parts[1].Trim());
 
             switch (key.ToLowerInvariant()) {
+                case "event_name":
+                    eventName = string.IsNullOrWhiteSpace(value) ? "Event Weekend" : value;
+                    break;
                 case "table_prefix":
                     tablePrefix = SanitizeIdentifier(value);
                     break;
@@ -185,7 +204,7 @@ public class KnifeWeekend : ModuleBase {
                     statsUrl = value;
                     break;
                 case "chat_prefix":
-                    chatPrefix = string.IsNullOrWhiteSpace(value) ? "[OSKnivHelg]" : value;
+                    chatPrefix = string.IsNullOrWhiteSpace(value) ? "[EventWeekend]" : value;
                     break;
                 case "admin_points_enabled":
                     adminPointsEnabled = value == "1";
@@ -199,25 +218,14 @@ public class KnifeWeekend : ModuleBase {
                 case "warmup_message_cooldown_seconds":
                     warmupMessageCooldownSeconds = ParseInt(value, 10, 0, 300);
                     break;
-                case "normal_points":
-                    normalPoints = ParseInt(value, 5, 0, 1000);
-                    break;
-                case "admin_points":
-                    adminPoints = ParseInt(value, 10, 0, 1000);
-                    break;
                 case "minimum_players":
                     minimumPlayers = ParseInt(value, 4, 0, 64);
                     break;
                 case "top_limit":
                     topLimit = ParseInt(value, 10, 1, 50);
                     break;
-                case "weapon_keywords":
-                    weaponKeywords = value
-                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .Select(v => v.ToLowerInvariant())
-                        .Where(v => v.Length > 0)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToList();
+                case "weapon_rule":
+                    AddWeaponRule(value);
                     break;
                 default:
                     Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Unknown config key {key}:{value}");
@@ -226,16 +234,53 @@ public class KnifeWeekend : ModuleBase {
         }
 
         if (string.IsNullOrWhiteSpace(tablePrefix)) {
-            tablePrefix = "knivhelg";
+            tablePrefix = "eventweekend";
         }
 
-        EnsureDefaultKnifeKeywords();
+        // Never run silently dead: fall back to the classic knife rule if nothing was configured.
+        if (weaponRules.Count == 0) {
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}]: No weapon_rule configured, using default knife rule.");
+            weaponRules.Add(new WeaponRule {
+                Label = "knife",
+                Keywords = DefaultKnifeKeywords.ToList(),
+                NormalPoints = 5,
+                AdminPoints = 10
+            });
+        }
 
         Console.WriteLine(
-            $"[DEBUG] OSBase[{ModuleName}] config loaded. prefix={tablePrefix}, adminPoints={adminPointsEnabled}, " +
-            $"normal={normalPoints}, admin={adminPoints}, minPlayers={minimumPlayers}, top={topLimit}, ignoreWarmup={ignoreWarmup}, " +
-            $"weaponKeywords={string.Join(',', weaponKeywords)}"
+            $"[DEBUG] OSBase[{ModuleName}] config loaded. event={eventName}, prefix={tablePrefix}, " +
+            $"adminPoints={adminPointsEnabled}, minPlayers={minimumPlayers}, top={topLimit}, ignoreWarmup={ignoreWarmup}, " +
+            $"rules=[{string.Join(", ", weaponRules.Select(r => $"{r.Label}:{r.NormalPoints}/{r.AdminPoints}"))}]"
         );
+    }
+
+    // Parse: "<label> <normal_points> <admin_points> <keyword[,keyword,...]>"
+    private void AddWeaponRule(string value) {
+        var parts = value.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 4) {
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Invalid weapon_rule skipped: {value}");
+            return;
+        }
+
+        var keywords = parts[3]
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(v => v.ToLowerInvariant())
+            .Where(v => v.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (keywords.Count == 0) {
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}]: weapon_rule has no keywords, skipped: {value}");
+            return;
+        }
+
+        weaponRules.Add(new WeaponRule {
+            Label = parts[0].Trim(),
+            NormalPoints = ParseInt(parts[1], 0, -1000, 1000),
+            AdminPoints = ParseInt(parts[2], 0, -1000, 1000),
+            Keywords = keywords
+        });
     }
 
     private void CreateTables() {
@@ -270,6 +315,7 @@ public class KnifeWeekend : ModuleBase {
             attackerid64 BIGINT UNSIGNED NOT NULL,
             victim VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
             victimid64 BIGINT UNSIGNED NOT NULL,
+            weapon VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
             points INT NOT NULL DEFAULT 0,
             type INT NOT NULL DEFAULT 0,
             PRIMARY KEY (id),
@@ -311,13 +357,14 @@ public class KnifeWeekend : ModuleBase {
         }
 
         string weapon = eventInfo.Weapon ?? string.Empty;
-        if (!IsKnifeWeapon(weapon)) {
+        WeaponRule? rule = MatchWeaponRule(weapon);
+        if (rule == null) {
             return HookResult.Continue;
         }
 
         int activeHumans = CountActiveHumans();
         if (activeHumans < minimumPlayers) {
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Knife ignored: only {activeHumans}/{minimumPlayers} active human players in T/CT.");
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Kill ignored: only {activeHumans}/{minimumPlayers} active human players in T/CT.");
             return HookResult.Continue;
         }
 
@@ -332,11 +379,15 @@ public class KnifeWeekend : ModuleBase {
         bool victimIsAdmin = adminPointsEnabled && adminSteamIds.Contains(victimSteamId64);
         bool attackerIsAdmin = adminSteamIds.Contains(attackerSteamId64);
 
-        int points = victimIsAdmin ? adminPoints : normalPoints;
+        int points = victimIsAdmin ? rule.AdminPoints : rule.NormalPoints;
+        if (points == 0) {
+            return HookResult.Continue;
+        }
+
         string attackerName = CleanName(attacker.PlayerName);
         string victimName = CleanName(victim.PlayerName);
 
-        AddKnifeEvent(attackerName, attackerSteamId64, victimName, victimSteamId64, points, teamKill);
+        AddScoreEvent(attackerName, attackerSteamId64, victimName, victimSteamId64, points, teamKill, rule.Label);
 
         if (teamKill) {
             AddPoints(victimName, victimSteamId64, points);
@@ -345,7 +396,7 @@ public class KnifeWeekend : ModuleBase {
             AddPoints(attackerName, attackerSteamId64, points);
         }
 
-        PrintKnifeMessage(attackerName, attackerIsAdmin, victimName, victimIsAdmin, points, teamKill);
+        PrintScoreMessage(attackerName, attackerIsAdmin, victimName, victimIsAdmin, points, teamKill, rule.Label);
 
         return HookResult.Continue;
     }
@@ -381,7 +432,7 @@ public class KnifeWeekend : ModuleBase {
         return HookResult.Continue;
     }
 
-    private void OnKnifeTopCommand(CCSPlayerController? player, CommandInfo commandInfo) {
+    private void OnEventTopCommand(CCSPlayerController? player, CommandInfo commandInfo) {
         if (!isActive || player == null || !player.IsValid) {
             return;
         }
@@ -408,18 +459,30 @@ public class KnifeWeekend : ModuleBase {
         }
     }
 
-    private void AddKnifeEvent(string attackerName, ulong attackerSteamId64, string victimName, ulong victimSteamId64, int points, bool teamKill) {
+    private WeaponRule? MatchWeaponRule(string weapon) {
+        if (string.IsNullOrWhiteSpace(weapon)) {
+            return null;
+        }
+
+        string normalized = weapon.Trim().ToLowerInvariant();
+        return weaponRules.FirstOrDefault(rule =>
+            rule.Keywords.Any(keyword => normalized.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+        );
+    }
+
+    private void AddScoreEvent(string attackerName, ulong attackerSteamId64, string victimName, ulong victimSteamId64, int points, bool teamKill, string weapon) {
         if (attackerSteamId64 == 0 || victimSteamId64 == 0) {
             return;
         }
 
-        pendingKnifeEvents.Add(new PendingKnifeEvent {
+        pendingScoreEvents.Add(new PendingScoreEvent {
             AttackerName = attackerName,
             AttackerSteamId64 = attackerSteamId64,
             VictimName = victimName,
             VictimSteamId64 = victimSteamId64,
             Points = points,
-            TeamKill = teamKill
+            TeamKill = teamKill,
+            Weapon = weapon
         });
     }
 
@@ -445,24 +508,25 @@ public class KnifeWeekend : ModuleBase {
             return;
         }
 
-        if (pendingKnifeEvents.Count == 0 && pendingPointDeltas.Count == 0) {
+        if (pendingScoreEvents.Count == 0 && pendingPointDeltas.Count == 0) {
             return;
         }
 
         int eventsWritten = 0;
         int pointRowsWritten = 0;
 
-        foreach (var ev in pendingKnifeEvents) {
+        foreach (var ev in pendingScoreEvents) {
             string query =
                 $"INTO {Table("event")} " +
-                "(stamp, attacker, attackerid64, victim, victimid64, points, type) " +
-                "VALUES (NOW(), @attacker, @attackerid64, @victim, @victimid64, @points, @type)";
+                "(stamp, attacker, attackerid64, victim, victimid64, weapon, points, type) " +
+                "VALUES (NOW(), @attacker, @attackerid64, @victim, @victimid64, @weapon, @points, @type)";
 
             var parameters = new MySqlParameter[] {
                 new("@attacker", ev.AttackerName),
                 new("@attackerid64", ev.AttackerSteamId64),
                 new("@victim", ev.VictimName),
                 new("@victimid64", ev.VictimSteamId64),
+                new("@weapon", ev.Weapon),
                 new("@points", ev.Points),
                 new("@type", ev.TeamKill ? EventTypeTeamKill : EventTypeNormal)
             };
@@ -499,7 +563,7 @@ public class KnifeWeekend : ModuleBase {
         // so block briefly to ensure queued writes are drained.
         db.FlushPendingWrites(1000);
 
-        pendingKnifeEvents.Clear();
+        pendingScoreEvents.Clear();
         pendingPointDeltas.Clear();
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending DB writes ({source}): events={eventsWritten}, pointRows={pointRowsWritten}");
@@ -517,7 +581,7 @@ public class KnifeWeekend : ModuleBase {
                 new MySqlParameter("@limit", topLimit)
             );
 
-            player.PrintToChat($" {ChatColors.Green}{chatPrefix}: Leaderboard:{ChatColors.Default}");
+            player.PrintToChat($" {ChatColors.Green}{chatPrefix}: {eventName} leaderboard:{ChatColors.Default}");
 
             int rank = 1;
             ulong self = player.SteamID;
@@ -541,31 +605,29 @@ public class KnifeWeekend : ModuleBase {
         }
     }
 
-    private void PrintKnifeMessage(string attacker, bool attackerIsAdmin, string victim, bool victimIsAdmin, int points, bool teamKill) {
+    private void PrintScoreMessage(string attacker, bool attackerIsAdmin, string victim, bool victimIsAdmin, int points, bool teamKill, string weapon) {
         string attackerDisplay = attacker + AdminSuffix(attackerIsAdmin);
         string victimDisplay = victim + AdminSuffix(victimIsAdmin);
 
         if (teamKill) {
-            string logMessage = $"{attackerDisplay} knife-teamkillade {victimDisplay}. {attacker} tappade -{points}p, {victim} fick +{points}p.";
-            Console.WriteLine($"[INFO] OSBase[{ModuleName}] {logMessage}");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] {attackerDisplay} teamkillade {victimDisplay} med {weapon}. {attacker} -{points}p, {victim} +{points}p.");
 
             Server.PrintToChatAll(
                 $" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: " +
-                $"{ChatColors.Red}{attackerDisplay}{ChatColors.Default} knife-teamkillade " +
-                $"{victimDisplay}. " +
-                $"{ChatColors.Red}{attacker} tappade -{points}p{ChatColors.Default}, " +
-                $"{ChatColors.Green}{victim} fick +{points}p{ChatColors.Default}."
+                $"{ChatColors.Red}{attackerDisplay}{ChatColors.Default} teamkillade " +
+                $"{victimDisplay} med {weapon}. " +
+                $"{ChatColors.Red}{attacker} -{points}p{ChatColors.Default}, " +
+                $"{ChatColors.Green}{victim} +{points}p{ChatColors.Default}."
             );
             return;
         }
 
-        string normalLogMessage = $"{attackerDisplay} knivade {victimDisplay} och fick +{points}p.";
-        Console.WriteLine($"[INFO] OSBase[{ModuleName}] {normalLogMessage}");
+        Console.WriteLine($"[INFO] OSBase[{ModuleName}] {attackerDisplay} dödade {victimDisplay} med {weapon} och fick +{points}p.");
 
         Server.PrintToChatAll(
             $" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: " +
-            $"{ChatColors.Green}{attackerDisplay}{ChatColors.Default} knivade " +
-            $"{ChatColors.Red}{victimDisplay}{ChatColors.Default} och fick " +
+            $"{ChatColors.Green}{attackerDisplay}{ChatColors.Default} dödade " +
+            $"{ChatColors.Red}{victimDisplay}{ChatColors.Default} med {weapon} och fick " +
             $"{ChatColors.Green}+{points}p{ChatColors.Default}."
         );
     }
@@ -585,16 +647,7 @@ public class KnifeWeekend : ModuleBase {
         }
 
         nextWarmupMessageUtc = now.AddSeconds(warmupMessageCooldownSeconds);
-        Server.PrintToChatAll($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: Warmup, knife does not count!");
-    }
-
-    private bool IsKnifeWeapon(string weapon) {
-        if (string.IsNullOrWhiteSpace(weapon)) {
-            return false;
-        }
-
-        string normalized = weapon.Trim().ToLowerInvariant();
-        return weaponKeywords.Any(keyword => normalized.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+        Server.PrintToChatAll($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: Warmup, kills do not count!");
     }
 
     private int CountActiveHumans() {
@@ -602,21 +655,6 @@ public class KnifeWeekend : ModuleBase {
             IsRealPlayer(player) &&
             (player.TeamNum == (int)CsTeam.Terrorist || player.TeamNum == (int)CsTeam.CounterTerrorist)
         );
-    }
-
-    private void EnsureDefaultKnifeKeywords() {
-        var seen = new HashSet<string>(weaponKeywords, StringComparer.OrdinalIgnoreCase);
-
-        foreach (string keyword in DefaultKnifeKeywords) {
-            string normalized = keyword.Trim().ToLowerInvariant();
-            if (normalized.Length > 0 && seen.Add(normalized)) {
-                weaponKeywords.Add(normalized);
-            }
-        }
-
-        if (weaponKeywords.Count == 0) {
-            weaponKeywords.Add("knife");
-        }
     }
 
     private static bool IsRealPlayer(CCSPlayerController? player) {
@@ -632,7 +670,7 @@ public class KnifeWeekend : ModuleBase {
         string safeSuffix = SanitizeIdentifier(suffix);
 
         if (string.IsNullOrWhiteSpace(safePrefix)) {
-            safePrefix = "knivhelg";
+            safePrefix = "eventweekend";
         }
 
         return $"`{safePrefix}_{safeSuffix}`";
