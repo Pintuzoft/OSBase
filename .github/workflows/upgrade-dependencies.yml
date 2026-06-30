@@ -122,14 +122,6 @@ jobs:
         run: |
           git push origin main
 
-      - name: Upload release artifact
-        if: steps.compare.outputs.needs_update == 'true'
-        uses: actions/upload-artifact@v3
-        with:
-          name: osbase-release
-          path: OSBase_v*.zip
-          retention-days: 5
-
       - name: Create GitHub Release
         if: steps.compare.outputs.needs_update == 'true'
         uses: softprops/action-gh-release@v1
