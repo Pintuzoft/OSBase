@@ -153,8 +153,8 @@ public class EventWeekend : ModuleBase {
             "// substring) against the kill weapon name. admin_points apply only when\n" +
             "// admin_points_enabled is 1 and the victim is an admin.\n" +
             "// Examples:\n" +
-            "//   weapon_rule taser 1 3 taser,zeus\n" +
-            "//   weapon_rule mp9 1 0 mp9\n" +
+            "//   weapon_rule taser 1 3 taser,zeus   (admin victims worth more)\n" +
+            "//   weapon_rule mp9 1 1 mp9            (same points for everyone)\n" +
             "weapon_rule knife 5 10 " + string.Join(',', DefaultKnifeKeywords) + "\n"
         );
     }
