@@ -8,8 +8,8 @@
     <AssemblyDescription>Plugin for handling map events with config execution</AssemblyDescription>
     <Company>Pintuzoft</Company>
     <Product>OSBase</Product>
-    <Version>0.0.518</Version>
-    <FileVersion>0.0.518</FileVersion>    
+    <Version>0.0.519</Version>
+    <FileVersion>0.0.519</FileVersion>    
   </PropertyGroup>
 
   <ItemGroup>

@@ -104,6 +104,7 @@ public class Faceit : ModuleBase {
         // Use new EventBus system
         osbase?.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
         osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
         osbase?.SubscribeToEvent<EventMapTransition>(OnMapTransition);
     }
 
@@ -111,6 +112,7 @@ public class Faceit : ModuleBase {
         // Use new EventBus system
         osbase?.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
         osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
         osbase?.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
     }
 
@@ -270,6 +272,17 @@ public class Faceit : ModuleBase {
     }
 
     private HookResult OnRoundEnd(EventRoundEnd _) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        ProcessPendingConnectChecks();
+        return HookResult.Continue;
+    }
+
+    // Warmup fires no round-end, so process here too — players who joined during
+    // warmup would otherwise wait until the first real round ends.
+    private HookResult OnWarmupEnd(EventWarmupEnd _) {
         if (!isActive) {
             return HookResult.Continue;
         }
