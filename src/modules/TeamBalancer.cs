@@ -108,10 +108,11 @@ namespace OSBase.Modules {
             osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
 
-            osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd, HookMode.Post);
-            osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd, HookMode.Post);
-            osbase.RegisterEventHandler<EventStartHalftime>(OnStartHalftime, HookMode.Post);
-            osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
+            // Use new EventBus system (no HookMode support yet, Post hook will be handled later)
+            osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+            osbase.SubscribeToEvent<EventStartHalftime>(OnStartHalftime);
+            osbase.SubscribeToEvent<EventRoundPrestart>(OnRoundPrestart);
 
             handlersLoaded = true;
         }
@@ -125,10 +126,11 @@ namespace OSBase.Modules {
                 osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
                 osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
 
-                osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd, HookMode.Post);
-                osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd, HookMode.Post);
-                osbase.DeregisterEventHandler<EventStartHalftime>(OnStartHalftime, HookMode.Post);
-                osbase.DeregisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
+                // Use new EventBus system
+                osbase.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
+                osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+                osbase.UnsubscribeFromEvent<EventStartHalftime>(OnStartHalftime);
+                osbase.UnsubscribeFromEvent<EventRoundPrestart>(OnRoundPrestart);
 
                 handlersLoaded = false;
             }
@@ -286,7 +288,7 @@ namespace OSBase.Modules {
             }
         }
 
-        private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
+        private HookResult OnWarmupEnd(EventWarmupEnd ev) {
             var gs = osbase?.GetGameStats();
             if (gs != null) {
                 gs.SyncTeamsNow();
@@ -306,7 +308,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnStartHalftime(EventStartHalftime ev, GameEventInfo info) {
+        private HookResult OnStartHalftime(EventStartHalftime ev) {
             lateSwapsThisHalf = 0;
             currentHalfIndex = 1;
 
@@ -324,7 +326,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnRoundEnd(EventRoundEnd ev, GameEventInfo info) {
+        private HookResult OnRoundEnd(EventRoundEnd ev) {
             var gs = osbase?.GetGameStats();
             if (gs == null) {
                 return HookResult.Continue;
@@ -341,7 +343,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnRoundPrestart(EventRoundPrestart ev, GameEventInfo info) {
+        private HookResult OnRoundPrestart(EventRoundPrestart ev) {
             var gs = osbase?.GetGameStats();
             if (gs == null) return HookResult.Continue;
             if (firstRoundSizeFixDone) return HookResult.Continue;

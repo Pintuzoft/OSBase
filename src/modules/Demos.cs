@@ -54,11 +54,12 @@ public class Demos : IModule {
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
 
-            osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-            osbase.DeregisterEventHandler<EventBeginNewMatch>(OnMatchStart);
-            osbase.DeregisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
-            osbase.DeregisterEventHandler<EventMapTransition>(OnMapTransition);
-            osbase.DeregisterEventHandler<EventMapShutdown>(OnMapShutdown);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase.UnsubscribeFromEvent<EventBeginNewMatch>(OnMatchStart);
+            osbase.UnsubscribeFromEvent<EventCsWinPanelMatch>(OnMatchEndEvent);
+            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
+            osbase.UnsubscribeFromEvent<EventMapShutdown>(OnMapShutdown);
 
             osbase.RemoveCommandListener("map", OnCommandMap, HookMode.Pre);
             osbase.RemoveCommandListener("changelevel", OnCommandMap, HookMode.Pre);
@@ -87,11 +88,12 @@ public class Demos : IModule {
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
 
-        osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-        osbase.RegisterEventHandler<EventBeginNewMatch>(OnMatchStart);
-        osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
-        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
-        osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+        osbase.SubscribeToEvent<EventBeginNewMatch>(OnMatchStart);
+        osbase.SubscribeToEvent<EventCsWinPanelMatch>(OnMatchEndEvent);
+        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
+        osbase.SubscribeToEvent<EventMapShutdown>(OnMapShutdown);
 
         osbase.AddCommandListener("map", OnCommandMap, HookMode.Pre);
         osbase.AddCommandListener("changelevel", OnCommandMap, HookMode.Pre);
@@ -135,7 +137,7 @@ public class Demos : IModule {
         RunMapEnd("map_end");
     }
 
-    private HookResult OnMapTransition(EventMapTransition eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMapTransition(EventMapTransition eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -145,7 +147,7 @@ public class Demos : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnMapShutdown(EventMapShutdown eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMapShutdown(EventMapShutdown eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -155,7 +157,7 @@ public class Demos : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnWarmupEnd(EventWarmupEnd eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -165,7 +167,7 @@ public class Demos : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnMatchStart(EventBeginNewMatch eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMatchStart(EventBeginNewMatch eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -175,7 +177,7 @@ public class Demos : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

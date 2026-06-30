@@ -69,9 +69,10 @@ namespace OSBase.Modules {
         }
         public void Unload() {
             if (osbase != null && handlersLoaded) {
-                osbase.DeregisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
-                osbase.DeregisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Post);
-                osbase.DeregisterEventHandler<EventItemPickup>(OnItemPickup, HookMode.Post);
+                // Use new EventBus system (no HookMode support yet, Post hook will be handled later)
+                osbase.UnsubscribeFromEvent<EventRoundPrestart>(OnRoundPrestart);
+                osbase.UnsubscribeFromEvent<EventItemPurchase>(OnItemPurchase);
+                osbase.UnsubscribeFromEvent<EventItemPickup>(OnItemPickup);
                 handlersLoaded = false;
             }
 
@@ -100,9 +101,10 @@ namespace OSBase.Modules {
                 return;
             }
 
-            osbase.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestart, HookMode.Post);
-            osbase.RegisterEventHandler<EventItemPurchase>(OnItemPurchase, HookMode.Post);
-            osbase.RegisterEventHandler<EventItemPickup>(OnItemPickup, HookMode.Post);
+            // Use new EventBus system (no HookMode support yet, Post hook will be handled later)
+            osbase.SubscribeToEvent<EventRoundPrestart>(OnRoundPrestart);
+            osbase.SubscribeToEvent<EventItemPurchase>(OnItemPurchase);
+            osbase.SubscribeToEvent<EventItemPickup>(OnItemPickup);
 
             handlersLoaded = true;
         }
@@ -170,7 +172,7 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Autosniper rules: {FormatRules(autosniperRules)}");
         }
 
-        private HookResult OnRoundPrestart(EventRoundPrestart ev, GameEventInfo info) {
+        private HookResult OnRoundPrestart(EventRoundPrestart ev) {
             if (gameStats == null) {
                 return HookResult.Continue;
             }
@@ -186,7 +188,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnItemPurchase(EventItemPurchase ev, GameEventInfo info) {
+        private HookResult OnItemPurchase(EventItemPurchase ev) {
             if (gameStats == null) {
                 return HookResult.Continue;
             }
@@ -221,7 +223,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnItemPickup(EventItemPickup ev, GameEventInfo info) {
+        private HookResult OnItemPickup(EventItemPickup ev) {
             if (gameStats == null) {
                 return HookResult.Continue;
             }

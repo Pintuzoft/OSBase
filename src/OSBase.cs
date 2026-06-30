@@ -4,6 +4,8 @@ using System.Linq;
 using System.Reflection;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Commands;
+using OSBase.Helpers;
 using OSBase.Modules;
 using static CounterStrikeSharp.API.Core.Listeners;
 
@@ -11,7 +13,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.512";
+    public override string ModuleVersion => "0.0.513";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for managing CS2 servers";
 
@@ -20,12 +22,10 @@ public class OSBase : BasePlugin {
 
     private Config? config;
     private GameStats? gameStats;
+    private EventBusHandler? eventBusHandler;
 
     private readonly Dictionary<string, Type> discoveredModules = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IModule> loadedModules = new(StringComparer.OrdinalIgnoreCase);
-
-    // Event Bus: Central event dispatcher for module subscriptions
-    private readonly Dictionary<string, List<Delegate>> eventBus = new(StringComparer.Ordinal);
 
     public override void Load(bool hotReload) {
         Console.WriteLine("[INFO] OSBase: plugin is loading...");
@@ -34,30 +34,22 @@ public class OSBase : BasePlugin {
 
         config = new Config(this);
         gameStats = new GameStats(this, config);
+        
+        // Initialize EventBus handler
+        eventBusHandler = new EventBusHandler(this);
+        eventBusHandler.RegisterAllDispatchers();
 
         DiscoverModules();
         ReloadAllConfigsAndModules();
 
-        // Register global event dispatchers (one-time setup)
-        RegisterEventHandler<EventPlayerHurt>(OnPlayerHurtGlobal);
-        RegisterEventHandler<EventPlayerDeath>(OnPlayerDeathGlobal);
-        RegisterEventHandler<EventRoundStart>(OnRoundStartGlobal);
-        RegisterEventHandler<EventRoundEnd>(OnRoundEndGlobal);
-        RegisterEventHandler<EventPlayerConnect>(OnPlayerConnectGlobal);
-        RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnectGlobal);
-        RegisterEventHandler<EventWarmupEnd>(OnWarmupEndGlobal);
-        RegisterEventHandler<EventStartHalftime>(OnStartHalftimeGlobal);
-        RegisterEventHandler<EventWeaponFire>(OnWeaponFireGlobal);
-        RegisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEndGlobal);
-        RegisterEventHandler<EventMapTransition>(OnMapTransitionGlobal);
-        RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFullGlobal);
-
+        AddCommand("css_eventbus", "Show EventBus subscriber/duplicate diagnostics", OnEventBusCommand);
         RegisterListener<OnMapStart>(HandleMapStart);
 
         Console.WriteLine("[INFO] OSBase: plugin loaded successfully!");
     }
 
     public override void Unload(bool hotReload) {
+        RemoveCommand("css_eventbus", OnEventBusCommand);
         UnloadAllModules();
         loadedModules.Clear();
         discoveredModules.Clear();
@@ -72,106 +64,55 @@ public class OSBase : BasePlugin {
         ReloadAllConfigsAndModules();
     }
 
-    // ========== EVENT BUS SYSTEM ==========
+    private void OnEventBusCommand(CCSPlayerController? player, CommandInfo commandInfo) {
+        var counts = eventBusHandler?.GetSubscriberCounts();
+        var duplicates = eventBusHandler?.GetDuplicateCounts();
 
-    /// <summary>Subscribe a module's event handler to the event bus</summary>
-    public void SubscribeToEvent<TEvent>(Func<TEvent, HookResult> handler) {
-        var eventName = typeof(TEvent).Name;
-        
-        if (!eventBus.ContainsKey(eventName)) {
-            eventBus[eventName] = new();
+        if (counts == null || duplicates == null) {
+            SendEventBusDiagLine(player, "[EventBus] Not initialized.");
+            return;
         }
 
-        eventBus[eventName].Add(handler);
+        var orderedEvents = counts.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+        var totalSubscribers = counts.Values.Sum();
+        var totalDuplicates = duplicates.Values.Sum();
+
+        SendEventBusDiagLine(player, $"[EventBus] events={orderedEvents.Count}, subscribers={totalSubscribers}, duplicates={totalDuplicates}");
+
+        if (orderedEvents.Count == 0) {
+            SendEventBusDiagLine(player, "[EventBus] No active subscriptions.");
+            return;
+        }
+
+        foreach (var eventName in orderedEvents) {
+            var dup = duplicates.TryGetValue(eventName, out var dupCount) ? dupCount : 0;
+            var suffix = dup > 0 ? $" [DUP:{dup}]" : string.Empty;
+            SendEventBusDiagLine(player, $"[EventBus] {eventName}: {counts[eventName]}{suffix}");
+        }
+    }
+
+    private static void SendEventBusDiagLine(CCSPlayerController? player, string line) {
+        if (player != null && player.IsValid) {
+            player.PrintToChat(line);
+            return;
+        }
+
+        Console.WriteLine(line);
+    }
+
+    // ========== EVENT BUS DELEGATION ==========
+    
+    /// <summary>Subscribe a module's event handler to the event bus</summary>
+    public void SubscribeToEvent<TEvent>(Func<TEvent, HookResult> handler) {
+        eventBusHandler?.SubscribeToEvent(handler);
     }
 
     /// <summary>Unsubscribe a module's event handler from the event bus</summary>
     public void UnsubscribeFromEvent<TEvent>(Func<TEvent, HookResult> handler) {
-        var eventName = typeof(TEvent).Name;
-        
-        if (eventBus.ContainsKey(eventName)) {
-            eventBus[eventName].Remove(handler);
-        }
+        eventBusHandler?.UnsubscribeFromEvent(handler);
     }
 
-    /// <summary>Dispatch event to all subscribed modules</summary>
-    private void DispatchToEventBus<TEvent>(TEvent e) {
-        var eventName = typeof(TEvent).Name;
-        
-        if (!eventBus.ContainsKey(eventName)) {
-            return;
-        }
-
-        foreach (var handler in eventBus[eventName]) {
-            try {
-                ((Func<TEvent, HookResult>)handler)?.Invoke(e);
-            } catch (Exception ex) {
-                Console.WriteLine($"[ERROR] OSBase: Exception in event handler for {eventName}: {ex.Message}");
-            }
-        }
-    }
-
-    // ========== GLOBAL EVENT DISPATCHERS ==========
-
-    private HookResult OnPlayerHurtGlobal(EventPlayerHurt e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnPlayerDeathGlobal(EventPlayerDeath e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnRoundStartGlobal(EventRoundStart e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnRoundEndGlobal(EventRoundEnd e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnPlayerConnectGlobal(EventPlayerConnect e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnPlayerDisconnectGlobal(EventPlayerDisconnect e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnWarmupEndGlobal(EventWarmupEnd e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnStartHalftimeGlobal(EventStartHalftime e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnWeaponFireGlobal(EventWeaponFire e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnRoundFreezeEndGlobal(EventRoundFreezeEnd e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnMapTransitionGlobal(EventMapTransition e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
-
-    private HookResult OnPlayerConnectFullGlobal(EventPlayerConnectFull e, GameEventInfo _) {
-        DispatchToEventBus(e);
-        return HookResult.Continue;
-    }
+    // ========== MODULE MANAGEMENT ==========
 
     private void DiscoverModules() {
         discoveredModules.Clear();

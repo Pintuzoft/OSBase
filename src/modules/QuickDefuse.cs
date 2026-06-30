@@ -59,19 +59,17 @@ public class QuickDefuse : IModule {
             osbase.RemoveListener<CoreListeners.OnMapEnd>(OnMapEnd);
             osbase.RemoveListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
 
-            osbase.DeregisterEventHandler<EventRoundStart>(OnRoundStart);
-
-            osbase.DeregisterEventHandler<EventBombBeginplant>(OnBombBeginPlant);
-            osbase.DeregisterEventHandler<EventBombAbortplant>(OnBombAbortPlant);
-            osbase.DeregisterEventHandler<EventBombPlanted>(OnBombPlanted);
-
-            osbase.DeregisterEventHandler<EventBombBegindefuse>(OnBombBeginDefuse);
-            osbase.DeregisterEventHandler<EventBombAbortdefuse>(OnBombAbortDefuse);
-            osbase.DeregisterEventHandler<EventBombDefused>(OnBombDefused);
-            osbase.DeregisterEventHandler<EventBombExploded>(OnBombExploded);
-
-            osbase.DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-            osbase.DeregisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+            osbase.UnsubscribeFromEvent<EventBombBeginplant>(OnBombBeginPlant);
+            osbase.UnsubscribeFromEvent<EventBombAbortplant>(OnBombAbortPlant);
+            osbase.UnsubscribeFromEvent<EventBombPlanted>(OnBombPlanted);
+            osbase.UnsubscribeFromEvent<EventBombBegindefuse>(OnBombBeginDefuse);
+            osbase.UnsubscribeFromEvent<EventBombAbortdefuse>(OnBombAbortDefuse);
+            osbase.UnsubscribeFromEvent<EventBombDefused>(OnBombDefused);
+            osbase.UnsubscribeFromEvent<EventBombExploded>(OnBombExploded);
+            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+            osbase.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
 
             handlersLoaded = false;
         }
@@ -98,24 +96,25 @@ public class QuickDefuse : IModule {
         osbase.RegisterListener<CoreListeners.OnMapEnd>(OnMapEnd);
         osbase.RegisterListener<CoreListeners.OnPlayerButtonsChanged>(OnPlayerButtonsChanged);
 
-        osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
 
-        osbase.RegisterEventHandler<EventBombBeginplant>(OnBombBeginPlant);
-        osbase.RegisterEventHandler<EventBombAbortplant>(OnBombAbortPlant);
-        osbase.RegisterEventHandler<EventBombPlanted>(OnBombPlanted);
+        osbase.SubscribeToEvent<EventBombBeginplant>(OnBombBeginPlant);
+        osbase.SubscribeToEvent<EventBombAbortplant>(OnBombAbortPlant);
+        osbase.SubscribeToEvent<EventBombPlanted>(OnBombPlanted);
 
-        osbase.RegisterEventHandler<EventBombBegindefuse>(OnBombBeginDefuse);
-        osbase.RegisterEventHandler<EventBombAbortdefuse>(OnBombAbortDefuse);
-        osbase.RegisterEventHandler<EventBombDefused>(OnBombDefused);
-        osbase.RegisterEventHandler<EventBombExploded>(OnBombExploded);
+        osbase.SubscribeToEvent<EventBombBegindefuse>(OnBombBeginDefuse);
+        osbase.SubscribeToEvent<EventBombAbortdefuse>(OnBombAbortDefuse);
+        osbase.SubscribeToEvent<EventBombDefused>(OnBombDefused);
+        osbase.SubscribeToEvent<EventBombExploded>(OnBombExploded);
 
-        osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-        osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
 
         handlersLoaded = true;
     }
 
-    private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnRoundStart(EventRoundStart eventInfo) {
         ClearAllState();
         return HookResult.Continue;
     }
@@ -124,7 +123,7 @@ public class QuickDefuse : IModule {
         ClearAllState();
     }
 
-    private HookResult OnBombBeginPlant(EventBombBeginplant eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnBombBeginPlant(EventBombBeginplant eventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
         if (player == null || !player.IsValid || !player.PawnIsAlive) {
             return HookResult.Continue;
@@ -134,7 +133,7 @@ public class QuickDefuse : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnBombAbortPlant(EventBombAbortplant eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnBombAbortPlant(EventBombAbortplant eventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
         if (player != null && player.IsValid) {
             EndPlantSession(player);
@@ -143,7 +142,7 @@ public class QuickDefuse : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnBombPlanted(EventBombPlanted eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnBombPlanted(EventBombPlanted eventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
 
         PlayerButtons chosenDirection;
@@ -173,7 +172,7 @@ public class QuickDefuse : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnBombBeginDefuse(EventBombBegindefuse eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnBombBeginDefuse(EventBombBegindefuse eventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
         if (player == null || !player.IsValid || !player.PawnIsAlive) {
             return HookResult.Continue;
@@ -183,7 +182,7 @@ public class QuickDefuse : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnBombAbortDefuse(EventBombAbortdefuse eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnBombAbortDefuse(EventBombAbortdefuse eventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
         if (player != null && player.IsValid) {
             EndDefuseSession(player);
@@ -192,17 +191,17 @@ public class QuickDefuse : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnBombDefused(EventBombDefused eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnBombDefused(EventBombDefused eventInfo) {
         ClearAllState();
         return HookResult.Continue;
     }
 
-    private HookResult OnBombExploded(EventBombExploded eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnBombExploded(EventBombExploded eventInfo) {
         ClearAllState();
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
         if (player != null && player.IsValid) {
             EndPlantSession(player);
@@ -212,7 +211,7 @@ public class QuickDefuse : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo) {
         CCSPlayerController? player = eventInfo.Userid;
         if (player != null) {
             activePlantSessions.Remove(player.Handle);

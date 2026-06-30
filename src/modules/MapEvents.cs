@@ -47,8 +47,9 @@ public class MapEvents : IModule {
         if (osbase != null && handlersLoaded) {
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
-            osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-            osbase.DeregisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase.UnsubscribeFromEvent<EventCsWinPanelMatch>(OnMatchEndEvent);
 
             handlersLoaded = false;
         }
@@ -76,8 +77,9 @@ public class MapEvents : IModule {
 
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
-        osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-        osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEndEvent);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+        osbase.SubscribeToEvent<EventCsWinPanelMatch>(OnMatchEndEvent);
 
         handlersLoaded = true;
     }
@@ -114,7 +116,7 @@ public class MapEvents : IModule {
         RunMapEndCommands("OnMapEnd");
     }
 
-    private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnWarmupEnd(EventWarmupEnd eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -131,7 +133,7 @@ public class MapEvents : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMatchEndEvent(EventCsWinPanelMatch eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

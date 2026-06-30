@@ -45,8 +45,9 @@ public class TeamDamage : IModule {
         isActive = false;
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
-            osbase.DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventPlayerHurt>(OnPlayerHurt);
+            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
             handlersLoaded = false;
         }
 
@@ -66,13 +67,14 @@ public class TeamDamage : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
-        osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
+        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
 
         handlersLoaded = true;
     }
 
-    private HookResult OnPlayerHurt(EventPlayerHurt eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerHurt(EventPlayerHurt eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -98,7 +100,7 @@ public class TeamDamage : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

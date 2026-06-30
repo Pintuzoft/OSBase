@@ -57,9 +57,10 @@ public class DemosMatch : IModule {
 
         if (osbase != null && handlersLoaded) {
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
-            osbase.DeregisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
-            osbase.DeregisterEventHandler<EventMapTransition>(OnMapTransition);
-            osbase.DeregisterEventHandler<EventMapShutdown>(OnMapShutdown);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventCsWinPanelMatch>(OnMatchEnd);
+            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
+            osbase.UnsubscribeFromEvent<EventMapShutdown>(OnMapShutdown);
 
             osbase.RemoveCommandListener("map", OnCommandMap, HookMode.Pre);
             osbase.RemoveCommandListener("changelevel", OnCommandMap, HookMode.Pre);
@@ -104,9 +105,10 @@ public class DemosMatch : IModule {
         }
 
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
-        osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
-        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
-        osbase.RegisterEventHandler<EventMapShutdown>(OnMapShutdown);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventCsWinPanelMatch>(OnMatchEnd);
+        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
+        osbase.SubscribeToEvent<EventMapShutdown>(OnMapShutdown);
 
         osbase.AddCommandListener("map", OnCommandMap, HookMode.Pre);
         osbase.AddCommandListener("changelevel", OnCommandMap, HookMode.Pre);
@@ -127,7 +129,7 @@ public class DemosMatch : IModule {
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has started: {mapName}");
     }
 
-    private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -151,7 +153,7 @@ public class DemosMatch : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnMapTransition(EventMapTransition eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMapTransition(EventMapTransition eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -162,7 +164,7 @@ public class DemosMatch : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnMapShutdown(EventMapShutdown eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnMapShutdown(EventMapShutdown eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

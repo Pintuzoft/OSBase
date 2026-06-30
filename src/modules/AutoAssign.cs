@@ -60,10 +60,11 @@ public class AutoAssign : IModule {
         ResetState();
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-            osbase.DeregisterEventHandler<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
-            osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-            osbase.DeregisterEventHandler<EventMapTransition>(OnMapTransition);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+            osbase.UnsubscribeFromEvent<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
+            osbase.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
 
             handlersLoaded = false;
@@ -85,10 +86,11 @@ public class AutoAssign : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-        osbase.RegisterEventHandler<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
-        osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase.SubscribeToEvent<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
+        osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
 
         handlersLoaded = true;
@@ -98,18 +100,18 @@ public class AutoAssign : IModule {
         ResetState();
     }
 
-    private HookResult OnMapTransition(EventMapTransition ev, GameEventInfo info) {
+    private HookResult OnMapTransition(EventMapTransition ev) {
         ResetState();
         return HookResult.Continue;
     }
 
-    private HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup ev, GameEventInfo info) {
+    private HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup ev) {
         warmupActive = true;
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup started.");
         return HookResult.Continue;
     }
 
-    private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
+    private HookResult OnWarmupEnd(EventWarmupEnd ev) {
         warmupActive = false;
         pendingWarmupRespawns.Clear();
 
@@ -117,7 +119,7 @@ public class AutoAssign : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerConnectFull(EventPlayerConnectFull ev, GameEventInfo info) {
+    private HookResult OnPlayerConnectFull(EventPlayerConnectFull ev) {
         if (!isActive || osbase == null) {
             return HookResult.Continue;
         }

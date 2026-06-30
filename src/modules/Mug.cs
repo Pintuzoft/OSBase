@@ -44,7 +44,8 @@ public class Mug : IModule {
         isActive = false;
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
             handlersLoaded = false;
         }
 
@@ -64,11 +65,12 @@ public class Mug : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
         handlersLoaded = true;
     }
 
-    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

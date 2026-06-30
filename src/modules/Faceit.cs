@@ -100,8 +100,9 @@ public class Faceit : IModule {
         ClearQueue();
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-            osbase.DeregisterEventHandler<EventMapTransition>(OnMapTransition);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+            osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
             handlersLoaded = false;
         }
 
@@ -137,13 +138,14 @@ public class Faceit : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-        osbase.RegisterEventHandler<EventMapTransition>(OnMapTransition);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
 
         handlersLoaded = true;
     }
 
-    private HookResult OnMapTransition(EventMapTransition _, GameEventInfo __) {
+    private HookResult OnMapTransition(EventMapTransition _) {
         StopWorker();
         ClearQueue();
         return HookResult.Continue;
@@ -269,7 +271,7 @@ public class Faceit : IModule {
         }
     }
 
-    private HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info) {
+    private HookResult OnPlayerConnectFull(EventPlayerConnectFull @event) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -901,11 +903,6 @@ public class Faceit : IModule {
         string banReason = row["ban_reason"] == DBNull.Value ? "unknown" : row["ban_reason"].ToString() ?? "unknown";
 
         if (!hasFaceit) {
-            ChatHelper.PrintToAdmins(
-                $"{player.PlayerName} | no FACEIT account found",
-                adminPermission,
-                ChatPrefix
-            );
             return;
         }
 
@@ -935,11 +932,6 @@ public class Faceit : IModule {
         }
 
         if (!result.HasFaceitAccount) {
-            ChatHelper.PrintToAdmins(
-                $"{player!.PlayerName} | no FACEIT account found",
-                adminPermission,
-                ChatPrefix
-            );
             return;
         }
 

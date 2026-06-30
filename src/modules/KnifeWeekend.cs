@@ -93,7 +93,8 @@ public class KnifeWeekend : IModule {
         isActive = false;
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RemoveCommand("css_ktop", OnKnifeTopCommand);
             handlersLoaded = false;
@@ -129,7 +130,8 @@ public class KnifeWeekend : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.AddCommand("css_ktop", "Shows KnifeWeekend top list", OnKnifeTopCommand);
 
@@ -304,7 +306,7 @@ public class KnifeWeekend : IModule {
         }
     }
 
-    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

@@ -67,10 +67,11 @@ public class ServerInfo : IModule {
         pendingPruneTimer = null;
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-            osbase.DeregisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
-            osbase.DeregisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
-            osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd);
+            // Use new EventBus system
+            osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+            osbase.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
+            osbase.UnsubscribeFromEvent<EventPlayerTeam>(OnPlayerTeam);
+            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
 
             handlersLoaded = false;
@@ -109,10 +110,11 @@ public class ServerInfo : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-        osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
-        osbase.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
-        osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
+        // Use new EventBus system
+        osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
+        osbase.SubscribeToEvent<EventPlayerTeam>(OnPlayerTeam);
+        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
 
         handlersLoaded = true;
@@ -188,7 +190,7 @@ public class ServerInfo : IModule {
         return value;
     }
 
-    private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -204,7 +206,7 @@ public class ServerInfo : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -221,7 +223,7 @@ public class ServerInfo : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerTeam(EventPlayerTeam eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -238,7 +240,7 @@ public class ServerInfo : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnRoundEnd(EventRoundEnd eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

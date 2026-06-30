@@ -99,9 +99,10 @@ public class TeamBets : IModule {
         isActive = false;
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventRoundStart>(OnRoundStart);
-            osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd);
-            osbase.DeregisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEnd);
+            // Use new EventBus system for bomb/round events
+            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+            osbase.UnsubscribeFromEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
             osbase.DeregisterEventHandler<EventPlayerChat>(OnPlayerChat);
 
             handlersLoaded = false;
@@ -126,9 +127,10 @@ public class TeamBets : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
-        osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-        osbase.RegisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEnd);
+        // Use new EventBus system for bomb/round events
+        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
+        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase.SubscribeToEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
         osbase.RegisterEventHandler<EventPlayerChat>(OnPlayerChat);
 
         handlersLoaded = true;
@@ -284,7 +286,7 @@ public class TeamBets : IModule {
         );
     }
 
-    private HookResult OnRoundStart(EventRoundStart eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnRoundStart(EventRoundStart eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -294,7 +296,7 @@ public class TeamBets : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -306,7 +308,7 @@ public class TeamBets : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnRoundEnd(EventRoundEnd eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

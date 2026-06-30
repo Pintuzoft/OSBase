@@ -88,11 +88,11 @@ namespace OSBase.Modules {
             StopTimers();
 
             if (osbase != null && handlersLoaded) {
-                osbase.DeregisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
-                osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd);
-                osbase.DeregisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
-                osbase.DeregisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-                osbase.DeregisterEventHandler<EventRoundAnnounceMatchStart>(OnMatchStart);
+                osbase.UnsubscribeFromEvent<EventPlayerTeam>(OnPlayerTeam);
+                osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+                osbase.UnsubscribeFromEvent<EventCsWinPanelMatch>(OnMatchEnd);
+                osbase.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
+                osbase.UnsubscribeFromEvent<EventRoundAnnounceMatchStart>(OnMatchStart);
 
                 osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
                 osbase.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
@@ -132,11 +132,11 @@ namespace OSBase.Modules {
                 return;
             }
 
-            osbase.RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
-            osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-            osbase.RegisterEventHandler<EventCsWinPanelMatch>(OnMatchEnd);
-            osbase.RegisterEventHandler<EventWarmupEnd>(OnWarmupEnd);
-            osbase.RegisterEventHandler<EventRoundAnnounceMatchStart>(OnMatchStart);
+            osbase.SubscribeToEvent<EventPlayerTeam>(OnPlayerTeam);
+            osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+            osbase.SubscribeToEvent<EventCsWinPanelMatch>(OnMatchEnd);
+            osbase.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
+            osbase.SubscribeToEvent<EventRoundAnnounceMatchStart>(OnMatchStart);
 
             osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
@@ -167,7 +167,7 @@ namespace OSBase.Modules {
             matchLive = false;
         }
 
-        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo, GameEventInfo gameEventInfo) {
+        private HookResult OnWarmupEnd(EventWarmupEnd eventInfo) {
             if (!isActive || matchLive) {
                 return HookResult.Continue;
             }
@@ -184,7 +184,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnMatchStart(EventRoundAnnounceMatchStart eventInfo, GameEventInfo gameEventInfo) {
+        private HookResult OnMatchStart(EventRoundAnnounceMatchStart eventInfo) {
             if (!isActive) {
                 return HookResult.Continue;
             }
@@ -361,7 +361,7 @@ namespace OSBase.Modules {
             }
         }
 
-        private HookResult OnRoundEnd(EventRoundEnd eventInfo, GameEventInfo gameEventInfo) {
+        private HookResult OnRoundEnd(EventRoundEnd eventInfo) {
             if (!isActive) {
                 return HookResult.Continue;
             }
@@ -383,7 +383,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo, GameEventInfo gameEventInfo) {
+        private HookResult OnMatchEnd(EventCsWinPanelMatch eventInfo) {
             if (!isActive || db == null) {
                 return HookResult.Continue;
             }
@@ -437,7 +437,7 @@ namespace OSBase.Modules {
             return HookResult.Continue;
         }
 
-        private HookResult OnPlayerTeam(EventPlayerTeam eventInfo, GameEventInfo gameEventInfo) {
+        private HookResult OnPlayerTeam(EventPlayerTeam eventInfo) {
             if (!isActive || matchLive || !warmupActive) {
                 return HookResult.Continue;
             }
