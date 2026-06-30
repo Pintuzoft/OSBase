@@ -49,6 +49,7 @@ public class ServerInfo : IModule {
         LoadConfig();
 
         db = new Database(osbase, config);
+        db.SetAutoDrain(true);
 
         CreateTables();
 
@@ -71,11 +72,14 @@ public class ServerInfo : IModule {
             osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
             osbase.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
             osbase.UnsubscribeFromEvent<EventPlayerTeam>(OnPlayerTeam);
+            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
             osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
 
             handlersLoaded = false;
         }
+
+        db?.FlushPendingWrites(1500);
 
         db = null;
         config = null;
@@ -114,6 +118,7 @@ public class ServerInfo : IModule {
         osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
         osbase.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnect);
         osbase.SubscribeToEvent<EventPlayerTeam>(OnPlayerTeam);
+        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
         osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
 
@@ -240,10 +245,23 @@ public class ServerInfo : IModule {
         return HookResult.Continue;
     }
 
+    private HookResult OnRoundStart(EventRoundStart eventInfo) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        // Keep writes queued during live round to avoid DB drain on critical ticks.
+        db?.SetAutoDrain(false);
+        return HookResult.Continue;
+    }
+
     private HookResult OnRoundEnd(EventRoundEnd eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }
+
+        // Round-end is our safe window for draining queued writes.
+        db?.SetAutoDrain(true);
 
         foreach (var player in Utilities.GetPlayers()) {
             if (!IsTrackablePlayer(player)) {
@@ -254,6 +272,7 @@ public class ServerInfo : IModule {
         }
 
         SchedulePruneUsers(0.2f);
+        db?.FlushPendingWrites(1000);
         return HookResult.Continue;
     }
 
@@ -261,6 +280,8 @@ public class ServerInfo : IModule {
         if (!isActive) {
             return;
         }
+
+        db?.SetAutoDrain(true);
 
         map = mapName;
         SaveServerInfo();
@@ -274,6 +295,7 @@ public class ServerInfo : IModule {
         }
 
         SchedulePruneUsers(0.2f);
+        db?.FlushPendingWrites(1000);
     }
 
     private void SchedulePruneUsers(float delay = 0.5f) {
@@ -320,7 +342,7 @@ public class ServerInfo : IModule {
                 }
 
                 if (!onlineNames.Contains(dbName)) {
-                    db.delete(
+                    db.deleteAsync(
                         "FROM serverinfo_user WHERE host=@host AND port=@port AND name=@name",
                         new MySqlParameter("@host", host),
                         new MySqlParameter("@port", port),
@@ -396,7 +418,7 @@ public class ServerInfo : IModule {
         };
 
         try {
-            db.insert(query, parameters);
+            db.insertAsync(query, parameters);
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error saving server info: {e.Message}");
         }
@@ -408,7 +430,7 @@ public class ServerInfo : IModule {
         }
 
         try {
-            db.delete(
+            db.deleteAsync(
                 "FROM serverinfo_user WHERE host=@host AND port=@port AND name=@name",
                 new MySqlParameter("@host", host),
                 new MySqlParameter("@port", port),
@@ -460,7 +482,7 @@ public class ServerInfo : IModule {
         };
 
         try {
-            db.insert(query, parameters);
+            db.insertAsync(query, parameters);
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error upserting user row: {e.Message}");
         }

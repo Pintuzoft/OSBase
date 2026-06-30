@@ -45,8 +45,11 @@ public class Faceit : IModule {
     // in-memory queue
     private readonly Queue<ulong> lookupQueue = new();
     private readonly HashSet<ulong> queuedSteamIds = new();
+    private readonly HashSet<ulong> pendingConnectChecks = new();
     private bool workerBusy = false;
     private Timer? workerTimer;
+
+    private const int MaxConnectChecksPerRound = 8;
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -102,9 +105,12 @@ public class Faceit : IModule {
         if (osbase != null && handlersLoaded) {
             // Use new EventBus system
             osbase.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
             osbase.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
             handlersLoaded = false;
         }
+
+        db?.FlushPendingWrites(1500);
 
         httpClient?.Dispose();
         httpClient = null;
@@ -140,6 +146,7 @@ public class Faceit : IModule {
 
         // Use new EventBus system
         osbase.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase.SubscribeToEvent<EventMapTransition>(OnMapTransition);
 
         handlersLoaded = true;
@@ -148,6 +155,7 @@ public class Faceit : IModule {
     private HookResult OnMapTransition(EventMapTransition _) {
         StopWorker();
         ClearQueue();
+        pendingConnectChecks.Clear();
         return HookResult.Continue;
     }
 
@@ -287,12 +295,54 @@ public class Faceit : IModule {
                 return HookResult.Continue;
             }
 
-            HandlePlayerConnect(player, steamId64);
+            pendingConnectChecks.Add(steamId64);
+
+            if (debug) {
+                Console.WriteLine($"[DEBUG] OSBase[faceit]: queued connect-check for round end: {steamId64} (pending={pendingConnectChecks.Count})");
+            }
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[faceit]: OnPlayerConnectFull failed: {ex.Message}");
         }
 
         return HookResult.Continue;
+    }
+
+    private HookResult OnRoundEnd(EventRoundEnd _) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        ProcessPendingConnectChecks();
+        return HookResult.Continue;
+    }
+
+    private void ProcessPendingConnectChecks() {
+        if (pendingConnectChecks.Count == 0) {
+            return;
+        }
+
+        var batch = new List<ulong>();
+        foreach (var steamId64 in pendingConnectChecks) {
+            batch.Add(steamId64);
+            if (batch.Count >= MaxConnectChecksPerRound) {
+                break;
+            }
+        }
+
+        foreach (var steamId64 in batch) {
+            pendingConnectChecks.Remove(steamId64);
+
+            var player = FindOnlinePlayer(steamId64);
+            if (!IsValidHuman(player)) {
+                continue;
+            }
+
+            HandlePlayerConnect(player!, steamId64);
+        }
+
+        if (debug) {
+            Console.WriteLine($"[DEBUG] OSBase[faceit]: processed connect-check batch={batch.Count}, remaining={pendingConnectChecks.Count}");
+        }
     }
 
     private void HandlePlayerConnect(CCSPlayerController player, ulong steamId64) {
@@ -360,7 +410,7 @@ public class Faceit : IModule {
             ON DUPLICATE KEY UPDATE
                 `last_seen_at` = UTC_TIMESTAMP()";
 
-        db.insert(query, new MySqlParameter("@steamid64", steamId64));
+        db.insertAsync(query, new MySqlParameter("@steamid64", steamId64));
     }
 
     private void UpdateLastSeen(ulong steamId64) {
@@ -373,7 +423,7 @@ public class Faceit : IModule {
             SET `last_seen_at` = UTC_TIMESTAMP()
             WHERE `steamid64` = @steamid64";
 
-        db.update(query, new MySqlParameter("@steamid64", steamId64));
+        db.updateAsync(query, new MySqlParameter("@steamid64", steamId64));
     }
 
     private bool ShouldEnqueueLookup(DataRow row) {
@@ -792,7 +842,7 @@ public class Faceit : IModule {
                 `last_error` = NULL
             WHERE `steamid64` = @steamid64";
 
-        db.update(query,
+        db.updateAsync(query,
             new MySqlParameter("@faceit_player_id", (object?)result.FaceitPlayerId ?? DBNull.Value),
             new MySqlParameter("@faceit_nickname", (object?)result.FaceitNickname ?? DBNull.Value),
             new MySqlParameter("@skill_level", (object?)result.SkillLevel ?? DBNull.Value),
@@ -830,7 +880,7 @@ public class Faceit : IModule {
                 `last_error` = @last_error
             WHERE `steamid64` = @steamid64";
 
-        db.update(query,
+        db.updateAsync(query,
             new MySqlParameter("@next_check_at", retryAt),
             new MySqlParameter("@last_error", errorMessage),
             new MySqlParameter("@steamid64", steamId64)

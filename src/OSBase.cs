@@ -13,7 +13,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.513";
+    public override string ModuleVersion => "0.0.514";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for managing CS2 servers";
 
@@ -76,8 +76,9 @@ public class OSBase : BasePlugin {
         var orderedEvents = counts.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
         var totalSubscribers = counts.Values.Sum();
         var totalDuplicates = duplicates.Values.Sum();
+        var pendingDbWrites = Database.GetGlobalPendingWriteCount();
 
-        SendEventBusDiagLine(player, $"[EventBus] events={orderedEvents.Count}, subscribers={totalSubscribers}, duplicates={totalDuplicates}");
+        SendEventBusDiagLine(player, $"[EventBus] events={orderedEvents.Count}, subscribers={totalSubscribers}, duplicates={totalDuplicates}, db_pending_writes={pendingDbWrites}");
 
         if (orderedEvents.Count == 0) {
             SendEventBusDiagLine(player, "[EventBus] No active subscriptions.");

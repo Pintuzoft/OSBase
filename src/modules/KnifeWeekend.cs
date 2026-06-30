@@ -23,6 +23,8 @@ public class KnifeWeekend : IModule {
     private bool isActive = false;
 
     private readonly HashSet<ulong> adminSteamIds = new();
+    private readonly List<PendingKnifeEvent> pendingKnifeEvents = new();
+    private readonly Dictionary<ulong, PendingPointDelta> pendingPointDeltas = new();
     private DateTime nextWarmupMessageUtc = DateTime.MinValue;
 
     private const int EventTypeNormal = 0;
@@ -53,6 +55,20 @@ public class KnifeWeekend : IModule {
         "talon", "widowmaker", "ursus", "kukri", "bowie", "survival_bowie",
         "classic", "css", "default"
     };
+
+    private sealed class PendingKnifeEvent {
+        public string AttackerName { get; init; } = "Unknown";
+        public ulong AttackerSteamId64 { get; init; }
+        public string VictimName { get; init; } = "Unknown";
+        public ulong VictimSteamId64 { get; init; }
+        public int Points { get; init; }
+        public bool TeamKill { get; init; }
+    }
+
+    private sealed class PendingPointDelta {
+        public string Name { get; set; } = "Unknown";
+        public int Delta { get; set; }
+    }
 
     public void Load(OSBase inOsbase, Config inConfig) {
         osbase = inOsbase;
@@ -92,9 +108,13 @@ public class KnifeWeekend : IModule {
     public void Unload() {
         isActive = false;
 
+        FlushPendingWrites("Unload");
+
         if (osbase != null && handlersLoaded) {
             // Use new EventBus system
             osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
             osbase.RemoveListener<Listeners.OnMapStart>(OnMapStart);
             osbase.RemoveCommand("css_ktop", OnKnifeTopCommand);
             handlersLoaded = false;
@@ -132,6 +152,8 @@ public class KnifeWeekend : IModule {
 
         // Use new EventBus system
         osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
+        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase.AddCommand("css_ktop", "Shows KnifeWeekend top list", OnKnifeTopCommand);
 
@@ -372,7 +394,30 @@ public class KnifeWeekend : IModule {
             return;
         }
 
+        FlushPendingWrites("MapStart");
+        db?.SetAutoDrain(true);
+
         LoadAdminSteamIds();
+    }
+
+    private HookResult OnRoundStart(EventRoundStart _) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        // Queue writes during live round to avoid DB interference.
+        db?.SetAutoDrain(false);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnRoundEnd(EventRoundEnd _) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        db?.SetAutoDrain(true);
+        FlushPendingWrites("RoundEnd");
+        return HookResult.Continue;
     }
 
     private void OnKnifeTopCommand(CCSPlayerController? player, CommandInfo commandInfo) {
@@ -403,45 +448,100 @@ public class KnifeWeekend : IModule {
     }
 
     private void AddKnifeEvent(string attackerName, ulong attackerSteamId64, string victimName, ulong victimSteamId64, int points, bool teamKill) {
+        if (attackerSteamId64 == 0 || victimSteamId64 == 0) {
+            return;
+        }
+
+        pendingKnifeEvents.Add(new PendingKnifeEvent {
+            AttackerName = attackerName,
+            AttackerSteamId64 = attackerSteamId64,
+            VictimName = victimName,
+            VictimSteamId64 = victimSteamId64,
+            Points = points,
+            TeamKill = teamKill
+        });
+    }
+
+    private void AddPoints(string name, ulong steamId64, int delta) {
+        if (steamId64 == 0 || delta == 0) {
+            return;
+        }
+
+        if (!pendingPointDeltas.TryGetValue(steamId64, out var pending)) {
+            pending = new PendingPointDelta {
+                Name = name,
+                Delta = 0
+            };
+            pendingPointDeltas[steamId64] = pending;
+        }
+
+        pending.Name = name;
+        pending.Delta += delta;
+    }
+
+    private void FlushPendingWrites(string source) {
         if (db == null) {
             return;
         }
 
-        string query =
-            $"INTO {Table("event")} " +
-            "(stamp, attacker, attackerid64, victim, victimid64, points, type) " +
-            "VALUES (NOW(), @attacker, @attackerid64, @victim, @victimid64, @points, @type)";
-
-        var parameters = new MySqlParameter[] {
-            new("@attacker", attackerName),
-            new("@attackerid64", attackerSteamId64),
-            new("@victim", victimName),
-            new("@victimid64", victimSteamId64),
-            new("@points", points),
-            new("@type", teamKill ? EventTypeTeamKill : EventTypeNormal)
-        };
-
-        db.insert(query, parameters);
-    }
-
-    private void AddPoints(string name, ulong steamId64, int delta) {
-        if (db == null || steamId64 == 0 || delta == 0) {
+        if (pendingKnifeEvents.Count == 0 && pendingPointDeltas.Count == 0) {
             return;
         }
 
-        string query =
-            $"INTO {Table("userstats")} (steamid64, name, points) " +
-            "VALUES (@steamid64, @name, @points) " +
-            "ON DUPLICATE KEY UPDATE name=@name, points=points+@delta";
+        int eventsWritten = 0;
+        int pointRowsWritten = 0;
 
-        var parameters = new MySqlParameter[] {
-            new("@steamid64", steamId64),
-            new("@name", name),
-            new("@points", delta),
-            new("@delta", delta)
-        };
+        foreach (var ev in pendingKnifeEvents) {
+            string query =
+                $"INTO {Table("event")} " +
+                "(stamp, attacker, attackerid64, victim, victimid64, points, type) " +
+                "VALUES (NOW(), @attacker, @attackerid64, @victim, @victimid64, @points, @type)";
 
-        db.insert(query, parameters);
+            var parameters = new MySqlParameter[] {
+                new("@attacker", ev.AttackerName),
+                new("@attackerid64", ev.AttackerSteamId64),
+                new("@victim", ev.VictimName),
+                new("@victimid64", ev.VictimSteamId64),
+                new("@points", ev.Points),
+                new("@type", ev.TeamKill ? EventTypeTeamKill : EventTypeNormal)
+            };
+
+            db.insertAsync(query, parameters);
+            eventsWritten++;
+        }
+
+        foreach (var kv in pendingPointDeltas) {
+            ulong steamId64 = kv.Key;
+            var pending = kv.Value;
+
+            if (pending.Delta == 0) {
+                continue;
+            }
+
+            string query =
+                $"INTO {Table("userstats")} (steamid64, name, points) " +
+                "VALUES (@steamid64, @name, @points) " +
+                "ON DUPLICATE KEY UPDATE name=@name, points=points+@delta";
+
+            var parameters = new MySqlParameter[] {
+                new("@steamid64", steamId64),
+                new("@name", pending.Name),
+                new("@points", pending.Delta),
+                new("@delta", pending.Delta)
+            };
+
+            db.insertAsync(query, parameters);
+            pointRowsWritten++;
+        }
+
+        // We are in a controlled timing window (round end/map start/unload),
+        // so block briefly to ensure queued writes are drained.
+        db.FlushPendingWrites(1000);
+
+        pendingKnifeEvents.Clear();
+        pendingPointDeltas.Clear();
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending DB writes ({source}): events={eventsWritten}, pointRows={pointRowsWritten}");
     }
 
     private void ShowTopList(CCSPlayerController player) {
