@@ -36,7 +36,11 @@ jobs:
       - name: Get latest CounterStrikeSharp version
         id: latest_version
         run: |
-          LATEST=$(curl -s "https://api.nuget.org/v3-flatcontainer/counterstrikesharp.api/index.json" | jq -r '.versions | .[-1]')
+          LATEST=$(curl -s "https://api.nuget.org/v3-flatcontainer/counterstrikesharp.api/index.json" | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tail -1 | tr -d '"')
+          if [ -z "$LATEST" ]; then
+            echo "❌ Failed to fetch latest version, using current version"
+            LATEST=$(grep -oP 'CounterStrikeSharp.API" Version="\K[^"]+' src/OSBase.csproj)
+          fi
           echo "latest=$LATEST" >> $GITHUB_OUTPUT
           echo "Latest CounterStrikeSharp.API version: $LATEST"
 
