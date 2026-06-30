@@ -247,6 +247,39 @@ public class DamageReport : IModule {
         }
     }
 
+    private void PopulateMissingPlayerNames() {
+        try {
+            // For all players in damage data, ensure we have their names
+            var allPlayerIds = new HashSet<int>();
+            
+            // Collect all player IDs from damage data
+            foreach (var giver in damageGiven.Keys) allPlayerIds.Add(giver);
+            foreach (var taker in damageTaken.Keys) allPlayerIds.Add(taker);
+            foreach (var pair in damageGiven) {
+                foreach (var victimId in pair.Value.Keys) allPlayerIds.Add(victimId);
+            }
+            foreach (var pair in damageTaken) {
+                foreach (var attackerId in pair.Value.Keys) allPlayerIds.Add(attackerId);
+            }
+
+            // For each player ID not yet in playerNames, try to find their name
+            foreach (int id in allPlayerIds) {
+                if (!playerNames.ContainsKey(id)) {
+                    // Try to find active player
+                    var p = FindPlayerByUserId(id);
+                    if (p != null && !string.IsNullOrEmpty(p.PlayerName)) {
+                        playerNames[id] = p.PlayerName;
+                    } else if (!playerNames.ContainsKey(id)) {
+                        // Keep as Unknown placeholder for disconnected players
+                        playerNames[id] = "Unknown";
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in PopulateMissingPlayerNames: {ex}");
+        }
+    }
+
     private void ScheduleDamageReport(int userId) {
         if (osbase == null || !isActive) {
             return;
@@ -299,6 +332,12 @@ public class DamageReport : IModule {
         }
 
         int playerId = player.UserId.Value;
+
+        // Sync active player names before report
+        UpdatePlayerNames();
+        
+        // Populate nicknames for all involved players (even disconnected ones)
+        PopulateMissingPlayerNames();
 
         bool hasVictimData = damageGiven.ContainsKey(playerId) && damageGiven[playerId].Count > 0;
         bool hasAttackerData = damageTaken.ContainsKey(playerId) && damageTaken[playerId].Count > 0;
@@ -395,6 +434,8 @@ public class DamageReport : IModule {
         hitboxGivenDamage.Clear();
         hitboxTakenDamage.Clear();
 
+        playerNames.Clear();  // Also clear names with damage data
+
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Damage data cleared.");
     }
 
@@ -414,7 +455,9 @@ public class DamageReport : IModule {
         hitboxTakenDamage.Remove(playerId);
 
         killedPlayer.Remove(playerId);
-        playerNames.Remove(playerId);
+        
+        // Keep playerNames for disconnected players - other players' reports may reference them
+        // playerNames.Remove(playerId);  // REMOVED: preserve names for damage reports
     }
 
     private void CancelPendingReport(int playerId) {
