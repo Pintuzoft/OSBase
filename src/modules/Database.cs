@@ -188,7 +188,6 @@ public class Database {
             using var conn = Open();
             using var cmd = new MySqlCommand(query, conn);
             if (parameters != null && parameters.Length > 0) cmd.Parameters.AddRange(parameters);
-            cmd.Prepare();
             return cmd.ExecuteNonQuery();
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: (exeChange): {ex.Message}");
@@ -204,7 +203,6 @@ public class Database {
             foreach (var (query, parameters) in writes) {
                 using var cmd = new MySqlCommand(query, conn, tx);
                 if (parameters != null && parameters.Length > 0) cmd.Parameters.AddRange(parameters);
-                cmd.Prepare();
                 total += cmd.ExecuteNonQuery();
             }
             tx.Commit();
@@ -215,11 +213,9 @@ public class Database {
         }
     }
 
-    private int exeChangeNoCatch ( string query, params MySqlParameter[] parameters ) {
-        using var conn = Open();
+    private static int ExecOn ( MySqlConnection conn, string query, MySqlParameter[] parameters ) {
         using var cmd = new MySqlCommand(query, conn);
         if (parameters != null && parameters.Length > 0) cmd.Parameters.AddRange(parameters);
-        cmd.Prepare();
         return cmd.ExecuteNonQuery();
     }
 
@@ -229,7 +225,6 @@ public class Database {
             using var conn = Open();
             using var cmd = new MySqlCommand(query, conn);
             if (parameters != null && parameters.Length > 0) cmd.Parameters.AddRange(parameters);
-            cmd.Prepare();
             using var adapter = new MySqlDataAdapter(cmd);
             adapter.Fill(table);
         } catch (Exception ex) {
@@ -263,31 +258,41 @@ public class Database {
         while (writeWorkerRunning) {
             writeSignal.WaitOne(1000);
 
-            while (true) {
-                QueuedChange? next = null;
+            // One connection per drain batch instead of one per write (less pool churn).
+            MySqlConnection? conn = null;
+            try {
+                while (true) {
+                    QueuedChange? next = null;
 
-                lock (writeQueueLock) {
-                    if (!autoDrainEnabled && !forceDrainRequested) {
+                    lock (writeQueueLock) {
+                        if (!autoDrainEnabled && !forceDrainRequested) {
+                            break;
+                        }
+
+                        if (writeQueue.Count > 0) {
+                            next = writeQueue.Dequeue();
+                        }
+                    }
+
+                    if (next == null) {
                         break;
                     }
 
-                    if (writeQueue.Count > 0) {
-                        next = writeQueue.Dequeue();
+                    try {
+                        conn ??= Open();
+                        ExecOn(conn, next.Query, next.Parameters);
+                    } catch (Exception ex) {
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: async write failed: {ex.Message}");
+                        // Connection may be broken; drop it so the next write reopens a fresh one.
+                        conn?.Dispose();
+                        conn = null;
+                    } finally {
+                        Interlocked.Decrement(ref pendingWrites);
+                        Interlocked.Decrement(ref globalPendingWrites);
                     }
                 }
-
-                if (next == null) {
-                    break;
-                }
-
-                try {
-                    exeChangeNoCatch(next.Query, next.Parameters);
-                } catch (Exception ex) {
-                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: async write failed: {ex.Message}");
-                } finally {
-                    Interlocked.Decrement(ref pendingWrites);
-                    Interlocked.Decrement(ref globalPendingWrites);
-                }
+            } finally {
+                conn?.Dispose();
             }
         }
     }
