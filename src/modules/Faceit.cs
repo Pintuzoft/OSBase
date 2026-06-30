@@ -72,7 +72,13 @@ public class Faceit : IModule {
         db = new Database(osbase, config);
         db.Initialize();
 
-        httpClient = new HttpClient {
+        // Use HTTPS-validating handler for security
+        var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = null // Default: strict HTTPS validation
+        };
+        httpClient = new HttpClient(handler)
+        {
             Timeout = TimeSpan.FromSeconds(Math.Max(1, httpTimeoutSeconds))
         };
 

@@ -62,13 +62,13 @@ public class Database {
 
     private string buildConnectionString ( ) {
         if (config == null) throw new InvalidOperationException($"[DEBUG] OSBase[{ModuleName}]: Config cannot be null");
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Database connection string: {dbhost}:{dbuser}:{dbpass}:{dbname}:{dbport}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Database connection to {dbhost}:{dbport}, database={dbname} (credentials hidden for security)");
         return $"server={dbhost};user id={dbuser};password={dbpass};database={dbname};port={dbport};" +
                $"pooling=true;minimumpoolsize=5;maximumpoolsize=50;connectionidletimeout=1200;";
     }
 
     public void Initialize ( ) {
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Initialized with connection string: {connectionString}");
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Database initialized successfully (connection string hidden for security)");
     }
 
     // ----- Public wrappers (verb-smart) -----
