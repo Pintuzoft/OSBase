@@ -2,8 +2,8 @@ name: Auto Upgrade Dependencies
 
 on:
   schedule:
-    # Kör varje natt 02:00 UTC (03:00 CEST)
-    - cron: '0 2 * * *'
+    # Kollar varje timme om CounterStrikeSharp.API har uppdaterats
+    - cron: '0 * * * *'
   workflow_dispatch: # Tillåter manuell trigger
 
 permissions:

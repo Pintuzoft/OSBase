@@ -1,10 +1,10 @@
 # 🚀 Automatisk Dependency Upgrade
 
-Detta är en GitHub Actions-automation som nightly kollar om **CounterStrikeSharp.API** har uppdaterats. Vid en ny version:
+Detta är en GitHub Actions-automation som kollar varje timme om **CounterStrikeSharp.API** har uppdaterats. Vid en ny version körs en automatisk build och release:
 
 ## ✨ Vad den gör
 
-1. **Kollar varje natt** (02:00 UTC) om CounterStrikeSharp.API har uppdaterats
+1. **Kollar varje timme** (00 minuten på varje hel timme) om CounterStrikeSharp.API har uppdaterats
 2. **Om uppdatering finns:**
    - ✅ Uppdaterar `CounterStrikeSharp.API` version i `src/OSBase.csproj`
    - ✅ Incrementerar OSBase patch-version (0.0.499 → 0.0.500)
@@ -15,7 +15,7 @@ Detta är en GitHub Actions-automation som nightly kollar om **CounterStrikeShar
 
 ## 📅 Schedule
 
-- **Nightly**: Kl. 02:00 UTC (03:00 CEST/CEDT)
+- **Stündlig**: Varje timme (00 minuten) UTC — kollar omedelbar om CSS har uppdaterats
 - **Manuell trigger**: Du kan också köra den manuellt från GitHub Actions-fliken
 
 ## 📊 Versionering
@@ -51,14 +51,16 @@ Redigera `.github/workflows/upgrade-dependencies.yml`:
 
 ```yaml
 schedule:
-  - cron: '0 2 * * *'  # Ändra tiden här
+  - cron: '0 * * * *'  # Ändra tidsintervallet här (nuvarande: varje timme)
 ```
 
 Cron-format: `minute hour day month day-of-week`
 
-Exempel:
-- `0 2 * * *` = Varje dag kl 02:00
+**Exempel:**
+- `0 * * * *` = **Varje timme** (00 minuten) ← **NUVARANDE**
+- `*/30 * * * *` = Var 30:e minut
 - `0 */6 * * *` = Var 6:e timme
+- `0 2 * * *` = Varje dag kl 02:00
 - `0 0 * * 0` = Varje söndag kl 00:00
 
 ### Begränsningar
