@@ -63,11 +63,20 @@ jobs:
           cp README.md release_files/ 2>/dev/null || true
           cp LICENSE release_files/ 2>/dev/null || true
 
-      - name: Create release zip
+      - name: Run release.sh to create zip in repo root
         if: steps.check_tag.outputs.exists == 'false'
         run: |
-          cd release_files
-          zip -r ../OSBase_v${{ steps.version.outputs.version }}.zip . -x "*.pdb"
+          chmod +x ./release.sh
+          ./release.sh
+
+      - name: Commit and push updated zips
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add OSBase_*.zip
+          git commit -m "chore: release OSBase v${{ steps.version.outputs.version }}" || echo "No changes to commit"
+          git push
 
       - name: Create GitHub Release
         if: steps.check_tag.outputs.exists == 'false'
