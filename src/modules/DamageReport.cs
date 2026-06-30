@@ -71,12 +71,13 @@ public class DamageReport : IModule {
         ClearDamageData();
 
         if (osbase != null && handlersLoaded) {
-            osbase.DeregisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
-            osbase.DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-            osbase.DeregisterEventHandler<EventRoundStart>(OnRoundStart);
-            osbase.DeregisterEventHandler<EventRoundEnd>(OnRoundEnd);
-            osbase.DeregisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
-            osbase.DeregisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
+            // Use new EventBus system (Unsubscribe instead of DeregisterEventHandler)
+            osbase.UnsubscribeFromEvent<EventPlayerHurt>(OnPlayerHurt);
+            osbase.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+            osbase.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+            osbase.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+            osbase.UnsubscribeFromEvent<EventPlayerConnect>(OnPlayerConnect);
+            osbase.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
 
             handlersLoaded = false;
         }
@@ -97,17 +98,18 @@ public class DamageReport : IModule {
             return;
         }
 
-        osbase.RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
-        osbase.RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
-        osbase.RegisterEventHandler<EventRoundStart>(OnRoundStart);
-        osbase.RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-        osbase.RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect);
-        osbase.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
+        // Use new EventBus system (Subscribe instead of RegisterEventHandler)
+        osbase.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
+        osbase.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase.SubscribeToEvent<EventRoundStart>(OnRoundStart);
+        osbase.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase.SubscribeToEvent<EventPlayerConnect>(OnPlayerConnect);
+        osbase.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
 
         handlersLoaded = true;
     }
 
-    private HookResult OnPlayerHurt(EventPlayerHurt e, GameEventInfo _) {
+    private HookResult OnPlayerHurt(EventPlayerHurt e) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -172,7 +174,7 @@ public class DamageReport : IModule {
         }
     }
 
-    private HookResult OnPlayerDeath(EventPlayerDeath e, GameEventInfo _) {
+    private HookResult OnPlayerDeath(EventPlayerDeath e) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -199,7 +201,7 @@ public class DamageReport : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnRoundStart(EventRoundStart _, GameEventInfo __) {
+    private HookResult OnRoundStart(EventRoundStart _) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -211,7 +213,7 @@ public class DamageReport : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnRoundEnd(EventRoundEnd _, GameEventInfo __) {
+    private HookResult OnRoundEnd(EventRoundEnd _) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -227,7 +229,7 @@ public class DamageReport : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerConnect(EventPlayerConnect _, GameEventInfo __) {
+    private HookResult OnPlayerConnect(EventPlayerConnect _) {
         if (!isActive) {
             return HookResult.Continue;
         }
@@ -236,7 +238,7 @@ public class DamageReport : IModule {
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerDisconnectEvent(EventPlayerDisconnect e, GameEventInfo _) {
+    private HookResult OnPlayerDisconnectEvent(EventPlayerDisconnect e) {
         if (!isActive) {
             return HookResult.Continue;
         }

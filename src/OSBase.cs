@@ -11,7 +11,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.510";
+    public override string ModuleVersion => "0.0.511";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for managing CS2 servers";
 
@@ -24,6 +24,9 @@ public class OSBase : BasePlugin {
     private readonly Dictionary<string, Type> discoveredModules = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IModule> loadedModules = new(StringComparer.OrdinalIgnoreCase);
 
+    // Event Bus: Central event dispatcher for module subscriptions
+    private readonly Dictionary<string, List<Delegate>> eventBus = new(StringComparer.Ordinal);
+
     public override void Load(bool hotReload) {
         Console.WriteLine("[INFO] OSBase: plugin is loading...");
 
@@ -34,6 +37,14 @@ public class OSBase : BasePlugin {
 
         DiscoverModules();
         ReloadAllConfigsAndModules();
+
+        // Register global event dispatchers (one-time setup)
+        RegisterEventHandler<EventPlayerHurt>(OnPlayerHurtGlobal);
+        RegisterEventHandler<EventPlayerDeath>(OnPlayerDeathGlobal);
+        RegisterEventHandler<EventRoundStart>(OnRoundStartGlobal);
+        RegisterEventHandler<EventRoundEnd>(OnRoundEndGlobal);
+        RegisterEventHandler<EventPlayerConnect>(OnPlayerConnectGlobal);
+        RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnectGlobal);
 
         RegisterListener<OnMapStart>(HandleMapStart);
 
@@ -53,6 +64,77 @@ public class OSBase : BasePlugin {
 
         Console.WriteLine($"[INFO] OSBase: map started: {mapName}, reloading config and modules...");
         ReloadAllConfigsAndModules();
+    }
+
+    // ========== EVENT BUS SYSTEM ==========
+
+    /// <summary>Subscribe a module's event handler to the event bus</summary>
+    public void SubscribeToEvent<TEvent>(Func<TEvent, HookResult> handler) {
+        var eventName = typeof(TEvent).Name;
+        
+        if (!eventBus.ContainsKey(eventName)) {
+            eventBus[eventName] = new();
+        }
+
+        eventBus[eventName].Add(handler);
+    }
+
+    /// <summary>Unsubscribe a module's event handler from the event bus</summary>
+    public void UnsubscribeFromEvent<TEvent>(Func<TEvent, HookResult> handler) {
+        var eventName = typeof(TEvent).Name;
+        
+        if (eventBus.ContainsKey(eventName)) {
+            eventBus[eventName].Remove(handler);
+        }
+    }
+
+    /// <summary>Dispatch event to all subscribed modules</summary>
+    private void DispatchToEventBus<TEvent>(TEvent e) {
+        var eventName = typeof(TEvent).Name;
+        
+        if (!eventBus.ContainsKey(eventName)) {
+            return;
+        }
+
+        foreach (var handler in eventBus[eventName]) {
+            try {
+                ((Func<TEvent, HookResult>)handler)?.Invoke(e);
+            } catch (Exception ex) {
+                Console.WriteLine($"[ERROR] OSBase: Exception in event handler for {eventName}: {ex.Message}");
+            }
+        }
+    }
+
+    // ========== GLOBAL EVENT DISPATCHERS ==========
+
+    private HookResult OnPlayerHurtGlobal(EventPlayerHurt e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerDeathGlobal(EventPlayerDeath e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnRoundStartGlobal(EventRoundStart e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnRoundEndGlobal(EventRoundEnd e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerConnectGlobal(EventPlayerConnect e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerDisconnectGlobal(EventPlayerDisconnect e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
     }
 
     private void DiscoverModules() {
