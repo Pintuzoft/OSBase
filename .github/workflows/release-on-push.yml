@@ -1,0 +1,81 @@
+name: Release on Push
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    name: Create Release on Version Update
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get current version from OSBase.cs
+        id: version
+        run: |
+          VERSION=$(grep -Po '(?<=public override string ModuleVersion => ")[^"]*' src/OSBase.cs)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Found version: $VERSION"
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v${{ steps.version.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag v${{ steps.version.outputs.version }} is new"
+          fi
+
+      - name: Setup .NET
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Clean build artifacts
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          rm -rf src/obj src/bin build release
+
+      - name: Build project
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          cd src
+          dotnet restore
+          dotnet build -c Release
+
+      - name: Prepare release files
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          mkdir -p release_files
+          cp -r build/* release_files/
+          cp README.md release_files/ 2>/dev/null || true
+          cp LICENSE release_files/ 2>/dev/null || true
+
+      - name: Create release zip
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          cd release_files
+          zip -r ../OSBase_v${{ steps.version.outputs.version }}.zip . -x "*.pdb"
+
+      - name: Create GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: OSBase v${{ steps.version.outputs.version }}
+          files: OSBase_v${{ steps.version.outputs.version }}.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
