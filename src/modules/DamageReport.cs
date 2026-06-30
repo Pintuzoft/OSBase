@@ -132,6 +132,15 @@ public class DamageReport : IModule {
                 attacker = ENVIRONMENT;
             }
 
+            // Save nicknames immediately when damage is registered
+            // This ensures names are captured even if player disconnects later
+            if (attacker != ENVIRONMENT && e.Attacker != null && !string.IsNullOrEmpty(e.Attacker.PlayerName)) {
+                playerNames[attacker] = e.Attacker.PlayerName;
+            }
+            if (!string.IsNullOrEmpty(e.Userid.PlayerName)) {
+                playerNames[victim] = e.Userid.PlayerName;
+            }
+
             int damage = e.DmgHealth;
             int hitgroup = ReadHitgroupByteCompat(e);
 
@@ -171,6 +180,14 @@ public class DamageReport : IModule {
 
         int victimId = e.Userid?.UserId ?? -1;
         int attackerId = e.Attacker?.UserId ?? -1;
+
+        // Save nicknames from death event (backup capture)
+        if (e.Userid != null && !string.IsNullOrEmpty(e.Userid.PlayerName) && victimId >= 0) {
+            playerNames[victimId] = e.Userid.PlayerName;
+        }
+        if (e.Attacker != null && !string.IsNullOrEmpty(e.Attacker.PlayerName) && attackerId >= 0) {
+            playerNames[attackerId] = e.Attacker.PlayerName;
+        }
 
         if (attackerId >= 0 && victimId >= 0) {
             EnsureKillSet(attackerId).Add(victimId);
