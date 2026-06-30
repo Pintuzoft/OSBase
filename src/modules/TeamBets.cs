@@ -77,8 +77,7 @@ public class TeamBets : ModuleBase {
         osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
         osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.SubscribeToEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
-        // EventPlayerChat is not on the EventBus dispatcher; register it directly.
-        osbase?.RegisterEventHandler<EventPlayerChat>(OnPlayerChat);
+        osbase?.SubscribeToEvent<EventPlayerChat>(OnPlayerChat);
     }
 
     protected override void UnregisterHandlers() {
@@ -86,10 +85,10 @@ public class TeamBets : ModuleBase {
         osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
         osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.UnsubscribeFromEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
-        osbase?.DeregisterEventHandler<EventPlayerChat>(OnPlayerChat);
+        osbase?.UnsubscribeFromEvent<EventPlayerChat>(OnPlayerChat);
     }
 
-    private HookResult OnPlayerChat(EventPlayerChat eventInfo, GameEventInfo gameEventInfo) {
+    private HookResult OnPlayerChat(EventPlayerChat eventInfo) {
         if (!isActive) {
             return HookResult.Continue;
         }

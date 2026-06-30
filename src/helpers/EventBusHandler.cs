@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Events;
 
 namespace OSBase.Helpers;
 
@@ -144,6 +145,8 @@ public class EventBusHandler {
         plugin.RegisterEventHandler<EventMapShutdown>(OnMapShutdownGlobal);
         plugin.RegisterEventHandler<EventItemPurchase>(OnItemPurchaseGlobal);
         plugin.RegisterEventHandler<EventItemPickup>(OnItemPickupGlobal);
+        plugin.RegisterEventHandler<EventRoundPrestart>(OnRoundPrestartGlobal);
+        plugin.RegisterEventHandler<EventPlayerChat>(OnPlayerChatGlobal);
     }
 
     // ========== GLOBAL EVENT DISPATCHERS ==========
@@ -279,6 +282,16 @@ public class EventBusHandler {
     }
 
     private HookResult OnItemPickupGlobal(EventItemPickup e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnRoundPrestartGlobal(EventRoundPrestart e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerChatGlobal(EventPlayerChat e, GameEventInfo _) {
         DispatchToEventBus(e);
         return HookResult.Continue;
     }
