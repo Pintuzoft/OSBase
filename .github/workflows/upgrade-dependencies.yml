@@ -1,0 +1,164 @@
+name: Auto Upgrade Dependencies
+
+on:
+  schedule:
+    # Kör varje natt 02:00 UTC (03:00 CEST)
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Tillåter manuell trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-upgrade:
+    runs-on: ubuntu-latest
+    name: Check & Upgrade CounterStrikeSharp
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Get current CounterStrikeSharp version
+        id: current_version
+        run: |
+          CURRENT=$(grep -oP 'CounterStrikeSharp.API" Version="\K[^"]+' src/OSBase.csproj)
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Current CounterStrikeSharp.API version: $CURRENT"
+
+      - name: Get latest CounterStrikeSharp version
+        id: latest_version
+        run: |
+          LATEST=$(curl -s "https://api.nuget.org/v3-flatcontainer/counterstrikesharp.api/index.json" | jq -r '.versions | .[-1]')
+          echo "latest=$LATEST" >> $GITHUB_OUTPUT
+          echo "Latest CounterStrikeSharp.API version: $LATEST"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          CURRENT="${{ steps.current_version.outputs.current }}"
+          LATEST="${{ steps.latest_version.outputs.latest }}"
+          if [ "$CURRENT" != "$LATEST" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "Update available: $CURRENT -> $LATEST"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "Already on latest version: $CURRENT"
+          fi
+
+      - name: Update CounterStrikeSharp version
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          LATEST="${{ steps.latest_version.outputs.latest }}"
+          sed -i 's/CounterStrikeSharp\.API" Version="[^"]*"/CounterStrikeSharp.API" Version="'$LATEST'"/' src/OSBase.csproj
+          echo "Updated CounterStrikeSharp.API to $LATEST in .csproj"
+
+      - name: Get current OSBase version
+        if: steps.compare.outputs.needs_update == 'true'
+        id: osbase_current
+        run: |
+          VERSION=$(grep -oP 'public override string ModuleVersion => "\K[^"]+' src/OSBase.cs)
+          echo "current=$VERSION" >> $GITHUB_OUTPUT
+          echo "Current OSBase version: $VERSION"
+
+      - name: Increment OSBase version
+        if: steps.compare.outputs.needs_update == 'true'
+        id: osbase_new
+        run: |
+          CURRENT="${{ steps.osbase_current.outputs.current }}"
+          # Parse version: 0.0.499
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+          patch=$((patch + 1))
+          NEW_VERSION="$major.$minor.$patch"
+          echo "new=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New OSBase version: $NEW_VERSION"
+          
+          # Update OSBase.cs
+          sed -i 's/public override string ModuleVersion => "[^"]*"/public override string ModuleVersion => "'$NEW_VERSION'"/' src/OSBase.cs
+          
+          # Update .csproj Version
+          sed -i 's/<Version>[^<]*<\/Version>/<Version>0.'$minor'.'$patch'<\/Version>/' src/OSBase.csproj
+          sed -i 's/<FileVersion>[^<]*<\/FileVersion>/<FileVersion>0.'$minor'.'$patch'<\/FileVersion>/' src/OSBase.csproj
+
+      - name: Setup Git
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit changes
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          git add src/OSBase.csproj src/OSBase.cs
+          git commit -m "chore: upgrade CounterStrikeSharp to ${{ steps.latest_version.outputs.latest }} and bump OSBase to ${{ steps.osbase_new.outputs.new }}"
+
+      - name: Clean build artifacts
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          chmod +x ./clean.sh
+          ./clean.sh
+
+      - name: Build project
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          chmod +x ./build.sh
+          ./build.sh
+
+      - name: Create release package
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          chmod +x ./release.sh
+          ./release.sh
+
+      - name: Push changes
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          git push origin main
+
+      - name: Upload release artifact
+        if: steps.compare.outputs.needs_update == 'true'
+        uses: actions/upload-artifact@v3
+        with:
+          name: osbase-release
+          path: OSBase_v*.zip
+          retention-days: 5
+
+      - name: Create GitHub Release
+        if: steps.compare.outputs.needs_update == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.osbase_new.outputs.new }}
+          name: OSBase v${{ steps.osbase_new.outputs.new }}
+          body: |
+            ## Changes
+            - Updated CounterStrikeSharp.API to `${{ steps.latest_version.outputs.latest }}`
+            - Bumped OSBase version to `${{ steps.osbase_new.outputs.new }}`
+            
+            ### Build Info
+            - **Previous OSBase version**: `${{ steps.osbase_current.outputs.current }}`
+            - **Previous CounterStrikeSharp version**: `${{ steps.current_version.outputs.current }}`
+          files: OSBase_v*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log success
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          echo "✅ Successfully upgraded OSBase from v${{ steps.osbase_current.outputs.current }} to v${{ steps.osbase_new.outputs.new }}"
+          echo "✅ CounterStrikeSharp.API updated to ${{ steps.latest_version.outputs.latest }}"
+
+      - name: No update needed
+        if: steps.compare.outputs.needs_update == 'false'
+        run: |
+          echo "ℹ️  No updates available. Current versions:"
+          echo "   - OSBase: ${{ steps.osbase_current.outputs.current }}"
+          echo "   - CounterStrikeSharp.API: ${{ steps.current_version.outputs.current }}"
