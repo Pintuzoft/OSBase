@@ -40,6 +40,9 @@ namespace OSBase.Modules {
         // Team containers for active bookkeeping (T/CT/SPEC)
         private Dictionary<int, TeamStats> teamList = new Dictionary<int, TeamStats>();
 
+        // Lookup cache: steamid -> team ID (for fast O(1) team lookups instead of O(n) linear search)
+        private readonly Dictionary<string, int> steamidToTeamCache = new Dictionary<string, int>(StringComparer.Ordinal);
+
         // === 90d cache for ALL players across DB ===
         private readonly Dictionary<string, float> avg90Cache = new Dictionary<string, float>(StringComparer.Ordinal);
 
@@ -149,21 +152,25 @@ namespace OSBase.Modules {
                 return;
             }
 
-            int participantCount = matchPlayerStats.Values.Count(ps =>
-                !string.IsNullOrEmpty(ps.steamid) &&
-                ps.steamid != "0" &&
-                !string.IsNullOrEmpty(ps.name));
+            // Single pass: count participants, qualified players, and collect insertable players
+            int participantCount = 0;
+            int qualifiedPlayers = 0;
+            var insertablePlayers = new List<PlayerStats>();
+
+            foreach (var ps in matchPlayerStats.Values) {
+                if (!string.IsNullOrEmpty(ps.steamid) && ps.steamid != "0" && !string.IsNullOrEmpty(ps.name)) {
+                    participantCount++;
+                    if (ps.rounds >= MIN_ROUNDS_TO_SAVE) {
+                        qualifiedPlayers++;
+                        insertablePlayers.Add(ps);
+                    }
+                }
+            }
 
             if (participantCount < MIN_PLAYERS_TO_SAVE) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Save skipped ({reason}): Not enough distinct participants ({participantCount}<{MIN_PLAYERS_TO_SAVE}). map={activeMapName}");
                 return;
             }
-
-            int qualifiedPlayers = matchPlayerStats.Values.Count(ps =>
-                !string.IsNullOrEmpty(ps.steamid) &&
-                ps.steamid != "0" &&
-                !string.IsNullOrEmpty(ps.name) &&
-                ps.rounds >= MIN_ROUNDS_TO_SAVE);
 
             if (qualifiedPlayers == 0) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Save skipped ({reason}): No players met round threshold ({MIN_ROUNDS_TO_SAVE}). map={activeMapName}");
@@ -175,11 +182,7 @@ namespace OSBase.Modules {
 
             int inserted = 0;
 
-            foreach (var ps in matchPlayerStats.Values) {
-                if (ps.steamid == "0" || ps.name.Length == 0 || ps.rounds < MIN_ROUNDS_TO_SAVE) {
-                    continue;
-                }
-
+            foreach (var ps in insertablePlayers) {
                 const string query =
                     "INSERT INTO skill_log (steamid, name, skill, datestr, mapname) " +
                     "VALUES (@steamid, @name, @skill, NOW(), @mapname);";
@@ -204,6 +207,7 @@ namespace OSBase.Modules {
             playerList.Clear();
             matchPlayerStats.Clear();
             userIdToSteam.Clear();
+            InvalidateTeamCache();
             teamList[TEAM_T].resetPlayers();
             teamList[TEAM_CT].resetPlayers();
             teamList[TEAM_S].resetPlayers();
@@ -299,6 +303,7 @@ namespace OSBase.Modules {
                 return HookResult.Continue;
             }
 
+            InvalidateTeamCache();
             teamList[TEAM_T].resetPlayers();
             teamList[TEAM_CT].resetPlayers();
             teamList[TEAM_S].resetPlayers();
@@ -439,9 +444,16 @@ namespace OSBase.Modules {
         public int GetTeamBySteam(ulong steamId64) {
             string sid = steamId64.ToString();
 
+            // Fast O(1) lookup via cache (optimization: replaces O(n) linear search)
+            if (steamidToTeamCache.TryGetValue(sid, out int teamId)) {
+                return teamId;
+            }
+
+            // Cache miss fallback - linear search and update cache
             if (teamList.ContainsKey(TEAM_T)) {
                 foreach (var kv in teamList[TEAM_T].playerList) {
                     if (kv.Value.steamid == sid) {
+                        steamidToTeamCache[sid] = TEAM_T;
                         return TEAM_T;
                     }
                 }
@@ -450,6 +462,7 @@ namespace OSBase.Modules {
             if (teamList.ContainsKey(TEAM_CT)) {
                 foreach (var kv in teamList[TEAM_CT].playerList) {
                     if (kv.Value.steamid == sid) {
+                        steamidToTeamCache[sid] = TEAM_CT;
                         return TEAM_CT;
                     }
                 }
@@ -458,12 +471,22 @@ namespace OSBase.Modules {
             if (teamList.ContainsKey(TEAM_S)) {
                 foreach (var kv in teamList[TEAM_S].playerList) {
                     if (kv.Value.steamid == sid) {
+                        steamidToTeamCache[sid] = TEAM_S;
                         return TEAM_S;
                     }
                 }
             }
 
+            steamidToTeamCache[sid] = TEAM_S;
             return TEAM_S;
+        }
+
+        private void UpdateTeamCache(string steamid, int teamId) {
+            steamidToTeamCache[steamid] = teamId;
+        }
+
+        private void InvalidateTeamCache() {
+            steamidToTeamCache.Clear();
         }
 
         public bool TryGetLiveSkillBySteam(ulong steamId64, out double skill, out int rounds) {
@@ -718,6 +741,7 @@ namespace OSBase.Modules {
             playerList.Clear();
             matchPlayerStats.Clear();
             userIdToSteam.Clear();
+            InvalidateTeamCache();
             teamList.Clear();
 
             teamList[TEAM_S] = new TeamStats();
@@ -755,6 +779,8 @@ namespace OSBase.Modules {
         }
 
         private void RefreshTeamsSnapshot(bool rebuildPlayers = false) {
+            InvalidateTeamCache();
+            
             if (!teamList.ContainsKey(TEAM_T)) {
                 teamList[TEAM_T] = new TeamStats();
             }
