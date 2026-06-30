@@ -602,6 +602,7 @@ namespace OSBase.Modules {
         }
 
         private void TryRefresh90dCacheAllPlayers() {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var cutoff = DateTime.UtcNow.AddDays(-90);
 
             const string sql = @"
@@ -613,88 +614,27 @@ namespace OSBase.Modules {
             var newCache = new Dictionary<string, float>(StringComparer.Ordinal);
 
             try {
-                var queryMethod =
-                    db.GetType().GetMethod("query", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) ??
-                    db.GetType().GetMethod("select", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) ??
-                    db.GetType().GetMethod("read", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                // Direct DB call (no reflection) - optimization
+                var dt = db.select(sql, new MySqlParameter("@cutoff", cutoff));
 
-                if (queryMethod == null) {
-                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] - No SELECT-capable method on Database; skipping 90d refresh.");
+                if (dt == null || dt.Rows.Count == 0) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - 90d cache: no skill data from DB (empty result). Time: {sw.ElapsedMilliseconds}ms");
                     return;
                 }
 
-                object? result = queryMethod.GetParameters().Length switch {
-                    2 => queryMethod.Invoke(db, new object[] { sql, new MySqlParameter[] { new("@cutoff", cutoff) } }),
-                    1 => queryMethod.Invoke(db, new object[] { sql }),
-                    _ => null
-                };
-
-                if (result == null) {
-                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] - DB query returned null; keeping previous 90d cache.");
-                    return;
-                }
-
-                if (result is DataTable dt) {
-                    foreach (DataRow row in dt.Rows) {
-                        string sid = row["steamid"]?.ToString() ?? "";
-                        if (sid.Length == 0) {
-                            continue;
-                        }
-
-                        float avg = 0f;
-                        if (row["avg_skill"] != DBNull.Value) {
-                            avg = Convert.ToSingle(row["avg_skill"]);
-                        }
-
-                        newCache[sid] = avg;
+                // Direct DataTable parsing (no fallbacks)
+                foreach (DataRow row in dt.Rows) {
+                    string sid = row["steamid"]?.ToString() ?? "";
+                    if (sid.Length == 0) {
+                        continue;
                     }
-                } else if (result is System.Collections.IEnumerable enumerable) {
-                    foreach (var row in enumerable) {
-                        if (row == null) {
-                            continue;
-                        }
 
-                        string sid = "";
-                        object? avgObj = null;
-
-                        if (row is System.Collections.IDictionary dict) {
-                            if (dict.Contains("steamid")) {
-                                sid = dict["steamid"]?.ToString() ?? "";
-                            }
-
-                            if (dict.Contains("avg_skill")) {
-                                avgObj = dict["avg_skill"];
-                            }
-                        } else if (row is IDataRecord rec) {
-                            try {
-                                int iSid = rec.GetOrdinal("steamid");
-                                int iAvg = rec.GetOrdinal("avg_skill");
-                                sid = rec.GetString(iSid);
-                                avgObj = rec.IsDBNull(iAvg) ? null : rec.GetValue(iAvg);
-                            } catch {
-                            }
-                        } else {
-                            var t = row.GetType();
-                            var pSid = t.GetProperty("steamid");
-                            var pAvg = t.GetProperty("avg_skill") ?? t.GetProperty("avgSkill");
-                            sid = pSid?.GetValue(row)?.ToString() ?? "";
-                            avgObj = pAvg?.GetValue(row);
-                        }
-
-                        if (sid.Length == 0) {
-                            continue;
-                        }
-
-                        float avg = 0f;
-                        if (avgObj != null && avgObj != DBNull.Value) {
-                            avg = Convert.ToSingle(avgObj);
-                        }
-
-                        newCache[sid] = avg;
+                    float avg = 0f;
+                    if (row["avg_skill"] != DBNull.Value) {
+                        avg = Convert.ToSingle(row["avg_skill"]);
                     }
-                } else {
-                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] - Unhandled DB result type {result.GetType().Name}; keeping previous 90d cache.");
-                    return;
+
+                    newCache[sid] = avg;
                 }
 
                 avg90Cache.Clear();
@@ -702,9 +642,11 @@ namespace OSBase.Modules {
                     avg90Cache[kv.Key] = kv.Value;
                 }
 
-                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - 90d cache refreshed: {avg90Cache.Count} players.");
+                sw.Stop();
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - 90d cache refreshed: {avg90Cache.Count} players loaded in {sw.ElapsedMilliseconds}ms");
             } catch (Exception e) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - 90d refresh failed: {e.Message}. Keeping previous cache.");
+                sw.Stop();
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - 90d refresh failed ({sw.ElapsedMilliseconds}ms): {e.Message}. Keeping previous cache.");
             }
         }
 
