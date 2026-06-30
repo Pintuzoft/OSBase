@@ -208,7 +208,7 @@ namespace OSBase.Modules {
             teamList[TEAM_CT].resetPlayers();
             teamList[TEAM_S].resetPlayers();
 
-            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - Saved ({reason}/{mode}): inserted={inserted}, minRounds={MIN_ROUNDS_TO_SAVE}. Stats cleared.");
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Saved ({reason}/{mode}): inserted={inserted}, minRounds={MIN_ROUNDS_TO_SAVE}. Match data & caches cleared (memory cleanup).");
         }
 
         private HookResult OnWarmupEnd(EventWarmupEnd ev, GameEventInfo info) {
@@ -588,9 +588,10 @@ namespace OSBase.Modules {
                 WHERE datestr >= @cutoff
                 GROUP BY steamid";
 
-            var newCache = new Dictionary<string, float>(StringComparer.Ordinal);
-
             try {
+                // Clear existing cache for reuse (avoid allocation)
+                avg90Cache.Clear();
+
                 // Reflection lookup - SLOW (this is what we optimized away in v0.0.504)
                 var swReflection = System.Diagnostics.Stopwatch.StartNew();
                 var queryMethod =
@@ -633,7 +634,7 @@ namespace OSBase.Modules {
                             avg = Convert.ToSingle(row["avg_skill"]);
                         }
 
-                        newCache[sid] = avg;
+                        avg90Cache[sid] = avg;
                     }
                 } else if (result is System.Collections.IEnumerable enumerable) {
                     foreach (var row in enumerable) {
@@ -677,7 +678,7 @@ namespace OSBase.Modules {
                             avg = Convert.ToSingle(avgObj);
                         }
 
-                        newCache[sid] = avg;
+                        avg90Cache[sid] = avg;
                     }
                 } else {
                     Console.WriteLine($"[WARN] OSBase[{ModuleName}] - Unhandled DB result type {result.GetType().Name}; keeping previous 90d cache.");
@@ -685,11 +686,6 @@ namespace OSBase.Modules {
                 }
 
                 swParse.Stop();
-
-                avg90Cache.Clear();
-                foreach (var kv in newCache) {
-                    avg90Cache[kv.Key] = kv.Value;
-                }
 
                 sw.Stop();
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - 90d cache REFLECTION (v0.0.502): {avg90Cache.Count} players | Reflection={swReflection.ElapsedMilliseconds}ms Invoke={swInvoke.ElapsedMilliseconds}ms Parse={swParse.ElapsedMilliseconds}ms | TOTAL={sw.ElapsedMilliseconds}ms");
