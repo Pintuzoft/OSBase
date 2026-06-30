@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using CounterStrikeSharp.API;
+using OSBase.Helpers;
 
 namespace OSBase.Modules;
 
 public class Config {
     public string ModuleName => "config";
+    private readonly CommandValidator commandValidator = new();
 
     private readonly OSBase osbase;
     private readonly string configDirectory;
@@ -125,6 +127,10 @@ public class Config {
             return;
         }
 
+        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Loading commands from {fileName}...");
+        int executed = 0;
+        int blocked = 0;
+
         foreach (var rawLine in File.ReadLines(filePath)) {
             var line = rawLine.Trim();
 
@@ -132,9 +138,19 @@ public class Config {
                 continue;
             }
 
-            Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Executing command from {fileName}: {line}");
-            Server.ExecuteCommand(line);
+            // Validate and execute with security checks
+            bool success = commandValidator.ExecuteSafeCommand(line, (cmd) => {
+                Server.ExecuteCommand(cmd);
+            });
+
+            if (success) {
+                executed++;
+            } else {
+                blocked++;
+            }
         }
+
+        Console.WriteLine($"[INFO] OSBase[{ModuleName}]: Executed {executed} commands from {fileName}, blocked {blocked} unsafe commands");
     }
 
     public List<string> FetchCustomConfig(string fileName) {
