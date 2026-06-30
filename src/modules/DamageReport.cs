@@ -132,13 +132,12 @@ public class DamageReport : IModule {
                 attacker = ENVIRONMENT;
             }
 
-            // Save nicknames immediately when damage is registered
-            // This ensures names are captured even if player disconnects later
-            if (attacker != ENVIRONMENT && e.Attacker != null && !string.IsNullOrEmpty(e.Attacker.PlayerName)) {
-                playerNames[attacker] = e.Attacker.PlayerName;
+            // Ensure nicknames are cached (simple O(1) lookup, no copies)
+            if (attacker != ENVIRONMENT && !playerNames.ContainsKey(attacker)) {
+                playerNames[attacker] = e.Attacker?.PlayerName ?? "Unknown";
             }
-            if (!string.IsNullOrEmpty(e.Userid.PlayerName)) {
-                playerNames[victim] = e.Userid.PlayerName;
+            if (!playerNames.ContainsKey(victim)) {
+                playerNames[victim] = e.Userid?.PlayerName ?? "Unknown";
             }
 
             int damage = e.DmgHealth;
@@ -181,12 +180,12 @@ public class DamageReport : IModule {
         int victimId = e.Userid?.UserId ?? -1;
         int attackerId = e.Attacker?.UserId ?? -1;
 
-        // Save nicknames from death event (backup capture)
-        if (e.Userid != null && !string.IsNullOrEmpty(e.Userid.PlayerName) && victimId >= 0) {
-            playerNames[victimId] = e.Userid.PlayerName;
+        // Ensure nicknames are cached (simple O(1) lookup, no copies needed)
+        if (e.Userid != null && victimId >= 0 && !playerNames.ContainsKey(victimId)) {
+            playerNames[victimId] = e.Userid.PlayerName ?? "Unknown";
         }
-        if (e.Attacker != null && !string.IsNullOrEmpty(e.Attacker.PlayerName) && attackerId >= 0) {
-            playerNames[attackerId] = e.Attacker.PlayerName;
+        if (e.Attacker != null && attackerId >= 0 && !playerNames.ContainsKey(attackerId)) {
+            playerNames[attackerId] = e.Attacker.PlayerName ?? "Unknown";
         }
 
         if (attackerId >= 0 && victimId >= 0) {
