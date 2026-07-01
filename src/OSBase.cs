@@ -13,7 +13,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.521";
+    public override string ModuleVersion => "0.0.522";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for managing CS2 servers";
 

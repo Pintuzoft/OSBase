@@ -311,10 +311,6 @@ namespace OSBase.Modules {
 
             SyncTeams(gs);
 
-            if (SkipBalanceDueToTooFewHumans("round1_sizefix")) {
-                return;
-            }
-
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
 
@@ -343,10 +339,6 @@ namespace OSBase.Modules {
             if (gs == null) return;
 
             SyncTeams(gs);
-
-            if (SkipBalanceDueToTooFewHumans("warmup_final")) {
-                return;
-            }
 
             if (warmupBalancedThisMap) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupFinalBalance skipped: already ran.");
@@ -384,6 +376,16 @@ namespace OSBase.Modules {
                 total = tCount + cCount;
 
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupFinalBalance after size-fix: T={tCount} CT={cCount}");
+            }
+
+            // With exactly 2 humans, split them across teams and let it settle this round.
+            if (EnsureHumansSplit(gs)) {
+                return;
+            }
+
+            // Skill swaps below need 2+ humans.
+            if (SkipBalanceDueToTooFewHumans("warmup_final_skill")) {
+                return;
             }
 
             if (total < 4) {
@@ -446,10 +448,6 @@ namespace OSBase.Modules {
 
             SyncTeams(gs);
 
-            if (SkipBalanceDueToTooFewHumans("roundend_live")) {
-                return;
-            }
-
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
 
@@ -469,6 +467,16 @@ namespace OSBase.Modules {
                 tCount = tStats.numPlayers();
                 cCount = cStats.numPlayers();
                 total = tCount + cCount;
+            }
+
+            // With exactly 2 humans, split them across teams and let it settle this round.
+            if (EnsureHumansSplit(gs)) {
+                return;
+            }
+
+            // Skill swaps below need 2+ humans.
+            if (SkipBalanceDueToTooFewHumans("roundend_skill")) {
+                return;
             }
 
             if (total < 4) {
@@ -773,6 +781,35 @@ namespace OSBase.Modules {
                 tStats = gs.getTeam(TEAM_T);
                 cStats = gs.getTeam(TEAM_CT);
             }
+        }
+
+        // With exactly 2 humans on the same team, swap one with a bot on the other team so
+        // each team has one human (keeps sizes intact). Returns true if it moved anyone.
+        private bool EnsureHumansSplit(GameStats gs) {
+            var humans = Utilities.GetPlayers()
+                .Where(p => IsHumanPlayer(p) && IsPlayingTeam(p))
+                .ToList();
+
+            if (humans.Count != 2 || humans[0].TeamNum != humans[1].TeamNum) {
+                return false;
+            }
+
+            int fromTeam = humans[0].TeamNum;
+            int toTeam = fromTeam == TEAM_T ? TEAM_CT : TEAM_T;
+
+            var bot = Utilities.GetPlayers().FirstOrDefault(p =>
+                p != null && p.IsValid && p.IsBot && !p.IsHLTV && p.TeamNum == toTeam);
+            if (bot == null) {
+                return false;
+            }
+
+            var human = humans[1];
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] Human split: {human.PlayerName} {TeamName(fromTeam)} <-> bot {bot.PlayerName} {TeamName(toTeam)}");
+            MoveWithImmunity(gs, human, toTeam, announce: true, reason: "human_split");
+            RawMove(gs, bot, fromTeam, announce: false, reason: "human_split");
+
+            SyncTeams(gs);
+            return true;
         }
 
         private bool FindBestSwapPairWithGain_Warmup(GameStats gs, TeamStats tStats, TeamStats cStats, out int uA, out int uB, out float bestGain) {
