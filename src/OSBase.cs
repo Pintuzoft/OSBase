@@ -13,7 +13,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.520";
+    public override string ModuleVersion => "0.0.521";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for managing CS2 servers";
 
@@ -33,11 +33,13 @@ public class OSBase : BasePlugin {
         currentMap = Server.MapName ?? string.Empty;
 
         config = new Config(this);
-        gameStats = new GameStats(this, config);
-        
-        // Initialize EventBus handler
+
+        // EventBus handler must exist before anything subscribes — GameStats subscribes
+        // in its constructor, so this has to come first or its handlers are silently dropped.
         eventBusHandler = new EventBusHandler(this);
         eventBusHandler.RegisterAllDispatchers();
+
+        gameStats = new GameStats(this, config);
 
         DiscoverModules();
         ReloadAllConfigsAndModules();
