@@ -800,12 +800,19 @@ namespace OSBase.Modules {
             }
 
             foreach (var p in players) {
-                var ps = GetOrCreateStatsFromController(p);
-                if (ps == null || !p!.UserId.HasValue) {
+                if (!p!.UserId.HasValue) {
                     continue;
                 }
 
                 int uid = p.UserId.Value;
+
+                // Bots (SteamID 0) get transient stats so they count for team sizing and can be
+                // moved by TeamBalancer, without ever landing in matchPlayerStats/skill_log.
+                var ps = GetOrCreateStatsFromController(p);
+                if (ps == null) {
+                    ps = new PlayerStats { steamid = "0", name = p.PlayerName ?? "BOT" };
+                    playerList[uid] = ps;
+                }
 
                 switch ((int)p.TeamNum) {
                     case TEAM_T:
