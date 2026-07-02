@@ -23,6 +23,33 @@ public class ServerInfo : ModuleBase {
 
     private Timer? pendingPruneTimer;
 
+    // During a map change, players briefly disconnect and reconnect. We open a grace
+    // window (in OnMapEnd, before the disconnect churn, extended in OnMapStart) during
+    // which we neither delete rows on disconnect nor prune. This lets players "survive"
+    // the map change so their connected_at keeps ticking instead of resetting.
+    private const int MapChangeGraceSeconds = 30;
+    private long mapChangeGraceUntil = 0;
+
+    // True between round start and round end. A player who disconnects mid-round is kept
+    // in the list until round end, when OnRoundEnd runs the reconcile prune.
+    private bool inRound = false;
+
+    // Remembers each human's original connect time per SteamID. A session is dropped on a
+    // genuine disconnect (see OnPlayerDisconnect), but a map-change carry-over keeps it, so a
+    // player who leaves only to load/download the new map resumes the same session instead of
+    // getting a fresh connected_at. This window bounds how long we wait for such a return
+    // (generous enough for a slow workshop download) before giving up and freeing the entry.
+    // The row itself is still pruned while they're gone; this only restores continuity.
+    private const int ReconnectMemorySeconds = 1800;
+
+    // Rows untouched for this long are treated as crash ghosts (no clean shutdown pruned them)
+    // and swept regardless of which server is online. Must exceed the normal upsert cadence.
+    private const int StaleRowMaxAgeSeconds = 1800;
+    private readonly Dictionary<ulong, (long connectedAt, long lastSeen)> sessions = new();
+
+    private static long NowUnix() => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    private bool InMapChangeGrace => NowUnix() < mapChangeGraceUntil;
+
     protected override void OnLoad() {
         CreateCustomConfigs();
         LoadConfig();
@@ -42,6 +69,10 @@ public class ServerInfo : ModuleBase {
 
         db?.FlushPendingWrites(1500);
         db = null;
+
+        sessions.Clear();
+        inRound = false;
+        mapChangeGraceUntil = 0;
 
         port = 0;
         host = string.Empty;
@@ -69,6 +100,7 @@ public class ServerInfo : ModuleBase {
         osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
         osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
     }
 
     protected override void UnregisterHandlers() {
@@ -79,6 +111,7 @@ public class ServerInfo : ModuleBase {
         osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
         osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
     }
 
     private void CreateCustomConfigs() {
@@ -203,7 +236,23 @@ public class ServerInfo : ModuleBase {
         }
 
         var player = eventInfo?.Userid;
-        if (player != null) {
+
+        // A disconnect during the map-change grace is a carry-over: the map is changing and
+        // the player is only stepping out to load/download it. Everyone present at a map
+        // change lands here, so we keep their session and their connect time is restored
+        // whenever they return (even after a long workshop download). Any disconnect OUTSIDE
+        // the grace is a genuine leave, so we forget the session and a later reconnect starts
+        // fresh times.
+        if (!InMapChangeGrace && player != null && !player.IsBot && player.SteamID != 0) {
+            sessions.Remove(player.SteamID);
+        }
+
+        // Don't remove the row the instant they drop:
+        //  - during a map change they're only transitioning and will reconnect;
+        //  - mid-round we keep them listed until round end.
+        // In both cases the reconcile prune (after grace / at round end) removes anyone who
+        // genuinely left. Between rounds we delete right away as before.
+        if (!InMapChangeGrace && !inRound && player != null) {
             string playerName = player.PlayerName ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(playerName)) {
                 DeleteUserRow(playerName);
@@ -236,6 +285,8 @@ public class ServerInfo : ModuleBase {
             return HookResult.Continue;
         }
 
+        inRound = true;
+
         // Keep writes queued during live round to avoid DB drain on critical ticks.
         db?.SetAutoDrain(false);
         return HookResult.Continue;
@@ -246,7 +297,10 @@ public class ServerInfo : ModuleBase {
             return HookResult.Continue;
         }
 
-        // Round-end is our safe window for draining queued writes.
+        inRound = false;
+
+        // Round-end is our safe window for draining queued writes, and the point where we
+        // reconcile players who disconnected during the round out of the list.
         db?.SetAutoDrain(true);
 
         foreach (var player in Utilities.GetPlayers()) {
@@ -262,10 +316,26 @@ public class ServerInfo : ModuleBase {
         return HookResult.Continue;
     }
 
+    // Opens the grace window before the map-change disconnect churn so those disconnects
+    // (which can fire before OnMapStart) don't delete rows and reset connected_at.
+    private void OnMapEnd() {
+        if (!isActive) {
+            return;
+        }
+
+        mapChangeGraceUntil = NowUnix() + MapChangeGraceSeconds;
+    }
+
     private void OnMapStart(string mapName) {
         if (!isActive) {
             return;
         }
+
+        // Extend the grace window to cover reconnects settling on the new map.
+        mapChangeGraceUntil = NowUnix() + MapChangeGraceSeconds;
+
+        // No live round on a fresh map; clear the flag so a missed round-end can't stall pruning.
+        inRound = false;
 
         db?.SetAutoDrain(true);
 
@@ -280,13 +350,30 @@ public class ServerInfo : ModuleBase {
             UpsertUserRow(player!);
         }
 
-        SchedulePruneUsers(0.2f);
+        // SchedulePruneUsers is grace-aware and defers itself until after the window,
+        // by which time carried-over players have reconnected and appear online.
+        SchedulePruneUsers();
         db?.FlushPendingWrites(1000);
     }
 
     private void SchedulePruneUsers(float delay = 0.5f) {
         if (!isActive || osbase == null) {
             return;
+        }
+
+        // Hold off pruning during a live round; OnRoundEnd runs the reconcile prune once the
+        // round is over, so a mid-round disconnect stays listed until then.
+        if (inRound) {
+            return;
+        }
+
+        // While a map change is in flight, defer pruning until the grace window closes so
+        // players mid-reconnect aren't wrongly removed.
+        if (InMapChangeGrace) {
+            float graceDelay = (mapChangeGraceUntil - NowUnix()) + 1f;
+            if (graceDelay > delay) {
+                delay = graceDelay;
+            }
         }
 
         pendingPruneTimer?.Kill();
@@ -338,6 +425,25 @@ public class ServerInfo : ModuleBase {
                 }
             }
 
+            // Safety net for crash ghosts: rows no one has touched in a long time belong to a
+            // server that died without a clean shutdown (so its live reconcile never ran). Swept
+            // by whichever server is online, across all rows sharing this DB. last_seen>0 guards
+            // against any legacy/unbackfilled row being wrongly aged out.
+            db.delete(
+                "FROM serverinfo_user WHERE last_seen > 0 AND UNIX_TIMESTAMP() - last_seen > @maxAge",
+                new MySqlParameter("@maxAge", StaleRowMaxAgeSeconds)
+            );
+
+            // Drop session memory for players gone longer than the reconnect window; they'll
+            // start a fresh session if they ever return.
+            long nowUnix = NowUnix();
+            var expired = sessions.Where(kv => nowUnix - kv.Value.lastSeen > ReconnectMemorySeconds)
+                                  .Select(kv => kv.Key)
+                                  .ToList();
+            foreach (var steamid in expired) {
+                sessions.Remove(steamid);
+            }
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] stale prune complete.");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error pruning stale users: {e.Message}");
@@ -367,10 +473,13 @@ public class ServerInfo : ModuleBase {
             host varchar(64) not null,
             port int(11) not null,
             name varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+            steamid varchar(32) default null,
             team int(11),
             kills int(11),
             assists int(11),
             deaths int(11),
+            connected_at int(11) default 0,
+            last_seen int(11) default 0,
             primary key (host, port, name),
             constraint serverinfo_user_fk_server
                 foreign key (host, port)
@@ -383,15 +492,34 @@ public class ServerInfo : ModuleBase {
             db.create(serverTable);
             db.create(userTable);
             EnsureColumn("serverinfo_server", "workshop_collection", "varchar(32) default null");
+            EnsureColumn("serverinfo_user", "steamid", "varchar(32) default null");
+            bool connectedAtAdded = EnsureColumn("serverinfo_user", "connected_at", "int(11) default 0");
+            bool lastSeenAdded = EnsureColumn("serverinfo_user", "last_seen", "int(11) default 0");
+
+            if (connectedAtAdded) {
+                // Backfill legacy rows with the DB's own clock so pre-existing players don't
+                // read as "connected since 1970" until their next reconnect.
+                int backfilled = db.update(
+                    "serverinfo_user SET connected_at = UNIX_TIMESTAMP() WHERE connected_at = 0 OR connected_at IS NULL");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Backfilled connected_at for {backfilled} legacy row(s).");
+            }
+
+            if (lastSeenAdded) {
+                // Same for last_seen so legacy rows aren't instantly treated as stale ghosts.
+                int backfilled = db.update(
+                    "serverinfo_user SET last_seen = UNIX_TIMESTAMP() WHERE last_seen = 0 OR last_seen IS NULL");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Backfilled last_seen for {backfilled} legacy row(s).");
+            }
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error creating tables: {e.Message}");
         }
     }
 
     // Adds a column to an existing table if it's missing (migration for pre-existing installs).
-    private void EnsureColumn(string table, string column, string definition) {
+    // Returns true if the column was just added, so callers can run one-time backfills.
+    private bool EnsureColumn(string table, string column, string definition) {
         if (db == null) {
-            return;
+            return false;
         }
 
         try {
@@ -405,10 +533,13 @@ public class ServerInfo : ModuleBase {
             if (existing.Rows.Count == 0) {
                 db.alter($"TABLE {table} ADD COLUMN {column} {definition}");
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Added missing column {table}.{column}.");
+                return true;
             }
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error ensuring column {table}.{column}: {e.Message}");
         }
+
+        return false;
     }
 
     private void SaveServerInfo() {
@@ -479,20 +610,32 @@ public class ServerInfo : ModuleBase {
         }
 
         int team = teamOverride ?? player.TeamNum;
+        string steamId = player.SteamID.ToString();
+        long now = NowUnix();
+        long connectedAt = ResolveConnectedAt(player, now);
 
+        // connected_at comes from the session memory (the player's original join time,
+        // restored across reconnects) and is deliberately left out of the UPDATE clause so a
+        // still-present row keeps whatever it already stored - important if the session memory
+        // was lost to a plugin reload. Readers derive elapsed time live as NOW() - connected_at.
+        // last_seen is refreshed on every upsert so a stale row (e.g. after a server crash)
+        // can be detected/pruned by age.
         string query =
-            "INTO serverinfo_user (host, port, name, team, kills, assists, deaths) " +
-            "VALUES (@host, @port, @name, @team, @kills, @assists, @deaths) " +
-            "ON DUPLICATE KEY UPDATE team=@team, kills=@kills, assists=@assists, deaths=@deaths, name=@name";
+            "INTO serverinfo_user (host, port, name, steamid, team, kills, assists, deaths, connected_at, last_seen) " +
+            "VALUES (@host, @port, @name, @steamid, @team, @kills, @assists, @deaths, @connectedAt, @now) " +
+            "ON DUPLICATE KEY UPDATE steamid=@steamid, team=@team, kills=@kills, assists=@assists, deaths=@deaths, name=@name, last_seen=@now";
 
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
             new MySqlParameter("@name", playerName),
+            new MySqlParameter("@steamid", steamId),
             new MySqlParameter("@team", team),
             new MySqlParameter("@kills", kills),
             new MySqlParameter("@assists", assists),
-            new MySqlParameter("@deaths", deaths)
+            new MySqlParameter("@deaths", deaths),
+            new MySqlParameter("@connectedAt", connectedAt),
+            new MySqlParameter("@now", now)
         };
 
         try {
@@ -500,6 +643,29 @@ public class ServerInfo : ModuleBase {
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error upserting user row: {e.Message}");
         }
+    }
+
+    // Returns the player's session start time. Reuses the remembered value when they
+    // reconnect within ReconnectMemorySeconds (e.g. after a workshop map download), otherwise
+    // starts a fresh session. Bots are transient and all share SteamID 0, so they never use
+    // the memory.
+    private long ResolveConnectedAt(CCSPlayerController player, long now) {
+        if (player.IsBot) {
+            return now;
+        }
+
+        ulong steamid = player.SteamID;
+        if (steamid == 0) {
+            return now;
+        }
+
+        if (sessions.TryGetValue(steamid, out var s) && (now - s.lastSeen) <= ReconnectMemorySeconds) {
+            sessions[steamid] = (s.connectedAt, now);
+            return s.connectedAt;
+        }
+
+        sessions[steamid] = (now, now);
+        return now;
     }
 
     private static bool IsTrackablePlayer(CCSPlayerController? player) {
