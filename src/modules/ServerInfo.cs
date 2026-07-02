@@ -54,8 +54,8 @@ public class ServerInfo : ModuleBase {
     // The row itself is still pruned while they're gone; this only restores continuity.
     private const int ReconnectMemorySeconds = 1800;
 
-    // Rows untouched for this long are treated as crash ghosts (no clean shutdown pruned them)
-    // and swept regardless of which server is online. Must exceed the normal upsert cadence.
+    // Rows on our own server untouched for this long are treated as stale and swept as a fallback.
+    // Must exceed the normal upsert/heartbeat cadence so live rows are never aged out.
     private const int StaleRowMaxAgeSeconds = 1800;
     private readonly Dictionary<ulong, (long connectedAt, long lastSeen)> sessions = new();
 
@@ -449,12 +449,14 @@ public class ServerInfo : ModuleBase {
                 }
             }
 
-            // Safety net for crash ghosts: rows no one has touched in a long time belong to a
-            // server that died without a clean shutdown (so its live reconcile never ran). Swept
-            // by whichever server is online, across all rows sharing this DB. last_seen>0 guards
-            // against any legacy/unbackfilled row being wrongly aged out.
+            // Safety net for stale rows on THIS server (e.g. if our own writes stalled). Scoped to
+            // our own host/port so we never delete another server's rows just because it isn't
+            // running this plugin - each server manages its own list. last_seen>0 guards against
+            // any legacy/unbackfilled row being wrongly aged out.
             db.delete(
-                "FROM serverinfo_user WHERE last_seen > 0 AND UNIX_TIMESTAMP() - last_seen > @maxAge",
+                "FROM serverinfo_user WHERE host=@host AND port=@port AND last_seen > 0 AND UNIX_TIMESTAMP() - last_seen > @maxAge",
+                new MySqlParameter("@host", host),
+                new MySqlParameter("@port", port),
                 new MySqlParameter("@maxAge", StaleRowMaxAgeSeconds)
             );
 
