@@ -634,7 +634,14 @@ public class ServerInfo : ModuleBase {
             return;
         }
 
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] - idle heartbeat fired (refreshing server + players).");
+
         // Nothing has refreshed us for a full round's worth of time, so the server is idle/stuck.
+        // A stray round_start (e.g. warmup) may have left auto-drain off with no round_end to turn
+        // it back on, which would leave our writes queued forever. Reaching here means there's no
+        // live round to protect, so force draining on and flush at the end so the heartbeat lands.
+        db.SetAutoDrain(true);
+
         // Refresh the server heartbeat and every connected player (incl. bots, which double as an
         // at-a-glance "is this server alive" signal) so the list stays fresh and isn't age-pruned,
         // then re-arm to keep watching while idle.
@@ -648,6 +655,7 @@ public class ServerInfo : ModuleBase {
             UpsertUserRow(player!);
         }
 
+        db.FlushPendingWrites(1000);
         SchedulePruneUsers();
         ScheduleHeartbeat();
     }
