@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
@@ -18,6 +19,7 @@ public class ServerInfo : ModuleBase {
     private string host = string.Empty;
     private string name = string.Empty;
     private string map = string.Empty;
+    private string workshopCollection = string.Empty;
 
     private Timer? pendingPruneTimer;
 
@@ -85,7 +87,10 @@ public class ServerInfo : ModuleBase {
             "// ServerInfo Configuration\n" +
             "name \"Server Name\"\n" +
             "host \"cs2.oldswedes.se\"\n" +
-            "port 27015\n"
+            "port 27015\n" +
+            "// Steam Workshop collection ID this server rotates (leave empty for standard/official maps).\n" +
+            "// If empty, it is auto-detected from the +host_workshop_collection launch argument.\n" +
+            "workshop_collection \"\"\n"
         );
     }
 
@@ -93,6 +98,7 @@ public class ServerInfo : ModuleBase {
         name = string.Empty;
         host = string.Empty;
         port = 0;
+        workshopCollection = string.Empty;
 
         List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
@@ -128,13 +134,39 @@ public class ServerInfo : ModuleBase {
                     }
                     break;
 
+                case "workshop_collection":
+                    workshopCollection = value;
+                    break;
+
                 default:
                     Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Unknown config key {key}:{value}");
                     break;
             }
         }
 
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Config loaded. name={name}, host={host}, port={port}");
+        if (string.IsNullOrWhiteSpace(workshopCollection)) {
+            workshopCollection = DetectWorkshopCollectionFromLaunchArgs();
+        }
+
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: Config loaded. name={name}, host={host}, port={port}, workshop_collection={workshopCollection}");
+    }
+
+    // Best-effort read of "+host_workshop_collection <id>" from the server launch arguments.
+    // Config takes priority; this only runs when the config value is empty.
+    private static string DetectWorkshopCollectionFromLaunchArgs() {
+        string[] args = Environment.GetCommandLineArgs();
+
+        for (int i = 0; i < args.Length - 1; i++) {
+            string token = args[i].TrimStart('+', '-');
+            if (string.Equals(token, "host_workshop_collection", StringComparison.OrdinalIgnoreCase)) {
+                string candidate = args[i + 1].Trim();
+                if (candidate.Length > 0 && candidate.All(char.IsDigit)) {
+                    return candidate;
+                }
+            }
+        }
+
+        return string.Empty;
     }
 
     private static string Unquote(string value) {
@@ -324,6 +356,7 @@ public class ServerInfo : ModuleBase {
             host varchar(64),
             name varchar(64),
             map varchar(64),
+            workshop_collection varchar(32) default null,
             timestamp int(11) default 0,
             primary key (host, port)
         ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
@@ -349,8 +382,32 @@ public class ServerInfo : ModuleBase {
         try {
             db.create(serverTable);
             db.create(userTable);
+            EnsureColumn("serverinfo_server", "workshop_collection", "varchar(32) default null");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error creating tables: {e.Message}");
+        }
+    }
+
+    // Adds a column to an existing table if it's missing (migration for pre-existing installs).
+    private void EnsureColumn(string table, string column, string definition) {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            DataTable existing = db.select(
+                "column_name FROM information_schema.columns " +
+                "WHERE table_schema = DATABASE() AND table_name = @table AND column_name = @column",
+                new MySqlParameter("@table", table),
+                new MySqlParameter("@column", column)
+            );
+
+            if (existing.Rows.Count == 0) {
+                db.alter($"TABLE {table} ADD COLUMN {column} {definition}");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Added missing column {table}.{column}.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error ensuring column {table}.{column}: {e.Message}");
         }
     }
 
@@ -361,15 +418,17 @@ public class ServerInfo : ModuleBase {
         }
 
         string query =
-            "INTO serverinfo_server (host, port, name, map) " +
-            "VALUES (@host, @port, @name, @map) " +
-            "ON DUPLICATE KEY UPDATE name=@name, map=@map";
+            "INTO serverinfo_server (host, port, name, map, workshop_collection) " +
+            "VALUES (@host, @port, @name, @map, @workshop_collection) " +
+            "ON DUPLICATE KEY UPDATE name=@name, map=@map, workshop_collection=@workshop_collection";
 
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
             new MySqlParameter("@port", port),
             new MySqlParameter("@name", name),
-            new MySqlParameter("@map", map)
+            new MySqlParameter("@map", map),
+            new MySqlParameter("@workshop_collection",
+                string.IsNullOrWhiteSpace(workshopCollection) ? (object)DBNull.Value : workshopCollection)
         };
 
         try {

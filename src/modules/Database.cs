@@ -109,6 +109,9 @@ public class Database {
     public int create ( string query, params MySqlParameter[] parameters ) {
         return exeChange(NormalizeVerb(query, "CREATE"), parameters);
     }
+    public int alter ( string query, params MySqlParameter[] parameters ) {
+        return exeChange(NormalizeVerb(query, "ALTER"), parameters);
+    }
     public int insert ( string query, params MySqlParameter[] parameters ) {
         return exeChange(NormalizeVerb(query, "INSERT"), parameters);
     }
