@@ -21,7 +21,19 @@ public class ServerInfo : ModuleBase {
     private string map = string.Empty;
     private string workshopCollection = string.Empty;
 
+    // Set once when the plugin loads (~server start). Written on every SaveServerInfo so the
+    // row reflects THIS run's start; uptime is derived by readers as now - started_at.
+    private long serverStartedAt = 0;
+
     private Timer? pendingPruneTimer;
+    private Timer? heartbeatTimer;
+
+    // Debounced idle-heartbeat interval. The timer is reset (killed + rescheduled) on every
+    // round-end and map start, so during live play it never fires. It only fires when the server
+    // has been quiet longer than a full round could last (~1:45 round + freeze) - i.e. idle or
+    // stuck, since bots don't start rounds until a human joins. Kept above the max round length so
+    // normal play never trips it.
+    private const float HeartbeatIntervalSeconds = 180f;
 
     // During a map change, players briefly disconnect and reconnect. We open a grace
     // window (in OnMapEnd, before the disconnect churn, extended in OnMapStart) during
@@ -59,13 +71,21 @@ public class ServerInfo : ModuleBase {
 
         CreateTables();
 
+        serverStartedAt = NowUnix();
         map = Server.MapName ?? osbase?.currentMap ?? string.Empty;
         SaveServerInfo();
+
+        // Arm the idle-heartbeat. Round-end/map-start keep resetting it, so it only fires when the
+        // server sits quiet (no rounds) - then it refreshes the player list and server heartbeat.
+        ScheduleHeartbeat();
     }
 
     protected override void OnUnload() {
         pendingPruneTimer?.Kill();
         pendingPruneTimer = null;
+
+        heartbeatTimer?.Kill();
+        heartbeatTimer = null;
 
         db?.FlushPendingWrites(1500);
         db = null;
@@ -73,6 +93,7 @@ public class ServerInfo : ModuleBase {
         sessions.Clear();
         inRound = false;
         mapChangeGraceUntil = 0;
+        serverStartedAt = 0;
 
         port = 0;
         host = string.Empty;
@@ -311,6 +332,8 @@ public class ServerInfo : ModuleBase {
             UpsertUserRow(player!);
         }
 
+        TouchServerHeartbeat();
+        ScheduleHeartbeat();
         SchedulePruneUsers(0.2f);
         db?.FlushPendingWrites(1000);
         return HookResult.Continue;
@@ -352,6 +375,7 @@ public class ServerInfo : ModuleBase {
 
         // SchedulePruneUsers is grace-aware and defers itself until after the window,
         // by which time carried-over players have reconnected and appear online.
+        ScheduleHeartbeat();
         SchedulePruneUsers();
         db?.FlushPendingWrites(1000);
     }
@@ -464,6 +488,8 @@ public class ServerInfo : ModuleBase {
             map varchar(64),
             workshop_collection varchar(32) default null,
             timestamp int(11) default 0,
+            started_at int(11) default 0,
+            last_seen int(11) default 0,
             primary key (host, port)
         ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
         """;
@@ -492,6 +518,8 @@ public class ServerInfo : ModuleBase {
             db.create(serverTable);
             db.create(userTable);
             EnsureColumn("serverinfo_server", "workshop_collection", "varchar(32) default null");
+            bool serverStartedAtAdded = EnsureColumn("serverinfo_server", "started_at", "int(11) default 0");
+            bool serverLastSeenAdded = EnsureColumn("serverinfo_server", "last_seen", "int(11) default 0");
             EnsureColumn("serverinfo_user", "steamid", "varchar(32) default null");
             bool connectedAtAdded = EnsureColumn("serverinfo_user", "connected_at", "int(11) default 0");
             bool lastSeenAdded = EnsureColumn("serverinfo_user", "last_seen", "int(11) default 0");
@@ -509,6 +537,20 @@ public class ServerInfo : ModuleBase {
                 int backfilled = db.update(
                     "serverinfo_user SET last_seen = UNIX_TIMESTAMP() WHERE last_seen = 0 OR last_seen IS NULL");
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Backfilled last_seen for {backfilled} legacy row(s).");
+            }
+
+            if (serverStartedAtAdded) {
+                // Give pre-existing server rows the DB clock so uptime doesn't read from 1970
+                // until the server writes its real start on next load.
+                int backfilled = db.update(
+                    "serverinfo_server SET started_at = UNIX_TIMESTAMP() WHERE started_at = 0 OR started_at IS NULL");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Backfilled server started_at for {backfilled} row(s).");
+            }
+
+            if (serverLastSeenAdded) {
+                int backfilled = db.update(
+                    "serverinfo_server SET last_seen = UNIX_TIMESTAMP() WHERE last_seen = 0 OR last_seen IS NULL");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Backfilled server last_seen for {backfilled} row(s).");
             }
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error creating tables: {e.Message}");
@@ -548,10 +590,13 @@ public class ServerInfo : ModuleBase {
             return;
         }
 
+        // started_at carries this run's start time (stable across map changes, refreshed on a
+        // plugin reload). last_seen is a heartbeat so readers can tell a live server from a dead
+        // one; it's also refreshed periodically by the heartbeat timer (TouchServerHeartbeat).
         string query =
-            "INTO serverinfo_server (host, port, name, map, workshop_collection) " +
-            "VALUES (@host, @port, @name, @map, @workshop_collection) " +
-            "ON DUPLICATE KEY UPDATE name=@name, map=@map, workshop_collection=@workshop_collection";
+            "INTO serverinfo_server (host, port, name, map, workshop_collection, started_at, last_seen) " +
+            "VALUES (@host, @port, @name, @map, @workshop_collection, @started_at, @now) " +
+            "ON DUPLICATE KEY UPDATE name=@name, map=@map, workshop_collection=@workshop_collection, started_at=@started_at, last_seen=@now";
 
         var parameters = new MySqlParameter[] {
             new MySqlParameter("@host", host),
@@ -559,13 +604,70 @@ public class ServerInfo : ModuleBase {
             new MySqlParameter("@name", name),
             new MySqlParameter("@map", map),
             new MySqlParameter("@workshop_collection",
-                string.IsNullOrWhiteSpace(workshopCollection) ? (object)DBNull.Value : workshopCollection)
+                string.IsNullOrWhiteSpace(workshopCollection) ? (object)DBNull.Value : workshopCollection),
+            new MySqlParameter("@started_at", serverStartedAt),
+            new MySqlParameter("@now", NowUnix())
         };
 
         try {
             db.insertAsync(query, parameters);
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error saving server info: {e.Message}");
+        }
+    }
+
+    // (Re)arms the debounced idle-heartbeat. Called on load and reset on every round-end / map
+    // start, so it only fires after a full quiet stretch (no rounds) - an idle or stuck server.
+    private void ScheduleHeartbeat() {
+        if (!isActive || osbase == null) {
+            return;
+        }
+
+        heartbeatTimer?.Kill();
+        heartbeatTimer = osbase.AddTimer(HeartbeatIntervalSeconds, OnHeartbeat);
+    }
+
+    private void OnHeartbeat() {
+        heartbeatTimer = null;
+
+        if (!isActive || db == null) {
+            return;
+        }
+
+        // Nothing has refreshed us for a full round's worth of time, so the server is idle/stuck.
+        // Refresh the server heartbeat and every connected player (incl. bots, which double as an
+        // at-a-glance "is this server alive" signal) so the list stays fresh and isn't age-pruned,
+        // then re-arm to keep watching while idle.
+        TouchServerHeartbeat();
+
+        foreach (var player in Utilities.GetPlayers()) {
+            if (!IsTrackablePlayer(player)) {
+                continue;
+            }
+
+            UpsertUserRow(player!);
+        }
+
+        SchedulePruneUsers();
+        ScheduleHeartbeat();
+    }
+
+    // Refreshes only the server's heartbeat (last_seen) without rewriting the whole row, so a
+    // reader can tell a running server from a crashed/stopped one by its age.
+    private void TouchServerHeartbeat() {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            db.updateAsync(
+                "serverinfo_server SET last_seen=@now WHERE host=@host AND port=@port",
+                new MySqlParameter("@now", NowUnix()),
+                new MySqlParameter("@host", host),
+                new MySqlParameter("@port", port)
+            );
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error updating server heartbeat: {e.Message}");
         }
     }
 
