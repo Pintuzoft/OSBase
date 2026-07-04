@@ -16,8 +16,9 @@ namespace OSBase.Modules;
 
 // Weekend weapon event driven by the OSWeb site: the site writes the active rules
 // (weapons + per-kill points, admins worth more) into weapon_event_rules and owns those
-// rows. The module idles while the table has no active event, and while one is live it
-// scores kills into a per-(event_id, steamid64) tally the site can read back.
+// rows. The module idles while the table has no active event; while one is live it logs
+// every scoring kill and tallies points per (event_id, steamid64). Both tables are
+// append-only history — "current weekend" is a WHERE event_id filter, never a cleanup.
 public class EventWeekend : ModuleBase {
     public override string ModuleName => "eventweekend";
 
@@ -25,12 +26,17 @@ public class EventWeekend : ModuleBase {
     private Database? db;
 
     private const string RulesTable = "weapon_event_rules";
-    private const string ScoresTable = "weapon_event_scores";
-    private const string AdminTable = "eventweekend_admin";
+    private const string KillTable = "weapon_event_kill";
+    private const string ScoreTable = "weapon_event_score";
+    private const string AdminTable = "knivhelg_admin";
     private const float RulesRefreshIntervalSeconds = 60.0f;
+
+    private const int EventTypeNormal = 0;
+    private const int EventTypeTeamKill = 1;
 
     private readonly HashSet<ulong> adminSteamIds = new();
     private readonly Dictionary<int, LiveEvent> liveEvents = new();
+    private readonly List<PendingKill> pendingKills = new();
     private readonly Dictionary<(int EventId, ulong SteamId64), PendingScore> pendingScores = new();
     private bool flushInProgress;
     private Timer? rulesTimer;
@@ -64,10 +70,20 @@ public class EventWeekend : ModuleBase {
         public Dictionary<string, (int Player, int Admin)> Weapons { get; } = new();
     }
 
+    private sealed class PendingKill {
+        public int EventId { get; init; }
+        public string AttackerName { get; init; } = "Unknown";
+        public ulong AttackerSteamId64 { get; init; }
+        public string VictimName { get; init; } = "Unknown";
+        public ulong VictimSteamId64 { get; init; }
+        public string Weapon { get; init; } = "weapon";
+        public int Points { get; init; }
+        public bool TeamKill { get; init; }
+    }
+
     private sealed class PendingScore {
         public string Name { get; set; } = "Unknown";
         public int Points { get; set; }
-        public int Kills { get; set; }
     }
 
     protected override void OnLoad() {
@@ -107,6 +123,7 @@ public class EventWeekend : ModuleBase {
         osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
         osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.AddCommand("css_ktop", "Shows the EventWeekend leaderboard", OnEventTopCommand);
         osbase?.AddCommand("css_etop", "Shows the EventWeekend leaderboard", OnEventTopCommand);
     }
 
@@ -114,6 +131,7 @@ public class EventWeekend : ModuleBase {
         osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
         osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.RemoveCommand("css_ktop", OnEventTopCommand);
         osbase?.RemoveCommand("css_etop", OnEventTopCommand);
     }
 
@@ -219,16 +237,30 @@ public class EventWeekend : ModuleBase {
         ) ENGINE=InnoDB;
         """;
 
-        string scoresTable = $"""
-        TABLE IF NOT EXISTS {ScoresTable} (
-            event_id INT NOT NULL,
-            steamid64 BIGINT UNSIGNED NOT NULL,
-            name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
-            points INT NOT NULL DEFAULT 0,
-            kills INT NOT NULL DEFAULT 0,
-            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (event_id, steamid64),
-            KEY idx_event_points (event_id, points)
+        // Kill feed and tally are append-only per-event history, read by the site.
+        // type=2 (invalidated) is reserved for the site and never written here.
+        string killTable = $"""
+        TABLE IF NOT EXISTS {KillTable} (
+            event_id     INT NOT NULL,
+            stamp        DATETIME NOT NULL,
+            attacker     VARCHAR(64) NOT NULL,
+            attackerid64 VARCHAR(32) NULL,
+            victim       VARCHAR(64) NOT NULL,
+            victimid64   VARCHAR(32) NULL,
+            weapon       VARCHAR(32) NULL,
+            points       INT NOT NULL,
+            type         TINYINT NOT NULL DEFAULT 0,
+            INDEX idx_weapon_event_kill (event_id, stamp)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
+        string scoreTable = $"""
+        TABLE IF NOT EXISTS {ScoreTable} (
+            event_id  INT NOT NULL,
+            steamid64 VARCHAR(32) NOT NULL,
+            name      VARCHAR(64) NOT NULL,
+            points    INT NOT NULL DEFAULT 0,
+            PRIMARY KEY (event_id, steamid64)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
@@ -242,7 +274,8 @@ public class EventWeekend : ModuleBase {
 
         try {
             db.create(rulesTable);
-            db.create(scoresTable);
+            db.create(killTable);
+            db.create(scoreTable);
             db.create(adminTable);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] tables ensured.");
         } catch (Exception e) {
@@ -344,7 +377,7 @@ public class EventWeekend : ModuleBase {
             Console.WriteLine($"[INFO] OSBase[{ModuleName}] event live: id={ev.EventId}, name={ev.Name}, weapons=[{string.Join(", ", ev.Weapons.Select(w => $"{w.Key}:{w.Value.Player}/{w.Value.Admin}"))}]");
             Server.PrintToChatAll(
                 $" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: " +
-                $"{ChatColors.Green}{ev.Name}{ChatColors.Default} är igång! Skriv !etop för topplistan."
+                $"{ChatColors.Green}{ev.Name}{ChatColors.Default} är igång! Skriv !ktop för topplistan."
             );
         }
 
@@ -402,9 +435,10 @@ public class EventWeekend : ModuleBase {
         bool victimIsAdmin = adminSteamIds.Contains(victimSteamId64);
         bool attackerIsAdmin = adminSteamIds.Contains(attackerSteamId64);
 
-        // One kill can score in several concurrently active events; usually there is one.
+        // A kill belongs to exactly one event; overlapping events are not the intended
+        // setup, so on a double match take the lowest event_id and warn.
         var matches = new List<(LiveEvent Event, string RuleWeapon, int Points)>();
-        foreach (var ev in liveEvents.Values) {
+        foreach (var ev in liveEvents.Values.OrderBy(ev => ev.EventId)) {
             if (MatchWeapon(ev, weapon) is (string ruleWeapon, (int player, int admin))) {
                 int rulePoints = victimIsAdmin ? admin : player;
                 if (rulePoints != 0) {
@@ -417,30 +451,41 @@ public class EventWeekend : ModuleBase {
             return HookResult.Continue;
         }
 
+        if (matches.Count > 1) {
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}] weapon {weapon} matched {matches.Count} live events ({string.Join(", ", matches.Select(m => m.Event.EventId))}); attributing to event {matches[0].Event.EventId}.");
+        }
+
         int activeHumans = CountActiveHumans();
         if (activeHumans < minimumPlayers) {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Kill ignored: only {activeHumans}/{minimumPlayers} active human players in T/CT.");
             return HookResult.Continue;
         }
 
+        var (liveEvent, matchedWeapon, points) = matches[0];
         bool teamKill = attacker.TeamNum == victim.TeamNum;
         string attackerName = CleanName(attacker.PlayerName);
         string victimName = CleanName(victim.PlayerName);
 
-        int totalPoints = 0;
-        foreach (var (ev, _, points) in matches) {
-            totalPoints += points;
+        pendingKills.Add(new PendingKill {
+            EventId = liveEvent.EventId,
+            AttackerName = attackerName,
+            AttackerSteamId64 = attackerSteamId64,
+            VictimName = victimName,
+            VictimSteamId64 = victimSteamId64,
+            Weapon = matchedWeapon,
+            Points = points,
+            TeamKill = teamKill
+        });
 
-            if (teamKill) {
-                // Teamkill penalty: the victim gets the points, the attacker loses them.
-                AddScore(ev.EventId, victimSteamId64, victimName, points, 0);
-                AddScore(ev.EventId, attackerSteamId64, attackerName, -points, 0);
-            } else {
-                AddScore(ev.EventId, attackerSteamId64, attackerName, points, 1);
-            }
+        if (teamKill) {
+            // Teamkill penalty: the victim gets the points, the attacker loses them.
+            AddScore(liveEvent.EventId, victimSteamId64, victimName, points);
+            AddScore(liveEvent.EventId, attackerSteamId64, attackerName, -points);
+        } else {
+            AddScore(liveEvent.EventId, attackerSteamId64, attackerName, points);
         }
 
-        PrintScoreMessage(attackerName, attackerIsAdmin, victimName, victimIsAdmin, totalPoints, teamKill, matches[0].RuleWeapon);
+        PrintScoreMessage(attackerName, attackerIsAdmin, victimName, victimIsAdmin, points, teamKill, matchedWeapon);
 
         return HookResult.Continue;
     }
@@ -472,8 +517,8 @@ public class EventWeekend : ModuleBase {
         return normalized;
     }
 
-    private void AddScore(int eventId, ulong steamId64, string name, int points, int kills) {
-        if (steamId64 == 0 || (points == 0 && kills == 0)) {
+    private void AddScore(int eventId, ulong steamId64, string name, int points) {
+        if (steamId64 == 0 || points == 0) {
             return;
         }
 
@@ -484,34 +529,68 @@ public class EventWeekend : ModuleBase {
 
         pending.Name = name;
         pending.Points += points;
-        pending.Kills += kills;
     }
 
-    // Hands the pending deltas to a background task; rows the database does not
-    // confirm are merged back and retried on a later flush, so a temporary outage
-    // only delays the points instead of dropping them.
+    // Hands the pending kill feed + tally deltas to a background task; rows the database
+    // does not confirm are merged back and retried on a later flush, so a temporary
+    // outage only delays the points instead of dropping them.
     private void FlushPendingWrites(string source) {
         var database = db;
-        if (database == null || flushInProgress || pendingScores.Count == 0) {
+        if (database == null || flushInProgress) {
             return;
         }
 
-        var batch = pendingScores.Where(kv => kv.Value.Points != 0 || kv.Value.Kills != 0).ToList();
+        if (pendingKills.Count == 0 && pendingScores.Count == 0) {
+            return;
+        }
+
+        var killBatch = pendingKills.ToList();
+        pendingKills.Clear();
+
+        var scoreBatch = pendingScores.Where(kv => kv.Value.Points != 0).ToList();
         pendingScores.Clear();
 
-        if (batch.Count == 0) {
+        if (killBatch.Count == 0 && scoreBatch.Count == 0) {
             return;
         }
 
         flushInProgress = true;
 
         Task.Run(() => {
-            var unwritten = new List<KeyValuePair<(int EventId, ulong SteamId64), PendingScore>>();
+            var unwrittenKills = new List<PendingKill>();
+            var unwrittenScores = new List<KeyValuePair<(int EventId, ulong SteamId64), PendingScore>>();
             bool dbDown = false;
 
-            foreach (var kv in batch) {
+            foreach (var kill in killBatch) {
                 if (dbDown) {
-                    unwritten.Add(kv);
+                    unwrittenKills.Add(kill);
+                    continue;
+                }
+
+                int affected = database.insert(
+                    $"INTO {KillTable} (event_id, stamp, attacker, attackerid64, victim, victimid64, weapon, points, type) " +
+                    "VALUES (@event_id, NOW(), @attacker, @attackerid64, @victim, @victimid64, @weapon, @points, @type)",
+                    new MySqlParameter("@event_id", kill.EventId),
+                    new MySqlParameter("@attacker", kill.AttackerName),
+                    new MySqlParameter("@attackerid64", kill.AttackerSteamId64.ToString()),
+                    new MySqlParameter("@victim", kill.VictimName),
+                    new MySqlParameter("@victimid64", kill.VictimSteamId64.ToString()),
+                    new MySqlParameter("@weapon", kill.Weapon),
+                    new MySqlParameter("@points", kill.Points),
+                    new MySqlParameter("@type", kill.TeamKill ? EventTypeTeamKill : EventTypeNormal)
+                );
+
+                if (affected == 0) {
+                    // insert logs and returns 0 on failure; assume the DB is down and
+                    // keep the rest cached instead of stalling on a timeout per row.
+                    dbDown = true;
+                    unwrittenKills.Add(kill);
+                }
+            }
+
+            foreach (var kv in scoreBatch) {
+                if (dbDown) {
+                    unwrittenScores.Add(kv);
                     continue;
                 }
 
@@ -521,35 +600,36 @@ public class EventWeekend : ModuleBase {
                 // Every batched row has a nonzero delta, so a confirmed upsert always
                 // affects at least one row; 0 means insert logged a failure.
                 int affected = database.insert(
-                    $"INTO {ScoresTable} (event_id, steamid64, name, points, kills) " +
-                    "VALUES (@event_id, @steamid64, @name, @points, @kills) " +
-                    "ON DUPLICATE KEY UPDATE name=@name, points=points+@points, kills=kills+@kills",
+                    $"INTO {ScoreTable} (event_id, steamid64, name, points) " +
+                    "VALUES (@event_id, @steamid64, @name, @points) " +
+                    "ON DUPLICATE KEY UPDATE name=@name, points=points+@points",
                     new MySqlParameter("@event_id", eventId),
-                    new MySqlParameter("@steamid64", steamId64),
+                    new MySqlParameter("@steamid64", steamId64.ToString()),
                     new MySqlParameter("@name", pending.Name),
-                    new MySqlParameter("@points", pending.Points),
-                    new MySqlParameter("@kills", pending.Kills)
+                    new MySqlParameter("@points", pending.Points)
                 );
 
                 if (affected == 0) {
-                    // Assume the DB is down and keep the rest cached instead of
-                    // stalling on a connect timeout per row.
                     dbDown = true;
-                    unwritten.Add(kv);
+                    unwrittenScores.Add(kv);
                 }
             }
 
             Server.NextFrame(() => {
                 flushInProgress = false;
 
-                foreach (var kv in unwritten) {
+                // Put retried kills back in front so the feed stays roughly chronological.
+                pendingKills.InsertRange(0, unwrittenKills);
+
+                foreach (var kv in unwrittenScores) {
                     MergeScore(kv.Key, kv.Value);
                 }
 
-                if (unwritten.Count > 0) {
-                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten.Count} score rows cached for retry.");
+                int unwritten = unwrittenKills.Count + unwrittenScores.Count;
+                if (unwritten > 0) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten} rows cached for retry.");
                 } else {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending DB writes ({source}): rows={batch.Count}");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending DB writes ({source}): kills={killBatch.Count}, tallyRows={scoreBatch.Count}");
                 }
             });
         });
@@ -560,7 +640,6 @@ public class EventWeekend : ModuleBase {
     private void MergeScore((int EventId, ulong SteamId64) key, PendingScore score) {
         if (pendingScores.TryGetValue(key, out var existing)) {
             existing.Points += score.Points;
-            existing.Kills += score.Kills;
         } else {
             pendingScores[key] = score;
         }
@@ -598,7 +677,7 @@ public class EventWeekend : ModuleBase {
             return;
         }
 
-        foreach (var ev in liveEvents.Values) {
+        foreach (var ev in liveEvents.Values.OrderBy(ev => ev.EventId)) {
             ShowTopList(player, ev);
         }
     }
@@ -611,7 +690,7 @@ public class EventWeekend : ModuleBase {
 
         try {
             DataTable table = db.select(
-                $"name, steamid64, points FROM {ScoresTable} WHERE event_id=@event_id ORDER BY points DESC LIMIT @limit",
+                $"name, steamid64, points FROM {ScoreTable} WHERE event_id=@event_id ORDER BY points DESC LIMIT @limit",
                 new MySqlParameter("@event_id", ev.EventId),
                 new MySqlParameter("@limit", topLimit)
             );
