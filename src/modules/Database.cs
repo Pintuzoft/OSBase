@@ -106,6 +106,18 @@ public class Database {
     public DataTable select ( string query, params MySqlParameter[] parameters ) {
         return exeSelect(NormalizeVerb(query, "SELECT"), parameters);
     }
+    // Like select, but reports failure instead of swallowing it into an empty table,
+    // so callers can tell "no rows" from "database unreachable".
+    public bool trySelect ( string query, out DataTable table, params MySqlParameter[] parameters ) {
+        try {
+            table = exeSelectCore(NormalizeVerb(query, "SELECT"), parameters);
+            return true;
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: (trySelect): {ex.Message}");
+            table = new DataTable();
+            return false;
+        }
+    }
     public int create ( string query, params MySqlParameter[] parameters ) {
         return exeChange(NormalizeVerb(query, "CREATE"), parameters);
     }
@@ -223,16 +235,21 @@ public class Database {
     }
 
     private DataTable exeSelect ( string query, params MySqlParameter[] parameters ) {
-        var table = new DataTable();
         try {
-            using var conn = Open();
-            using var cmd = new MySqlCommand(query, conn);
-            if (parameters != null && parameters.Length > 0) cmd.Parameters.AddRange(parameters);
-            using var adapter = new MySqlDataAdapter(cmd);
-            adapter.Fill(table);
+            return exeSelectCore(query, parameters);
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: (exeSelect): {ex.Message}");
+            return new DataTable();
         }
+    }
+
+    private DataTable exeSelectCore ( string query, params MySqlParameter[] parameters ) {
+        var table = new DataTable();
+        using var conn = Open();
+        using var cmd = new MySqlCommand(query, conn);
+        if (parameters != null && parameters.Length > 0) cmd.Parameters.AddRange(parameters);
+        using var adapter = new MySqlDataAdapter(cmd);
+        adapter.Fill(table);
         return table;
     }
 
