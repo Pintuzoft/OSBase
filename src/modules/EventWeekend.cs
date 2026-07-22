@@ -404,7 +404,11 @@ public class EventWeekend : ModuleBase {
             return HookResult.Continue;
         }
 
-        if (ignoreWarmup && gameStats != null && gameStats.IsWarmup) {
+        // Fails closed: if gameStats is ever unavailable, "can't confirm we're not in
+        // warmup" must not become "score it anyway" -- same reasoning as ask 11's gates
+        // elsewhere (DamageReport/TeamBets/EloRating all default to warmup=true, not
+        // false, when their GameStats read comes back null).
+        if (ignoreWarmup && (gameStats == null || gameStats.IsWarmup)) {
             MaybePrintWarmupMessage();
             return HookResult.Continue;
         }

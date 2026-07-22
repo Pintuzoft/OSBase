@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
+using MySqlConnector;
 
 namespace OSBase.Modules;
 
@@ -16,13 +18,35 @@ public class TeamBets : ModuleBase {
     private const int MinMoney = 0;
     private const int MaxMoney = 16000;
     private const float LeaderboardDelaySeconds = 1.5f;
+    private const string TeamBetStatTable = "player_teambet_stat";
 
     private bool roundLive = false;
+
+    // Ask 11's gate, duplicated here (own module, own config) -- decided at round start, held
+    // for the whole round. Same reasoning as DamageReport.cs: two players farming bets on an
+    // empty pub server must never reach the same lifetime counters as real play.
+    private bool statsGateOpen;
+    private int minPlayers = 4;
+
+    private Database? db;
+    private bool flushInProgress;
+    private readonly Dictionary<(ulong SteamId64, string Season), PendingTeamBetCounter> pendingTeamBetCounters = new();
+
+    private sealed class PendingTeamBetCounter {
+        public int Bets;
+        public int Wins;
+        public long Staked;
+        public long Returned;
+        public int BiggestWin;
+        public int BiggestWinStake;
+        public DateTime? BiggestWinAt;
+    }
 
     // userid -> bet
     private readonly Dictionary<int, Bet> bets = new();
 
     private class Bet {
+        public ulong SteamId64 { get; }
         public string PlayerName { get; }
         public int Amount { get; }
         public int Team { get; }
@@ -30,7 +54,8 @@ public class TeamBets : ModuleBase {
         public int AliveT { get; }
         public int AliveCt { get; }
 
-        public Bet(string playerName, int amount, int team, float odds, int aliveT, int aliveCt) {
+        public Bet(ulong steamId64, string playerName, int amount, int team, float odds, int aliveT, int aliveCt) {
+            SteamId64 = steamId64;
             PlayerName = playerName;
             Amount = amount;
             Team = team;
@@ -65,11 +90,25 @@ public class TeamBets : ModuleBase {
     protected override void OnLoad() {
         bets.Clear();
         roundLive = false;
+
+        CreateCustomConfigs();
+        LoadConfig();
+
+        db = new Database(osbase!, config!);
+        CreateTable();
     }
 
     protected override void OnUnload() {
+        FlushPendingTeamBetStats("Unload");
+
         bets.Clear();
         roundLive = false;
+        db = null;
+    }
+
+    protected override void OnReloadConfig() {
+        CreateCustomConfigs();
+        LoadConfig();
     }
 
     protected override void RegisterHandlers() {
@@ -78,6 +117,7 @@ public class TeamBets : ModuleBase {
         osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.SubscribeToEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
         osbase?.SubscribeToEvent<EventPlayerChat>(OnPlayerChat);
+        osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
     }
 
     protected override void UnregisterHandlers() {
@@ -86,6 +126,228 @@ public class TeamBets : ModuleBase {
         osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.UnsubscribeFromEvent<EventRoundFreezeEnd>(OnRoundFreezeEnd);
         osbase?.UnsubscribeFromEvent<EventPlayerChat>(OnPlayerChat);
+        osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+    }
+
+    private void OnMapStart(string mapName) {
+        if (!isActive) {
+            return;
+        }
+
+        FlushPendingTeamBetStats("MapStart");
+    }
+
+    // ----- config (teambets.cfg) -----
+
+    private void CreateCustomConfigs() {
+        config?.CreateCustomConfig(
+            $"{ModuleName}.cfg",
+            "// TeamBets Configuration\n" +
+            "// Gate for the durable player_teambet_stat table, same rule as DamageReport's\n" +
+            "// ask 11: decided once at round start, held for the whole round. Warmup is\n" +
+            "// always excluded and not configurable; min_players is, because the right\n" +
+            "// threshold isn't known until there's real data to look at.\n" +
+            "min_players 4\n"
+        );
+    }
+
+    private void LoadConfig() {
+        minPlayers = 4;
+
+        List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
+
+        foreach (var rawLine in cfg) {
+            string line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("//")) {
+                continue;
+            }
+
+            var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2) {
+                Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Invalid config line skipped: {line}");
+                continue;
+            }
+
+            string key = parts[0].Trim();
+            string value = parts[1].Trim();
+
+            switch (key.ToLowerInvariant()) {
+                case "min_players":
+                    minPlayers = ParseInt(value, 4, 0, 64);
+                    break;
+                default:
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Unknown config key {key}:{value}");
+                    break;
+            }
+        }
+    }
+
+    private static int ParseInt(string value, int defaultValue, int min, int max) {
+        if (!int.TryParse(value, out int parsed)) {
+            return defaultValue;
+        }
+
+        return Math.Clamp(parsed, min, max);
+    }
+
+    private static int CountConnectedHumans() {
+        return Utilities.GetPlayers().Count(p =>
+            p != null && p.IsValid && !p.IsHLTV && !p.IsBot && p.Connected == PlayerConnectedState.Connected
+        );
+    }
+
+    private static string CurrentSeason() {
+        DateTime now = DateTime.UtcNow;
+        int quarter = ((now.Month - 1) / 3) + 1;
+        return $"{now.Year}Q{quarter}";
+    }
+
+    // player_teambet_stat is owned by this module alone. staked/returned are kept separate,
+    // never netted -- net is a subtraction away, but you can't split it back into how much
+    // someone risked, and the player churning 10x the volume for the same profit is the more
+    // interesting one. biggest_win is NET profit on one winning bet (returned - staked for
+    // that bet), not the total payout -- a topplist of total payout is really a wallet-size
+    // topplist (staking 10000 to get back 10100 would top it over risking 100 to win 4900,
+    // and the second one is the story people actually retell). biggest_win_stake is what was
+    // risked for that specific win, kept alongside so the payout is recoverable
+    // (biggest_win + biggest_win_stake) and the odds are visible in the retelling ("won 4900
+    // on a hundred-dollar bet") -- otherwise that stake is exactly the kind of fact no later
+    // migration could dig back out, same rule as everything else in this document.
+    private void CreateTable() {
+        if (db == null) {
+            return;
+        }
+
+        string teamBetStatTable = $"""
+        TABLE IF NOT EXISTS {TeamBetStatTable} (
+            steamid64          VARCHAR(32) NOT NULL,
+            season             VARCHAR(8) NOT NULL,
+            bets               INT NOT NULL DEFAULT 0,
+            wins               INT NOT NULL DEFAULT 0,
+            staked             BIGINT NOT NULL DEFAULT 0,
+            returned           BIGINT NOT NULL DEFAULT 0,
+            biggest_win        INT NOT NULL DEFAULT 0,
+            biggest_win_stake  INT NOT NULL DEFAULT 0,
+            biggest_win_at     DATETIME NULL,
+            first_seen         DATETIME NOT NULL,
+            updated_at         DATETIME NOT NULL,
+            PRIMARY KEY (steamid64, season)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
+        try {
+            db.create(teamBetStatTable);
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] table ensured.");
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating table: {e.Message}");
+        }
+    }
+
+    private void AddTeamBetResult(ulong steamId64, string season, bool won, int staked, int returned) {
+        if (steamId64 == 0) {
+            return;
+        }
+
+        var key = (steamId64, season);
+        if (!pendingTeamBetCounters.TryGetValue(key, out var counter)) {
+            counter = new PendingTeamBetCounter();
+            pendingTeamBetCounters[key] = counter;
+        }
+
+        counter.Bets += 1;
+        counter.Staked += staked;
+        counter.Returned += returned;
+
+        if (won) {
+            counter.Wins += 1;
+
+            int net = returned - staked;
+            if (net > counter.BiggestWin) {
+                counter.BiggestWin = net;
+                counter.BiggestWinStake = staked;
+                counter.BiggestWinAt = DateTime.UtcNow;
+            }
+        }
+    }
+
+    // Buffered like DamageReport/EloRating: accumulate, flush between rounds. Unwritten rows
+    // on a DB outage are merged back and retried, with biggest_win/biggest_win_at kept as the
+    // max seen across whatever pending batches haven't landed yet.
+    private void FlushPendingTeamBetStats(string source) {
+        var database = db;
+        if (database == null || flushInProgress || pendingTeamBetCounters.Count == 0) {
+            return;
+        }
+
+        var batch = pendingTeamBetCounters.ToList();
+        pendingTeamBetCounters.Clear();
+
+        flushInProgress = true;
+
+        Task.Run(() => {
+            var unwritten = new List<KeyValuePair<(ulong SteamId64, string Season), PendingTeamBetCounter>>();
+            bool dbDown = false;
+
+            foreach (var kv in batch) {
+                if (dbDown) {
+                    unwritten.Add(kv);
+                    continue;
+                }
+
+                var (steamId64, season) = kv.Key;
+                var counter = kv.Value;
+
+                int affected = database.insert(
+                    $"INTO {TeamBetStatTable} (steamid64, season, bets, wins, staked, returned, biggest_win, biggest_win_stake, biggest_win_at, first_seen, updated_at) " +
+                    "VALUES (@steamid64, @season, @bets, @wins, @staked, @returned, @biggest_win, @biggest_win_stake, @biggest_win_at, NOW(), NOW()) " +
+                    "ON DUPLICATE KEY UPDATE " +
+                    "bets=bets+@bets, wins=wins+@wins, staked=staked+@staked, returned=returned+@returned, " +
+                    "biggest_win_at=IF(@biggest_win > biggest_win, @biggest_win_at, biggest_win_at), " +
+                    "biggest_win_stake=IF(@biggest_win > biggest_win, @biggest_win_stake, biggest_win_stake), " +
+                    "biggest_win=GREATEST(biggest_win, @biggest_win), updated_at=NOW()",
+                    new MySqlParameter("@steamid64", steamId64.ToString()),
+                    new MySqlParameter("@season", season),
+                    new MySqlParameter("@bets", counter.Bets),
+                    new MySqlParameter("@wins", counter.Wins),
+                    new MySqlParameter("@staked", counter.Staked),
+                    new MySqlParameter("@returned", counter.Returned),
+                    new MySqlParameter("@biggest_win", counter.BiggestWin),
+                    new MySqlParameter("@biggest_win_stake", counter.BiggestWinStake),
+                    new MySqlParameter("@biggest_win_at", (object?)counter.BiggestWinAt ?? DBNull.Value)
+                );
+
+                if (affected == 0) {
+                    dbDown = true;
+                    unwritten.Add(kv);
+                }
+            }
+
+            Server.NextFrame(() => {
+                flushInProgress = false;
+
+                foreach (var kv in unwritten) {
+                    if (!pendingTeamBetCounters.TryGetValue(kv.Key, out var existing)) {
+                        pendingTeamBetCounters[kv.Key] = kv.Value;
+                    } else {
+                        existing.Bets += kv.Value.Bets;
+                        existing.Wins += kv.Value.Wins;
+                        existing.Staked += kv.Value.Staked;
+                        existing.Returned += kv.Value.Returned;
+                        if (kv.Value.BiggestWin > existing.BiggestWin) {
+                            existing.BiggestWin = kv.Value.BiggestWin;
+                            existing.BiggestWinStake = kv.Value.BiggestWinStake;
+                            existing.BiggestWinAt = kv.Value.BiggestWinAt;
+                        }
+                    }
+                }
+
+                if (unwritten.Count > 0) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten.Count} teambet-stat rows cached for retry.");
+                } else {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending teambet-stat writes ({source}): rows={batch.Count}");
+                }
+            });
+        });
     }
 
     private HookResult OnPlayerChat(EventPlayerChat eventInfo) {
@@ -219,6 +481,7 @@ public class TeamBets : ModuleBase {
         RemoveMoney(player, amount);
 
         bets[player.UserId.Value] = new Bet(
+            player.SteamID,
             playerName,
             amount,
             betTeam,
@@ -245,6 +508,13 @@ public class TeamBets : ModuleBase {
 
         bets.Clear();
         roundLive = false;
+
+        // Ask 11's gate, decided here and held for the whole round -- see the field comment.
+        bool warmup = IsWarmupActive();
+        int humans = CountConnectedHumans();
+        statsGateOpen = !warmup && humans >= minPlayers;
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: round gate {(statsGateOpen ? "open" : "closed")} (humans={humans} min={minPlayers} warmup={warmup})");
+
         return HookResult.Continue;
     }
 
@@ -280,6 +550,7 @@ public class TeamBets : ModuleBase {
         }
 
         List<BetResult> results = new();
+        string season = CurrentSeason();
 
         foreach (var kvp in bets) {
             int userId = kvp.Key;
@@ -321,6 +592,10 @@ public class TeamBets : ModuleBase {
                     note
                 ));
 
+                if (statsGateOpen) {
+                    AddTeamBetResult(bet.SteamId64, season, won: true, staked: bet.Amount, returned: actualPaid);
+                }
+
                 Console.WriteLine(
                     $"[DEBUG] OSBase[{ModuleName}] Bet WON by {bet.PlayerName}: " +
                     $"amount={bet.Amount} payout={payout} actualPaid={actualPaid} net={netResult} odds={bet.Odds:0.00} online={playerOnline}"
@@ -338,6 +613,10 @@ public class TeamBets : ModuleBase {
                     netResult
                 ));
 
+                if (statsGateOpen) {
+                    AddTeamBetResult(bet.SteamId64, season, won: false, staked: bet.Amount, returned: 0);
+                }
+
                 Console.WriteLine(
                     $"[DEBUG] OSBase[{ModuleName}] Bet LOST by {bet.PlayerName}: " +
                     $"amount={bet.Amount} team={GetTeamName(bet.Team)} odds={bet.Odds:0.00} online={playerOnline}"
@@ -346,6 +625,8 @@ public class TeamBets : ModuleBase {
         }
 
         PrintBetLeaderboardDelayed(winningTeam, results);
+
+        FlushPendingTeamBetStats("RoundEnd");
 
         bets.Clear();
         return HookResult.Continue;

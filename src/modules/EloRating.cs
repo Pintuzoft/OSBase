@@ -1,0 +1,1461 @@
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Globalization;
+using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
+using CounterStrikeSharp.API;
+using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Admin;
+using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Events;
+using CounterStrikeSharp.API.Modules.Timers;
+using CounterStrikeSharp.API.Modules.Utils;
+using MySqlConnector;
+using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
+
+namespace OSBase.Modules;
+
+// Two-part system covering ALL play, not just tournament matches -- see ELO-MODULE.md and
+// STATS-MODULE.md/traffkarta-hit-stats.md (asks 4, 19, 20) for the full design and the
+// reversal history: this module was tournament-scoped until it became clear the server runs
+// roughly one tournament a year, which makes a tournament-scoped rating an annual event
+// result, not a ranking. Ask 11's gates (no bots, no warmup, min_players) replace that
+// tournament window as the reason a kill counts, decided once per round in OnRoundStart.
+//
+// Part one -- RATING (elo_rating, no season, one row per player, never reset). A
+// continuously-updated skill estimate, Elo-style: kills/deaths move it via the existing
+// duel formula, headshots add a bonus proportional to the delta already earned, assists add
+// a small flat reward. "How good is this player" doesn't stop being true in January.
+//
+// Part two -- POINTS (elo_points, keyed by steamid64+season, reset every quarter by simply
+// starting a new season string -- no archiving step, same reason every other table in this
+// system uses season-in-the-key instead of cs2rank's table-rename approach: a reset that
+// requires a step is a reset that one day skips the step, and this community's rule is
+// nothing gets deleted). Classic HLstatsX-style: opponent-ratio-scaled points for kills,
+// assists, and round wins. Earned only by doing things, never by being connected.
+//
+// Rating math runs live and synchronously on the game thread (Elo is order-dependent,
+// unlike EventWeekend's commutative point tally, so it can't be queued and applied out of
+// order). Points are a straightforward additive accumulator and don't share that constraint,
+// but are computed at the same time since they need the live rating for opponent-scaling.
+// The resulting DB writes are buffered in memory and only sent between rounds, on
+// EventRoundEnd, to keep the write path off the server during live rounds -- same pattern
+// as EventWeekend's FlushPendingWrites.
+//
+// tournament_match is no longer the gate -- it's a tag. currentMatchId (when a window
+// happens to be open) still rides along on elo_kill_event.match_id (now nullable) purely as
+// a data point, so a Tuesday night and this year's one tournament stay distinguishable in
+// the history even though both now score.
+public class EloRating : ModuleBase {
+    public override string ModuleName => "elorating";
+    protected override string DefaultEnabled => "0";
+
+    private const string RatingTable = "elo_rating";
+    private const string PointsTable = "elo_points";
+    private const string KillEventTable = "elo_kill_event";
+    private const string MatchTable = "tournament_match"; // site-owned; never created here, PK is `id`
+    private const float MatchWindowRefreshIntervalSeconds = 30.0f;
+
+    private GameStats? gameStats;
+    private Database? db;
+
+    // cfg (elorating.cfg) -- host/port identify this server so it can be matched against
+    // tournament_match.server_address, which is free text an admin typed (DNS name or IP,
+    // with or without port). See IsThisServer() for the canonicalization.
+    private string host = "";
+    private int port = 0;
+    private string chatPrefix = "[Elo]";
+
+    // Player-facing chat commands (distinct from the admin-facing css_elo_top/
+    // css_elo_points_top console commands above -- these are typed text, matched in
+    // OnPlayerChat, same mechanism as TeamBets' "bet" command). Names are config so they can
+    // run as !elorank/!elotop during the 2026Q3 trial season (cs2rank still owns !rank/!top)
+    // and get renamed here on Oct 1 when cs2rank unloads -- no rebuild either time.
+    private string rankCommand = "!elorank";
+    private string topCommand = "!elotop";
+    private int kFactor = 32;
+    private int kFactorProvisional = 50;
+    private int provisionalMatches = 30;
+    private int startRating = 1000;
+    private int topLimit = 10;
+    private string adminPermission = "@css/generic";
+
+    // Ask 11: no bots (IsRealPlayer, unchanged), no warmup (hard rule, not configurable --
+    // same as DamageReport/TeamBets), min_players (configurable -- nobody knows the right
+    // number until real data exists). Decided once per round in OnRoundStart, held for the
+    // whole round so people logging off late in the evening don't retroactively disqualify a
+    // round that started at full strength.
+    private int minPlayers = 4;
+    private bool statsGateOpen;
+
+    // Rating formula extensions -- calibration guesses, config values because nobody has
+    // real numbers yet (same reasoning as min_players).
+    private double headshotBonusPct = 0.20;
+    private int assistReward = 5;
+
+    // Points formula -- classic HLstatsX ratio scaling: points = pointsPerKill * clamp(
+    // victimRating / attackerRating, pointsRatioMin, pointsRatioMax). Beating a stronger
+    // opponent multiplies up, beating a weaker one multiplies down, bounded so neither an
+    // extreme mismatch nor a near-zero rating produces an absurd swing.
+    private int pointsPerKill = 10;
+    private double pointsRatioMin = 0.5;
+    private double pointsRatioMax = 2.0;
+    private double pointsAssistFraction = 0.3;
+    private int pointsPerRoundWin = 2;
+
+    private Timer? matchWindowTimer;
+    private int? currentMatchId;
+    private bool flushInProgress;
+
+    // Authoritative live cache: mirrors elo_rating for whoever has duelled this session,
+    // seeded lazily (once per player) straight from the kill path, kept in sync on every
+    // kill. The DB is a durable mirror of this, not the other way around, while the module
+    // is active.
+    private readonly Dictionary<ulong, int> liveRating = new();
+    private readonly Dictionary<ulong, int> liveMatches = new();
+
+    // Same idea as liveRating -- an authoritative in-memory running total, seeded once per
+    // (player, season) straight from the DB, kept in sync on every award. Needed so
+    // TryGetPoints (used by DamageReport for ask 22's player_daily_stat snapshot) reads a
+    // value that's always instantly correct regardless of when either module's own flush
+    // happens to run -- two modules independently subscribed to EventRoundEnd have no
+    // guaranteed ordering relative to each other, so a snapshot can't wait on a flush.
+    private readonly Dictionary<(ulong SteamId64, string Season), int> livePoints = new();
+
+    private readonly List<PendingKillEvent> pendingKillEvents = new();
+    private readonly Dictionary<ulong, PendingRating> pendingRatings = new();
+    private readonly Dictionary<(ulong SteamId64, string Season), PendingPoints> pendingPoints = new();
+
+    private sealed class PendingKillEvent {
+        public int? MatchId { get; init; }
+        public string MapName { get; init; } = "";
+        public string AttackerName { get; init; } = "Unknown";
+        public ulong AttackerSteamId64 { get; init; }
+        public int AttackerRatingBefore { get; init; }
+        public int AttackerDelta { get; init; }
+        public int AttackerPointsDelta { get; init; }
+        public string VictimName { get; init; } = "Unknown";
+        public ulong VictimSteamId64 { get; init; }
+        public int VictimRatingBefore { get; init; }
+        public int VictimDelta { get; init; }
+        public string Weapon { get; init; } = "";
+        public bool Headshot { get; init; }
+    }
+
+    private sealed class PendingRating {
+        public string Name { get; set; } = "Unknown";
+        public int Rating { get; set; }
+        public int MatchesDelta { get; set; }
+    }
+
+    private sealed class PendingPoints {
+        public string Name { get; set; } = "Unknown";
+        public int Points { get; set; }
+    }
+
+    protected override void OnLoad() {
+        gameStats = osbase?.GetGameStats();
+
+        CreateCustomConfigs();
+        LoadConfig();
+
+        db = new Database(osbase!, config!);
+        CreateTables();
+        StartMatchWindowTimer();
+    }
+
+    protected override void OnUnload() {
+        StopMatchWindowTimer();
+        FlushPendingWrites("Unload");
+
+        liveRating.Clear();
+        liveMatches.Clear();
+        currentMatchId = null;
+        db = null;
+        gameStats = null;
+    }
+
+    protected override void OnReloadConfig() {
+        gameStats = osbase?.GetGameStats();
+        CreateCustomConfigs();
+        LoadConfig();
+        CreateTables();
+    }
+
+    protected override void RegisterHandlers() {
+        osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
+        osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.SubscribeToEvent<EventPlayerChat>(OnPlayerChat);
+        osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.AddCommand("css_elo_top", "Shows the Elo rating leaderboard", OnEloTopCommand);
+        osbase?.AddCommand("css_elo_points_top", "Shows this season's Elo points leaderboard", OnEloPointsTopCommand);
+        osbase?.AddCommand("css_elo_match_start", "Admin: opens the Elo scoring window for a tournament match", OnEloMatchStartCommand);
+        osbase?.AddCommand("css_elo_match_stop", "Admin: closes the Elo scoring window for a tournament match", OnEloMatchStopCommand);
+    }
+
+    protected override void UnregisterHandlers() {
+        osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
+        osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
+        osbase?.UnsubscribeFromEvent<EventPlayerChat>(OnPlayerChat);
+        osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.RemoveCommand("css_elo_top", OnEloTopCommand);
+        osbase?.RemoveCommand("css_elo_points_top", OnEloPointsTopCommand);
+        osbase?.RemoveCommand("css_elo_match_start", OnEloMatchStartCommand);
+        osbase?.RemoveCommand("css_elo_match_stop", OnEloMatchStopCommand);
+    }
+
+    private HookResult OnRoundStart(EventRoundStart _) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        // Ask 11's gate, decided here and held for the whole round -- see the field comment
+        // on statsGateOpen. Warmup is a hard rule, not configurable.
+        bool warmup = gameStats?.IsWarmup ?? true;
+        int humans = CountConnectedHumans();
+        statsGateOpen = !warmup && humans >= minPlayers;
+        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: round gate {(statsGateOpen ? "open" : "closed")} (humans={humans} min={minPlayers} warmup={warmup})");
+
+        return HookResult.Continue;
+    }
+
+    private static int CountConnectedHumans() {
+        return Utilities.GetPlayers().Count(p =>
+            p != null && p.IsValid && !p.IsHLTV && !p.IsBot && p.Connected == PlayerConnectedState.Connected
+        );
+    }
+
+    private static string CurrentSeason() {
+        DateTime now = DateTime.UtcNow;
+        int quarter = ((now.Month - 1) / 3) + 1;
+        return $"{now.Year}Q{quarter}";
+    }
+
+    // ----- config -----
+
+    private void CreateCustomConfigs() {
+        config?.CreateCustomConfig(
+            $"{ModuleName}.cfg",
+            "// EloRating Configuration\n" +
+            "// This module scores ALL play, gated by ask 11 (min_players below; warmup and\n" +
+            "// bots are hard rules, not configurable). host/port and tournament_match are no\n" +
+            "// longer a gate -- they're only still used to tag elo_kill_event.match_id when a\n" +
+            "// tournament window happens to be open, so a Tuesday night stays distinguishable\n" +
+            "// from this year's one tournament in the history. See ELO-MODULE.md.\n" +
+            "host \"\"\n" +
+            "port 0\n" +
+            "chat_prefix \"[Elo]\"\n" +
+            "// Player-facing chat commands, typed in all-chat. Trial-season names below --\n" +
+            "// rename to \"!rank\"/\"!top\" here on Oct 1 once cs2rank unloads, no rebuild needed.\n" +
+            "rank_command \"!elorank\"\n" +
+            "top_command \"!elotop\"\n" +
+            "min_players 4\n" +
+            "k_factor 32\n" +
+            "k_factor_provisional 50\n" +
+            "provisional_matches 30\n" +
+            "start_rating 1000\n" +
+            "top_limit 10\n" +
+            "// Rating formula extensions -- calibration guesses, nobody has real numbers yet.\n" +
+            "headshot_bonus_pct 0.20\n" +
+            "assist_reward 5\n" +
+            "// Points formula (elo_points, resets every season) -- classic HLstatsX-style\n" +
+            "// opponent-ratio scaling: points = points_per_kill * clamp(victimRating /\n" +
+            "// attackerRating, points_ratio_min, points_ratio_max).\n" +
+            "points_per_kill 10\n" +
+            "points_ratio_min 0.5\n" +
+            "points_ratio_max 2.0\n" +
+            "points_assist_fraction 0.3\n" +
+            "points_per_round_win 2\n" +
+            "admin_permission \"@css/generic\"\n"
+        );
+    }
+
+    private void LoadConfig() {
+        host = "";
+        port = 0;
+        chatPrefix = "[Elo]";
+        rankCommand = "!elorank";
+        topCommand = "!elotop";
+        minPlayers = 4;
+        kFactor = 32;
+        kFactorProvisional = 50;
+        provisionalMatches = 30;
+        startRating = 1000;
+        topLimit = 10;
+        headshotBonusPct = 0.20;
+        assistReward = 5;
+        pointsPerKill = 10;
+        pointsRatioMin = 0.5;
+        pointsRatioMax = 2.0;
+        pointsAssistFraction = 0.3;
+        pointsPerRoundWin = 2;
+        adminPermission = "@css/generic";
+
+        List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
+
+        foreach (var rawLine in cfg) {
+            string line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("//")) {
+                continue;
+            }
+
+            var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2) {
+                Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Invalid config line skipped: {line}");
+                continue;
+            }
+
+            string key = parts[0].Trim();
+            string value = Unquote(parts[1].Trim());
+
+            switch (key.ToLowerInvariant()) {
+                case "host":
+                    host = value;
+                    break;
+                case "port":
+                    port = ParseInt(value, 0, 0, 65535);
+                    break;
+                case "chat_prefix":
+                    chatPrefix = string.IsNullOrWhiteSpace(value) ? "[Elo]" : value;
+                    break;
+                case "rank_command":
+                    rankCommand = string.IsNullOrWhiteSpace(value) ? "!elorank" : value;
+                    break;
+                case "top_command":
+                    topCommand = string.IsNullOrWhiteSpace(value) ? "!elotop" : value;
+                    break;
+                case "k_factor":
+                    kFactor = ParseInt(value, 32, 1, 200);
+                    break;
+                case "k_factor_provisional":
+                    kFactorProvisional = ParseInt(value, 50, 1, 200);
+                    break;
+                case "provisional_matches":
+                    provisionalMatches = ParseInt(value, 30, 0, 1000);
+                    break;
+                case "start_rating":
+                    startRating = ParseInt(value, 1000, 0, 5000);
+                    break;
+                case "top_limit":
+                    topLimit = ParseInt(value, 10, 1, 50);
+                    break;
+                case "min_players":
+                    minPlayers = ParseInt(value, 4, 0, 64);
+                    break;
+                case "headshot_bonus_pct":
+                    headshotBonusPct = ParseDouble(value, 0.20, 0.0, 5.0);
+                    break;
+                case "assist_reward":
+                    assistReward = ParseInt(value, 5, 0, 1000);
+                    break;
+                case "points_per_kill":
+                    pointsPerKill = ParseInt(value, 10, 0, 10000);
+                    break;
+                case "points_ratio_min":
+                    pointsRatioMin = ParseDouble(value, 0.5, 0.0, 10.0);
+                    break;
+                case "points_ratio_max":
+                    pointsRatioMax = ParseDouble(value, 2.0, 0.0, 10.0);
+                    break;
+                case "points_assist_fraction":
+                    pointsAssistFraction = ParseDouble(value, 0.3, 0.0, 5.0);
+                    break;
+                case "points_per_round_win":
+                    pointsPerRoundWin = ParseInt(value, 2, 0, 10000);
+                    break;
+                case "admin_permission":
+                    adminPermission = string.IsNullOrWhiteSpace(value) ? "@css/generic" : value;
+                    break;
+                default:
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Unknown config key {key}:{value}");
+                    break;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(host)) {
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}]: host is empty -- no tournament_match row can ever match this server, module will stay inert until it's set.");
+        }
+    }
+
+    // ----- tables (OSBase-owned; tournament_match is not created here, it belongs to the site) -----
+
+    private void CreateTables() {
+        if (db == null) {
+            return;
+        }
+
+        // Part one: rating. No season -- a continuously-updated skill estimate that never
+        // resets, unlike points below. Season would belong here only if rating itself reset
+        // quarterly, and it deliberately doesn't ("how good is this player" doesn't stop
+        // being true in January).
+        string ratingTable = $"""
+        TABLE IF NOT EXISTS {RatingTable} (
+            steamid64  VARCHAR(32) NOT NULL,
+            name       VARCHAR(64) NOT NULL,
+            rating     INT NOT NULL,
+            matches    INT NOT NULL DEFAULT 0,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (steamid64)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
+        // Part two: points. season IS in the key here, on purpose -- the opposite lifecycle
+        // from rating. A reset is just a new season string; no archiving step exists to skip,
+        // unlike cs2rank's table-rename approach, so nothing here can be reset by accident
+        // into a silent deletion.
+        string pointsTable = $"""
+        TABLE IF NOT EXISTS {PointsTable} (
+            steamid64  VARCHAR(32) NOT NULL,
+            season     VARCHAR(8) NOT NULL,
+            name       VARCHAR(64) NOT NULL,
+            points     INT NOT NULL DEFAULT 0,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (steamid64, season)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
+        // Durable, ordered log -- kept so the ladder can be rebuilt from scratch when the
+        // formula changes (K-factor, start rating, provisional handling). See ELO-MODULE.md
+        // for why this module keeps raw events instead of only counters. match_id is now
+        // NULLABLE: tournament_match is a tag, not a gate, since this module scores all play
+        // -- NULL means an ordinary kill, a real id means a tournament window happened to be
+        // open at the time. attacker_points_delta rides along on the same row for the same
+        // reason attacker_rating_before/attacker_delta do: save what was awarded and what it
+        // was built on, so a later formula change can be explained instead of silently
+        // rewriting history. Assist and round-win points are not logged here (they aren't
+        // kills, there's no attacker/victim pair to hang them on) -- they go straight into
+        // elo_points as counters.
+        string killEventTable = $"""
+        TABLE IF NOT EXISTS {KillEventTable} (
+            id                     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            match_id               INT NULL,
+            stamp                  DATETIME NOT NULL,
+            mapname                VARCHAR(64) NOT NULL,
+            attacker               VARCHAR(64) NOT NULL,
+            attackerid64           VARCHAR(32) NOT NULL,
+            attacker_rating_before INT NOT NULL,
+            attacker_delta         INT NOT NULL,
+            attacker_points_delta  INT NOT NULL DEFAULT 0,
+            victim                 VARCHAR(64) NOT NULL,
+            victimid64             VARCHAR(32) NOT NULL,
+            victim_rating_before   INT NOT NULL,
+            victim_delta           INT NOT NULL,
+            weapon                 VARCHAR(32) NULL,
+            headshot               TINYINT(1) NOT NULL DEFAULT 0,
+            PRIMARY KEY (id),
+            INDEX idx_elo_kill_event (match_id, stamp)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
+        try {
+            db.create(ratingTable);
+            db.create(pointsTable);
+            db.create(killEventTable);
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] tables ensured.");
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating tables: {e.Message}");
+        }
+    }
+
+    // ----- match window: site-owned tournament_match -> is a match live on this server right now -----
+
+    private void StartMatchWindowTimer() {
+        if (!isActive || osbase == null) {
+            return;
+        }
+
+        StopMatchWindowTimer();
+        RefreshMatchWindow("Load");
+        matchWindowTimer = osbase.AddTimer(MatchWindowRefreshIntervalSeconds, () => RefreshMatchWindow("Timer"), TimerFlags.REPEAT);
+    }
+
+    private void StopMatchWindowTimer() {
+        matchWindowTimer?.Kill();
+        matchWindowTimer = null;
+    }
+
+    private void RefreshMatchWindow(string source) {
+        var database = db;
+        if (!isActive || database == null || string.IsNullOrWhiteSpace(host)) {
+            return;
+        }
+
+        Task.Run(() => {
+            // starts_at/ends_at are nullable unix-second INTs (NULL until someone opens the
+            // window); a missing/never-started row and a genuine DB outage both fall through
+            // to "no active match" here, which is the safe default either way.
+            bool ok = database.trySelect(
+                $"id, server_address FROM {MatchTable} WHERE starts_at IS NOT NULL AND ends_at IS NOT NULL " +
+                "AND UNIX_TIMESTAMP() BETWEEN starts_at AND ends_at",
+                out DataTable table
+            );
+
+            int? matchId = null;
+            if (ok) {
+                // server_address is free text an admin typed (DNS name or IP, with or
+                // without port) -- can't compare it as a literal string. See IsThisServer().
+                foreach (DataRow row in table.Rows) {
+                    if (IsThisServer(row["server_address"]?.ToString())) {
+                        matchId = Convert.ToInt32(row["id"]);
+                        break;
+                    }
+                }
+            }
+
+            Server.NextFrame(() => ApplyMatchWindow(matchId, source));
+        });
+    }
+
+    // Best-effort mirror of OSWeb's ServerCredentials::canonicalHost + HostResolver (not a
+    // call to it -- OSBase has no access to that PHP code). Resolves both sides to IP
+    // addresses so a DNS name and a bare IP for the same machine are recognized as equal.
+    // A resolution failure or any doubt falls back to "not a match" rather than risking a
+    // false positive that scores someone else's match.
+    private bool IsThisServer(string? candidateAddress) {
+        if (string.IsNullOrWhiteSpace(candidateAddress) || string.IsNullOrWhiteSpace(host)) {
+            return false;
+        }
+
+        var (candidateHost, candidatePort) = ParseAddress(candidateAddress);
+
+        if (candidatePort.HasValue && port > 0 && candidatePort.Value != port) {
+            return false;
+        }
+
+        if (string.Equals(candidateHost, host, StringComparison.OrdinalIgnoreCase)) {
+            return true;
+        }
+
+        try {
+            IPAddress[] ourIps = Dns.GetHostAddresses(host);
+            IPAddress[] candidateIps = Dns.GetHostAddresses(candidateHost);
+            return ourIps.Any(a => candidateIps.Any(b => a.Equals(b)));
+        } catch (Exception e) {
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] DNS resolution failed comparing '{host}' to '{candidateHost}': {e.Message}");
+            return false;
+        }
+    }
+
+    private static (string Host, int? Port) ParseAddress(string address) {
+        string trimmed = address.Trim();
+
+        int idx = trimmed.LastIndexOf(':');
+        if (idx > 0 && idx < trimmed.Length - 1 && int.TryParse(trimmed[(idx + 1)..], out int parsedPort)) {
+            return (trimmed[..idx], parsedPort);
+        }
+
+        return (trimmed, null);
+    }
+
+    private void ApplyMatchWindow(int? matchId, string source) {
+        if (!isActive || matchId == currentMatchId) {
+            return;
+        }
+
+        if (matchId.HasValue) {
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] match {matchId.Value} is live, Elo scoring on ({source}).");
+        } else {
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] no active match, Elo scoring off ({source}).");
+        }
+
+        currentMatchId = matchId;
+    }
+
+    // ----- rating seed: synchronous, once per player, only on the kill path that needs it -----
+
+    private void SeedRating(ulong steamId64) {
+        if (db == null || liveRating.ContainsKey(steamId64)) {
+            return;
+        }
+
+        try {
+            DataTable table = db.select(
+                $"rating, matches FROM {RatingTable} WHERE steamid64=@id",
+                new MySqlParameter("@id", steamId64.ToString())
+            );
+
+            if (table.Rows.Count > 0) {
+                liveRating[steamId64] = Convert.ToInt32(table.Rows[0]["rating"]);
+                liveMatches[steamId64] = Convert.ToInt32(table.Rows[0]["matches"]);
+            } else {
+                liveRating[steamId64] = startRating;
+                liveMatches[steamId64] = 0;
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed seeding rating for {steamId64}: {e.Message}");
+            liveRating[steamId64] = startRating;
+            liveMatches[steamId64] = 0;
+        }
+    }
+
+    // Public read for other modules (TeamBalancer via SkillResolver, see src/helpers/
+    // SkillResolver.cs) -- part one (rating) only, never part two (points). Reuses
+    // SeedRating so a player who hasn't duelled yet this session but has a DB row still
+    // resolves correctly, and gets cached for next time instead of re-querying every call.
+    public bool TryGetRating(ulong steamId64, out int rating, out int matches) {
+        rating = 0;
+        matches = 0;
+
+        if (steamId64 == 0) {
+            return false;
+        }
+
+        SeedRating(steamId64);
+
+        if (!liveRating.TryGetValue(steamId64, out rating)) {
+            return false;
+        }
+
+        matches = liveMatches.GetValueOrDefault(steamId64, 0);
+        return true;
+    }
+
+    // ----- scoring -----
+
+    private HookResult OnPlayerDeath(EventPlayerDeath eventInfo) {
+        // Ask 11's gate replaces the old tournament-window gate -- see the class comment and
+        // OnRoundStart. tournament_match still matters, just as a tag on the row (below), not
+        // as the reason a kill counts.
+        if (!isActive || !statsGateOpen) {
+            return HookResult.Continue;
+        }
+
+        var attacker = eventInfo.Attacker;
+        var victim = eventInfo.Userid;
+
+        if (!IsRealPlayer(attacker) || !IsRealPlayer(victim)) {
+            return HookResult.Continue;
+        }
+
+        ulong attackerSteamId64 = attacker!.SteamID;
+        ulong victimSteamId64 = victim!.SteamID;
+
+        if (attackerSteamId64 == victimSteamId64 || attacker.TeamNum == victim.TeamNum) {
+            // Self/team kills don't score -- an Elo duel needs an opposed outcome.
+            return HookResult.Continue;
+        }
+
+        SeedRating(attackerSteamId64);
+        SeedRating(victimSteamId64);
+
+        int attackerRating = liveRating[attackerSteamId64];
+        int victimRating = liveRating[victimSteamId64];
+        int attackerMatches = liveMatches[attackerSteamId64];
+        int victimMatches = liveMatches[victimSteamId64];
+
+        // Chess-style: each side has its own K, so the two deltas are not forced to be
+        // equal and opposite -- a provisional attacker gaining fast off an established
+        // victim who barely moves is correct, not a bug. See ELO-MODULE.md.
+        double expectedAttacker = 1.0 / (1.0 + Math.Pow(10.0, (victimRating - attackerRating) / 400.0));
+        double expectedVictim = 1.0 - expectedAttacker;
+
+        int kAttacker = attackerMatches < provisionalMatches ? kFactorProvisional : kFactor;
+        int kVictim = victimMatches < provisionalMatches ? kFactorProvisional : kFactor;
+
+        int attackerDelta = (int)Math.Round(kAttacker * (1.0 - expectedAttacker), MidpointRounding.AwayFromZero);
+        int victimDelta = (int)Math.Round(kVictim * (0.0 - expectedVictim), MidpointRounding.AwayFromZero);
+
+        // Headshot bonus: proportional to the delta already earned, not a flat add-on --
+        // beating a strong opponent with a headshot is still worth more than headshotting a
+        // weak one, which preserves the Elo self-calibration property instead of adding an
+        // opponent-blind bonus on top of it.
+        if (eventInfo.Headshot && attackerDelta > 0) {
+            attackerDelta += (int)Math.Round(attackerDelta * headshotBonusPct, MidpointRounding.AwayFromZero);
+        }
+
+        liveRating[attackerSteamId64] = attackerRating + attackerDelta;
+        liveRating[victimSteamId64] = victimRating + victimDelta;
+        liveMatches[attackerSteamId64] = attackerMatches + 1;
+        liveMatches[victimSteamId64] = victimMatches + 1;
+
+        string attackerName = CleanName(attacker.PlayerName);
+        string victimName = CleanName(victim.PlayerName);
+        string season = CurrentSeason();
+
+        // Points: classic HLstatsX-style, scaled by how much stronger the victim was --
+        // beating a better player is worth more, beating a worse one worth less, clamped so
+        // neither an extreme rating gap nor a near-zero rating produces an absurd swing.
+        // Unlike rating, points never go down -- earned only by doing things, never lost by
+        // dying, matching "poängen ackumuleras genom att man gör saker".
+        double ratio = attackerRating > 0
+            ? Math.Clamp((double)victimRating / attackerRating, pointsRatioMin, pointsRatioMax)
+            : pointsRatioMax;
+        int killPoints = (int)Math.Round(pointsPerKill * ratio, MidpointRounding.AwayFromZero);
+        AddPoints(attackerSteamId64, attackerName, season, killPoints);
+
+        // Assist: a small, flat, opponent-blind reward for both rating and points -- an
+        // assist contributed to the duel, it didn't win it, and shouldn't be able to move a
+        // rating or a points total the way a kill does.
+        var assister = eventInfo.Assister;
+        if (IsRealPlayer(assister) && assister!.SteamID != attackerSteamId64 && assister.SteamID != victimSteamId64) {
+            ulong assisterSteamId64 = assister.SteamID;
+            string assisterName = CleanName(assister.PlayerName);
+
+            SeedRating(assisterSteamId64);
+            liveRating[assisterSteamId64] += assistReward;
+            SetPendingRating(assisterSteamId64, assisterName, liveRating[assisterSteamId64]);
+
+            int assistPoints = (int)Math.Round(killPoints * pointsAssistFraction, MidpointRounding.AwayFromZero);
+            AddPoints(assisterSteamId64, assisterName, season, assistPoints);
+        }
+
+        pendingKillEvents.Add(new PendingKillEvent {
+            MatchId = currentMatchId, // tag only now, nullable -- see class comment
+            MapName = osbase?.currentMap ?? Server.MapName ?? "",
+            AttackerName = attackerName,
+            AttackerSteamId64 = attackerSteamId64,
+            AttackerRatingBefore = attackerRating,
+            AttackerDelta = attackerDelta,
+            AttackerPointsDelta = killPoints,
+            VictimName = victimName,
+            VictimSteamId64 = victimSteamId64,
+            VictimRatingBefore = victimRating,
+            VictimDelta = victimDelta,
+            Weapon = NormalizeWeapon(eventInfo.Weapon),
+            Headshot = eventInfo.Headshot
+        });
+
+        SetPendingRating(attackerSteamId64, attackerName, liveRating[attackerSteamId64]);
+        SetPendingRating(victimSteamId64, victimName, liveRating[victimSteamId64]);
+
+        return HookResult.Continue;
+    }
+
+    private void AddPoints(ulong steamId64, string name, string season, int points) {
+        if (steamId64 == 0 || points == 0) {
+            return;
+        }
+
+        SeedPoints(steamId64, season);
+        var liveKey = (steamId64, season);
+        livePoints[liveKey] = livePoints.GetValueOrDefault(liveKey, 0) + points;
+
+        var key = (steamId64, season);
+        if (!pendingPoints.TryGetValue(key, out var pending)) {
+            pending = new PendingPoints();
+            pendingPoints[key] = pending;
+        }
+
+        pending.Name = name;
+        pending.Points += points;
+    }
+
+    private void SeedPoints(ulong steamId64, string season) {
+        var key = (steamId64, season);
+        if (db == null || livePoints.ContainsKey(key)) {
+            return;
+        }
+
+        try {
+            DataTable table = db.select(
+                $"points FROM {PointsTable} WHERE steamid64=@id AND season=@season",
+                new MySqlParameter("@id", steamId64.ToString()),
+                new MySqlParameter("@season", season)
+            );
+
+            livePoints[key] = table.Rows.Count > 0 ? Convert.ToInt32(table.Rows[0]["points"]) : 0;
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed seeding points for {steamId64}/{season}: {e.Message}");
+            livePoints[key] = 0;
+        }
+    }
+
+    // Public read for other modules (DamageReport's player_daily_stat rating/points
+    // snapshot, ask 22) -- part two (points) only, current season, always live.
+    public bool TryGetPoints(ulong steamId64, string season, out int points) {
+        points = 0;
+
+        if (steamId64 == 0) {
+            return false;
+        }
+
+        SeedPoints(steamId64, season);
+
+        return livePoints.TryGetValue((steamId64, season), out points);
+    }
+
+    private void SetPendingRating(ulong steamId64, string name, int rating) {
+        if (!pendingRatings.TryGetValue(steamId64, out var pending)) {
+            pending = new PendingRating();
+            pendingRatings[steamId64] = pending;
+        }
+
+        pending.Name = name;
+        pending.Rating = rating;
+        pending.MatchesDelta += 1;
+    }
+
+    // Hands the pending kill log + rating snapshots to a background task; rows the
+    // database does not confirm are merged back and retried on a later flush, so a
+    // temporary outage only delays persistence instead of losing it. liveRating stays
+    // correct throughout -- this only decides when that becomes durable.
+    private void FlushPendingWrites(string source) {
+        var database = db;
+        if (database == null || flushInProgress) {
+            return;
+        }
+
+        if (pendingKillEvents.Count == 0 && pendingRatings.Count == 0 && pendingPoints.Count == 0) {
+            return;
+        }
+
+        var killBatch = pendingKillEvents.ToList();
+        pendingKillEvents.Clear();
+
+        var ratingBatch = pendingRatings.ToList();
+        pendingRatings.Clear();
+
+        var pointsBatch = pendingPoints.ToList();
+        pendingPoints.Clear();
+
+        flushInProgress = true;
+
+        Task.Run(() => {
+            var unwrittenKills = new List<PendingKillEvent>();
+            var unwrittenRatings = new List<KeyValuePair<ulong, PendingRating>>();
+            var unwrittenPoints = new List<KeyValuePair<(ulong SteamId64, string Season), PendingPoints>>();
+            bool dbDown = false;
+
+            foreach (var kill in killBatch) {
+                if (dbDown) {
+                    unwrittenKills.Add(kill);
+                    continue;
+                }
+
+                int affected = database.insert(
+                    $"INTO {KillEventTable} (match_id, stamp, mapname, attacker, attackerid64, attacker_rating_before, attacker_delta, " +
+                    "attacker_points_delta, victim, victimid64, victim_rating_before, victim_delta, weapon, headshot) " +
+                    "VALUES (@match_id, NOW(), @mapname, @attacker, @attackerid64, @attacker_rb, @attacker_delta, " +
+                    "@attacker_points_delta, @victim, @victimid64, @victim_rb, @victim_delta, @weapon, @headshot)",
+                    new MySqlParameter("@match_id", (object?)kill.MatchId ?? DBNull.Value),
+                    new MySqlParameter("@mapname", kill.MapName),
+                    new MySqlParameter("@attacker", kill.AttackerName),
+                    new MySqlParameter("@attackerid64", kill.AttackerSteamId64.ToString()),
+                    new MySqlParameter("@attacker_rb", kill.AttackerRatingBefore),
+                    new MySqlParameter("@attacker_delta", kill.AttackerDelta),
+                    new MySqlParameter("@attacker_points_delta", kill.AttackerPointsDelta),
+                    new MySqlParameter("@victim", kill.VictimName),
+                    new MySqlParameter("@victimid64", kill.VictimSteamId64.ToString()),
+                    new MySqlParameter("@victim_rb", kill.VictimRatingBefore),
+                    new MySqlParameter("@victim_delta", kill.VictimDelta),
+                    new MySqlParameter("@weapon", kill.Weapon),
+                    new MySqlParameter("@headshot", kill.Headshot ? 1 : 0)
+                );
+
+                if (affected == 0) {
+                    // insert logs and returns 0 on failure; assume the DB is down and
+                    // keep the rest cached instead of stalling on a timeout per row.
+                    dbDown = true;
+                    unwrittenKills.Add(kill);
+                }
+            }
+
+            foreach (var kv in ratingBatch) {
+                if (dbDown) {
+                    unwrittenRatings.Add(kv);
+                    continue;
+                }
+
+                ulong steamId64 = kv.Key;
+                var pending = kv.Value;
+
+                int affected = database.insert(
+                    $"INTO {RatingTable} (steamid64, name, rating, matches, updated_at) " +
+                    "VALUES (@steamid64, @name, @rating, @matches, NOW()) " +
+                    "ON DUPLICATE KEY UPDATE name=@name, rating=@rating, matches=matches+@matches, updated_at=NOW()",
+                    new MySqlParameter("@steamid64", steamId64.ToString()),
+                    new MySqlParameter("@name", pending.Name),
+                    new MySqlParameter("@rating", pending.Rating),
+                    new MySqlParameter("@matches", pending.MatchesDelta)
+                );
+
+                if (affected == 0) {
+                    dbDown = true;
+                    unwrittenRatings.Add(kv);
+                }
+            }
+
+            foreach (var kv in pointsBatch) {
+                if (dbDown) {
+                    unwrittenPoints.Add(kv);
+                    continue;
+                }
+
+                var (steamId64, season) = kv.Key;
+                var pending = kv.Value;
+
+                int affected = database.insert(
+                    $"INTO {PointsTable} (steamid64, season, name, points, updated_at) " +
+                    "VALUES (@steamid64, @season, @name, @points, NOW()) " +
+                    "ON DUPLICATE KEY UPDATE name=@name, points=points+@points, updated_at=NOW()",
+                    new MySqlParameter("@steamid64", steamId64.ToString()),
+                    new MySqlParameter("@season", season),
+                    new MySqlParameter("@name", pending.Name),
+                    new MySqlParameter("@points", pending.Points)
+                );
+
+                if (affected == 0) {
+                    dbDown = true;
+                    unwrittenPoints.Add(kv);
+                }
+            }
+
+            Server.NextFrame(() => {
+                flushInProgress = false;
+
+                // Put retried kills back in front so the log stays chronological.
+                pendingKillEvents.InsertRange(0, unwrittenKills);
+
+                foreach (var kv in unwrittenRatings) {
+                    MergePendingRating(kv.Key, kv.Value);
+                }
+
+                foreach (var kv in unwrittenPoints) {
+                    if (!pendingPoints.TryGetValue(kv.Key, out var existing)) {
+                        pendingPoints[kv.Key] = kv.Value;
+                    } else {
+                        existing.Name = kv.Value.Name;
+                        existing.Points += kv.Value.Points;
+                    }
+                }
+
+                int unwritten = unwrittenKills.Count + unwrittenRatings.Count + unwrittenPoints.Count;
+                if (unwritten > 0) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten} rows cached for retry.");
+                } else {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending DB writes ({source}): kills={killBatch.Count}, ratingRows={ratingBatch.Count}, pointsRows={pointsBatch.Count}");
+                }
+            });
+        });
+    }
+
+    // A newer pending entry for the same player (from kills that happened after this
+    // flush started) already carries the freshest rating -- only the retried match count
+    // needs folding back in, never the rating itself.
+    private void MergePendingRating(ulong steamId64, PendingRating rating) {
+        if (pendingRatings.TryGetValue(steamId64, out var existing)) {
+            existing.MatchesDelta += rating.MatchesDelta;
+        } else {
+            pendingRatings[steamId64] = rating;
+        }
+    }
+
+    // ----- round / map hooks -----
+
+    private void OnMapStart(string mapName) {
+        if (!isActive) {
+            return;
+        }
+
+        FlushPendingWrites("MapStart");
+        RefreshMatchWindow("MapStart");
+    }
+
+    private HookResult OnRoundEnd(EventRoundEnd eventInfo) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        if (statsGateOpen && pointsPerRoundWin != 0) {
+            string season = CurrentSeason();
+
+            foreach (var p in Utilities.GetPlayers()) {
+                if (!IsRealPlayer(p) || p!.TeamNum != eventInfo.Winner) {
+                    continue;
+                }
+
+                AddPoints(p.SteamID, CleanName(p.PlayerName), season, pointsPerRoundWin);
+            }
+        }
+
+        FlushPendingWrites("RoundEnd");
+        return HookResult.Continue;
+    }
+
+    // ----- leaderboard -----
+
+    private void OnEloTopCommand(CCSPlayerController? player, CommandInfo commandInfo) {
+        if (!isActive || player == null || !player.IsValid || db == null) {
+            return;
+        }
+
+        try {
+            DataTable table = db.select(
+                $"name, steamid64, rating FROM {RatingTable} ORDER BY rating DESC LIMIT @limit",
+                new MySqlParameter("@limit", topLimit)
+            );
+
+            player.PrintToChat($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: Elo leaderboard:");
+
+            int rank = 1;
+            ulong self = player.SteamID;
+
+            foreach (DataRow row in table.Rows) {
+                string name = row["name"]?.ToString() ?? "Unknown";
+                int rating = Convert.ToInt32(row["rating"]);
+                TryGetUInt64(row["steamid64"], out ulong steamId64);
+
+                string color = steamId64 == self ? ChatColors.Green.ToString() : ChatColors.Default.ToString();
+                player.PrintToChat($"  {color}{rank}. {name}: {rating}{ChatColors.Default}");
+                rank++;
+            }
+
+            if (table.Rows.Count == 0) {
+                player.PrintToChat($" {ChatColors.Default}No Elo history yet.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed showing leaderboard: {e.Message}");
+            player.PrintToChat($" {ChatColors.Red}{chatPrefix}: Failed to load leaderboard.{ChatColors.Default}");
+        }
+    }
+
+    private void OnEloPointsTopCommand(CCSPlayerController? player, CommandInfo commandInfo) {
+        if (!isActive || player == null || !player.IsValid || db == null) {
+            return;
+        }
+
+        try {
+            string season = CurrentSeason();
+
+            DataTable table = db.select(
+                $"name, steamid64, points FROM {PointsTable} WHERE season=@season ORDER BY points DESC LIMIT @limit",
+                new MySqlParameter("@season", season),
+                new MySqlParameter("@limit", topLimit)
+            );
+
+            player.PrintToChat($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: Points leaderboard ({season}):");
+
+            int rank = 1;
+            ulong self = player.SteamID;
+
+            foreach (DataRow row in table.Rows) {
+                string name = row["name"]?.ToString() ?? "Unknown";
+                int points = Convert.ToInt32(row["points"]);
+                TryGetUInt64(row["steamid64"], out ulong steamId64);
+
+                string color = steamId64 == self ? ChatColors.Green.ToString() : ChatColors.Default.ToString();
+                player.PrintToChat($"  {color}{rank}. {name}: {points}{ChatColors.Default}");
+                rank++;
+            }
+
+            if (table.Rows.Count == 0) {
+                player.PrintToChat($" {ChatColors.Default}No points this season yet.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed showing points leaderboard: {e.Message}");
+            player.PrintToChat($" {ChatColors.Red}{chatPrefix}: Failed to load points leaderboard.{ChatColors.Default}");
+        }
+    }
+
+    // ----- player-facing chat commands (!elorank / !elotop, see rankCommand/topCommand) -----
+    //
+    // Distinct from css_elo_top/css_elo_points_top above: those are admin-facing console
+    // commands showing rating/points alone; these are the community's own !rank/!top,
+    // reading across three tables this module doesn't own (player_duel_total,
+    // player_round_stat, player_daily_stat, all DamageReport's) via plain read-only SQL on
+    // this module's own Database instance -- same "shared table, no RPC" pattern OSWeb uses
+    // against OSBase's tables. No write ever goes the other way.
+    private HookResult OnPlayerChat(EventPlayerChat eventInfo) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        if (eventInfo?.Userid == null || string.IsNullOrWhiteSpace(eventInfo.Text)) {
+            return HookResult.Continue;
+        }
+
+        CCSPlayerController? player = Utilities.GetPlayerFromUserid(eventInfo.Userid);
+        if (player == null || !player.IsValid) {
+            return HookResult.Continue;
+        }
+
+        string text = eventInfo.Text.Trim();
+
+        if (text.Equals(rankCommand, StringComparison.OrdinalIgnoreCase)) {
+            ShowRankCommand(player);
+        } else if (text.Equals(topCommand, StringComparison.OrdinalIgnoreCase)) {
+            ShowTopCommand(player);
+        }
+
+        return HookResult.Continue;
+    }
+
+    // Field order here is deliberately one PrintToChat call per line, not one fused format
+    // string -- reordering which stat leads (points vs. rating vs. something else, the
+    // owner's call, still pending) is a cut-and-paste of a line, not a rewrite.
+    private void ShowRankCommand(CCSPlayerController player) {
+        if (db == null) {
+            return;
+        }
+
+        ulong steamId64 = player.SteamID;
+        string season = CurrentSeason();
+
+        try {
+            DataTable pointsRow = db.select(
+                $"points FROM {PointsTable} WHERE steamid64=@id AND season=@season",
+                new MySqlParameter("@id", steamId64.ToString()),
+                new MySqlParameter("@season", season)
+            );
+            int points = pointsRow.Rows.Count > 0 ? Convert.ToInt32(pointsRow.Rows[0]["points"]) : 0;
+
+            DataTable rankRow = db.select(
+                $"COUNT(*) + 1 AS rnk FROM {PointsTable} WHERE season=@season AND points > @points",
+                new MySqlParameter("@season", season),
+                new MySqlParameter("@points", points)
+            );
+            int rank = rankRow.Rows.Count > 0 ? Convert.ToInt32(rankRow.Rows[0]["rnk"]) : 1;
+
+            DataTable totalRow = db.select(
+                $"COUNT(*) AS cnt FROM {PointsTable} WHERE season=@season",
+                new MySqlParameter("@season", season)
+            );
+            int total = totalRow.Rows.Count > 0 ? Convert.ToInt32(totalRow.Rows[0]["cnt"]) : 0;
+
+            TryGetRating(steamId64, out int rating, out _);
+
+            // player_duel_total: DamageReport-owned (ask 16a/24 roll-up). Read-only here.
+            DataTable duelRow = db.select(
+                "kills, deaths, headshots, assists FROM player_duel_total WHERE steamid64=@id AND season=@season",
+                new MySqlParameter("@id", steamId64.ToString()),
+                new MySqlParameter("@season", season)
+            );
+            int kills = 0, deaths = 0, headshots = 0, assists = 0;
+            if (duelRow.Rows.Count > 0) {
+                kills = Convert.ToInt32(duelRow.Rows[0]["kills"]);
+                deaths = Convert.ToInt32(duelRow.Rows[0]["deaths"]);
+                headshots = Convert.ToInt32(duelRow.Rows[0]["headshots"]);
+                assists = Convert.ToInt32(duelRow.Rows[0]["assists"]);
+            }
+
+            // player_round_stat: DamageReport-owned, keyed by (steamid64, side, season, map)
+            // -- summed across every side/map for a season total, since neither dimension is
+            // wanted here.
+            DataTable roundRow = db.select(
+                "SUM(rounds) AS total_rounds, SUM(rounds_won) AS total_won FROM player_round_stat WHERE steamid64=@id AND season=@season",
+                new MySqlParameter("@id", steamId64.ToString()),
+                new MySqlParameter("@season", season)
+            );
+            int totalRounds = 0, wonRounds = 0;
+            if (roundRow.Rows.Count > 0 && roundRow.Rows[0]["total_rounds"] != DBNull.Value) {
+                totalRounds = Convert.ToInt32(roundRow.Rows[0]["total_rounds"]);
+                wonRounds = Convert.ToInt32(roundRow.Rows[0]["total_won"]);
+            }
+            int lostRounds = totalRounds - wonRounds;
+
+            // player_daily_stat: DamageReport-owned, keyed by calendar day -- summed over the
+            // season's date range since the table itself carries no season column.
+            var (seasonStart, seasonEnd) = SeasonDateRange(season);
+            DataTable secondsRow = db.select(
+                "SUM(seconds) AS total_seconds FROM player_daily_stat WHERE steamid64=@id AND day BETWEEN @start AND @end",
+                new MySqlParameter("@id", steamId64.ToString()),
+                new MySqlParameter("@start", seasonStart),
+                new MySqlParameter("@end", seasonEnd)
+            );
+            long totalSeconds = 0;
+            if (secondsRow.Rows.Count > 0 && secondsRow.Rows[0]["total_seconds"] != DBNull.Value) {
+                totalSeconds = Convert.ToInt64(secondsRow.Rows[0]["total_seconds"]);
+            }
+
+            double hsPct = kills > 0 ? 100.0 * headshots / kills : 0.0;
+            double kd = deaths > 0 ? (double)kills / deaths : kills;
+
+            player.PrintToChat($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: Din placering: #{rank}/{total}");
+            player.PrintToChat($"  Poäng: {FormatThousands(points)}          (Rating: {FormatThousands(rating)})");
+            player.PrintToChat($"  Kills: {kills} (Headshots: {headshots}) | Deaths: {deaths} | Assists: {assists}");
+            player.PrintToChat($"  Vunna rundor: {wonRounds} | Förlorade: {lostRounds}");
+            player.PrintToChat($"  Headshot: {hsPct.ToString("F1", CultureInfo.InvariantCulture)}% | KD: {kd.ToString("F2", CultureInfo.InvariantCulture)}");
+            player.PrintToChat($"  Speltid denna period: {FormatPlaytime(totalSeconds)}");
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed showing rank for {steamId64}: {e.Message}");
+            player.PrintToChat($" {ChatColors.Red}{chatPrefix}: Kunde inte hämta din statistik.{ChatColors.Default}");
+        }
+    }
+
+    private void ShowTopCommand(CCSPlayerController player) {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            string season = CurrentSeason();
+
+            DataTable table = db.select(
+                $"name, steamid64, points FROM {PointsTable} WHERE season=@season ORDER BY points DESC LIMIT @limit",
+                new MySqlParameter("@season", season),
+                new MySqlParameter("@limit", topLimit)
+            );
+
+            player.PrintToChat($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: Poängtoppen ({season}):");
+
+            int rank = 1;
+            ulong self = player.SteamID;
+
+            foreach (DataRow row in table.Rows) {
+                string name = row["name"]?.ToString() ?? "Unknown";
+                int points = Convert.ToInt32(row["points"]);
+                TryGetUInt64(row["steamid64"], out ulong steamId64);
+
+                string color = steamId64 == self ? ChatColors.Green.ToString() : ChatColors.Default.ToString();
+                player.PrintToChat($"  {color}{rank}. {name}: {FormatThousands(points)}{ChatColors.Default}");
+                rank++;
+            }
+
+            if (table.Rows.Count == 0) {
+                player.PrintToChat($" {ChatColors.Default}Inga poäng denna period ännu.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed showing !top: {e.Message}");
+            player.PrintToChat($" {ChatColors.Red}{chatPrefix}: Kunde inte hämta topplistan.{ChatColors.Default}");
+        }
+    }
+
+    private static (DateTime Start, DateTime End) SeasonDateRange(string season) {
+        int qIdx = season.IndexOf('Q');
+        if (qIdx <= 0 || !int.TryParse(season.AsSpan(0, qIdx), out int year) || !int.TryParse(season.AsSpan(qIdx + 1), out int quarter)) {
+            DateTime now = DateTime.UtcNow.Date;
+            return (now, now);
+        }
+
+        int startMonth = ((quarter - 1) * 3) + 1;
+        DateTime start = new DateTime(year, startMonth, 1, 0, 0, 0, DateTimeKind.Utc);
+        DateTime end = start.AddMonths(3).AddDays(-1);
+        return (start, end);
+    }
+
+    private static string FormatThousands(int n) {
+        return n.ToString("N0", CultureInfo.InvariantCulture).Replace(",", " ");
+    }
+
+    private static string FormatPlaytime(long totalSeconds) {
+        if (totalSeconds <= 0) {
+            return "0 timmar";
+        }
+
+        TimeSpan ts = TimeSpan.FromSeconds(totalSeconds);
+        if (ts.Days > 0) {
+            return $"{ts.Days} dagar, {ts.Hours} timmar";
+        }
+        if (ts.Hours > 0) {
+            return $"{ts.Hours} timmar, {ts.Minutes} minuter";
+        }
+        return $"{ts.Minutes} minuter";
+    }
+
+    // ----- admin: open/close the scoring window on the site's tournament_match row -----
+    //
+    // These SET the window, they are not their own source of truth -- the site's
+    // tournament_match row is (id, server_address, starts_at, ends_at as unix seconds;
+    // confirmed contract, see docs/osbase-elo-contract.md on the OSWeb side and
+    // ELO-MODULE.md here). Every write is preceded by an IsThisServer() check so a typo'd
+    // id can't open or close a match that belongs to a different server.
+
+    private void OnEloMatchStartCommand(CCSPlayerController? player, CommandInfo commandInfo) {
+        if (!isActive || db == null || !RequireAdmin(player)) {
+            return;
+        }
+
+        if (!int.TryParse(commandInfo.GetArg(1), out int matchId)) {
+            RespondTo(player, "Usage: css_elo_match_start <match_id>");
+            return;
+        }
+
+        try {
+            DataTable row = db.select(
+                $"id, server_address FROM {MatchTable} WHERE id=@id",
+                new MySqlParameter("@id", matchId)
+            );
+
+            if (row.Rows.Count == 0) {
+                RespondTo(player, $"No tournament_match row with id {matchId}.");
+                return;
+            }
+
+            string? addr = row.Rows[0]["server_address"]?.ToString();
+            if (!IsThisServer(addr)) {
+                RespondTo(player, $"Match {matchId} is assigned to a different server (server_address='{addr}').");
+                return;
+            }
+
+            db.update(
+                $"{MatchTable} SET starts_at=UNIX_TIMESTAMP() WHERE id=@id",
+                new MySqlParameter("@id", matchId)
+            );
+
+            RespondTo(player, $"Match {matchId}: Elo scoring window opened.");
+            RefreshMatchWindow("MatchStart");
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] css_elo_match_start failed: {e.Message}");
+            RespondTo(player, "Failed to open the Elo scoring window -- see server console.");
+        }
+    }
+
+    private void OnEloMatchStopCommand(CCSPlayerController? player, CommandInfo commandInfo) {
+        if (!isActive || db == null || !RequireAdmin(player)) {
+            return;
+        }
+
+        try {
+            int matchId;
+
+            if (commandInfo.ArgCount > 1 && int.TryParse(commandInfo.GetArg(1), out int explicitId)) {
+                DataTable row = db.select(
+                    $"id, server_address FROM {MatchTable} WHERE id=@id",
+                    new MySqlParameter("@id", explicitId)
+                );
+
+                if (row.Rows.Count == 0) {
+                    RespondTo(player, $"No tournament_match row with id {explicitId}.");
+                    return;
+                }
+
+                if (!IsThisServer(row.Rows[0]["server_address"]?.ToString())) {
+                    RespondTo(player, $"Match {explicitId} is assigned to a different server (server_address='{row.Rows[0]["server_address"]}').");
+                    return;
+                }
+
+                matchId = explicitId;
+            } else {
+                // No id given: close whichever match this server currently has open.
+                // server_address can't be filtered in SQL (free text, needs canonicalization),
+                // so pull every open match and pick this server's most recently started one.
+                DataTable open = db.select(
+                    $"id, server_address, starts_at FROM {MatchTable} WHERE starts_at IS NOT NULL AND ends_at IS NULL"
+                );
+
+                int? found = null;
+                long bestStart = long.MinValue;
+
+                foreach (DataRow candidate in open.Rows) {
+                    if (!IsThisServer(candidate["server_address"]?.ToString())) {
+                        continue;
+                    }
+
+                    long startedAt = Convert.ToInt64(candidate["starts_at"]);
+                    if (startedAt > bestStart) {
+                        bestStart = startedAt;
+                        found = Convert.ToInt32(candidate["id"]);
+                    }
+                }
+
+                if (!found.HasValue) {
+                    RespondTo(player, "No open match found for this server -- pass a match id explicitly.");
+                    return;
+                }
+
+                matchId = found.Value;
+            }
+
+            db.update(
+                $"{MatchTable} SET ends_at=UNIX_TIMESTAMP() WHERE id=@id",
+                new MySqlParameter("@id", matchId)
+            );
+
+            RespondTo(player, $"Match {matchId}: Elo scoring window closed.");
+            FlushPendingWrites("MatchStop");
+            RefreshMatchWindow("MatchStop");
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] css_elo_match_stop failed: {e.Message}");
+            RespondTo(player, "Failed to close the Elo scoring window -- see server console.");
+        }
+    }
+
+    private bool RequireAdmin(CCSPlayerController? player) {
+        // Console (player == null) is trusted; an in-game caller needs the configured permission.
+        if (player == null) {
+            return true;
+        }
+
+        if (!player.IsValid || !AdminManager.PlayerHasPermissions(player, adminPermission)) {
+            RespondTo(player, "You do not have permission to do that.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private void RespondTo(CCSPlayerController? player, string message) {
+        if (player != null && player.IsValid) {
+            player.PrintToChat($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: {message}");
+        }
+
+        Console.WriteLine($"[INFO] OSBase[{ModuleName}] {message}");
+    }
+
+    // ----- helpers -----
+
+    private static bool IsRealPlayer(CCSPlayerController? player) {
+        if (player == null || !player.IsValid || !player.UserId.HasValue || player.IsHLTV || player.IsBot) {
+            return false;
+        }
+
+        return player.SteamID > 0;
+    }
+
+    private static string NormalizeWeapon(string? weapon) {
+        string normalized = (weapon ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (normalized.StartsWith("weapon_", StringComparison.Ordinal)) {
+            normalized = normalized.Substring("weapon_".Length);
+        }
+
+        return normalized;
+    }
+
+    private static string CleanName(string? name) {
+        string clean = name ?? "Unknown";
+        clean = clean.Replace('\n', ' ').Replace('\r', ' ').Trim();
+
+        if (clean.Length == 0) {
+            clean = "Unknown";
+        }
+
+        if (clean.Length > 64) {
+            clean = clean.Substring(0, 64);
+        }
+
+        return clean;
+    }
+
+    private static string Unquote(string value) {
+        if (string.IsNullOrWhiteSpace(value)) {
+            return string.Empty;
+        }
+
+        if (value.Length >= 2 && value.StartsWith("\"", StringComparison.Ordinal) && value.EndsWith("\"", StringComparison.Ordinal)) {
+            return value.Substring(1, value.Length - 2);
+        }
+
+        return value;
+    }
+
+    private static int ParseInt(string value, int defaultValue, int min, int max) {
+        if (!int.TryParse(value, out int parsed)) {
+            return defaultValue;
+        }
+
+        return Math.Clamp(parsed, min, max);
+    }
+
+    private static double ParseDouble(string value, double defaultValue, double min, double max) {
+        if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsed)) {
+            return defaultValue;
+        }
+
+        return Math.Clamp(parsed, min, max);
+    }
+
+    private static bool TryGetUInt64(object? value, out ulong result) {
+        result = 0;
+
+        if (value == null || value == DBNull.Value) {
+            return false;
+        }
+
+        return ulong.TryParse(value.ToString(), out result);
+    }
+}

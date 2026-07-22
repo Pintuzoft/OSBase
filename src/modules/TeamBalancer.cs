@@ -15,6 +15,7 @@ namespace OSBase.Modules {
 
         private CounterStrikeSharp.API.Modules.Timers.Timer? warmupBalanceTimer;
         private GameStats? gameStats;
+        private EloRating? eloRating;
 
         // Teams
         private const int TEAM_S = (int)CsTeam.Spectator;
@@ -27,11 +28,58 @@ namespace OSBase.Modules {
         private int bombsites = 2;
         private string currentMap = "";
 
+        // cfg (teambalancer.cfg) -- min_rated_matches: below this many rated Elo duels, a
+        // player's own rating is too noisy to trust for balancing and they're treated as the
+        // roster median instead (see SkillResolver.GetEffectiveSkill). Config, not a constant,
+        // for the same reason ask 11's min_players is: nobody knows the right number until
+        // real rating data exists, and changing it shouldn't need a rebuild.
+        private int minRatedMatches = 10;
+
+        // balancer_skill_source: gamestats (default) | elo | shadow. Elo doesn't replace
+        // GameStats' skill signal the moment this code ships -- GameStats.calcSkill()/
+        // skill_log keeps writing regardless (SaveIfEligible is self-contained, triggered by
+        // its own round/map-end hooks, not by anything reading calcSkill() -- verified, not
+        // assumed), and the plan is to let ratings warm up for a season before the actual
+        // balancing decision moves. "shadow" balances on GameStats as always but also
+        // computes what Elo would have shown for the same teams and logs the difference plus
+        // how many of the roster have cleared min_rated_matches -- makes "are the ratings
+        // ready" an observation instead of a guessed cutover date. Overlap between GameStats
+        // and player_daily_stat.rating (ask 22, STATS-MODULE.md) is the form curve's only
+        // control period -- once GameStats stops, those days don't come back.
+        private string balancerSkillSource = "gamestats";
+
+        // Elo can feed the skill signal (see SkillResolver.cs and ELO-MODULE.md), selected by
+        // balancerSkillSource above; gameStats itself stays regardless -- it's still the
+        // team/round-tracking substrate (getTeam, movePlayer, roundNumber, immune), that part
+        // was never being retired. currentRosterMedian/currentRosterSpread are recomputed once
+        // per balance pass (RefreshRosterStats) rather than per player-lookup -- cheap either
+        // way at CS2 headcounts, but there's no reason to rescan the roster per lookup.
+        private const float FallbackSkill = 1000f; // matches EloRating's start_rating default
+        private float currentRosterMedian = FallbackSkill;
+        private float currentRosterSpread = MIN_ROSTER_SPREAD;
+
         // Warmup policy
-        private const float WARMUP_TARGET_DEVIATION = 1500f;
+        // Two scales, selected by balancer_skill_source, not one replacing the other. In
+        // "gamestats"/"shadow" mode the gap being compared is on GameStats' own ~4000-11000
+        // skill scale -- the ORIGINAL literal constants below are already correct for that
+        // and need no conversion. Only in "elo" mode does the gap come from Elo's much
+        // narrower scale, where the same literal numbers would make swaps almost never
+        // trigger -- silently near-inert, not just miscalibrated. The *_RATIO constants
+        // preserve each original constant's fraction of GameStats' typical spread (~7000,
+        // not re-guessed for Elo's still-unknown distribution -- that would just be guessing
+        // again), multiplied by the roster's actual current Elo spread (see
+        // SkillResolver.ComputeRosterSpread) only when that's the scale actually in play.
+        // Revisit the ratios themselves once real Elo spread data exists.
+        private const float LegacySpreadReference = 7000f;
+        private const float WARMUP_TARGET_DEVIATION_LEGACY = 1500f;
+        private const float WARMUP_TARGET_DEVIATION_RATIO = WARMUP_TARGET_DEVIATION_LEGACY / LegacySpreadReference;
         private const float WARMUP_BURST_AT = 57.0f; // 60s warmup -> run with ~3s left
         private const int WARMUP_FINAL_MAX_SWAPS = 10;
         private bool warmupBalancedThisMap = false;
+
+        private float WARMUP_TARGET_DEVIATION => balancerSkillSource == "elo"
+            ? WARMUP_TARGET_DEVIATION_RATIO * currentRosterSpread
+            : WARMUP_TARGET_DEVIATION_LEGACY;
 
         // Round 1 safety-net
         private bool firstRoundSizeFixDone = false;
@@ -41,17 +89,55 @@ namespace OSBase.Modules {
         private const int MAX_ROUNDS = 20;
 
         // Swap thresholds
-        private const float MID_SWAP_THRESHOLD = 1500f;
-        private const float LATE_SWAP_THRESHOLD = 1900f;
-        private const float LATE_HYSTERESIS = 700f;
-        private const float MIN_PROJECTED_GAIN = 800f;
+        private const float MID_SWAP_THRESHOLD_LEGACY = 1500f;
+        private const float LATE_SWAP_THRESHOLD_LEGACY = 1900f;
+        private const float LATE_HYSTERESIS_LEGACY = 700f;
+        private const float MIN_PROJECTED_GAIN_LEGACY = 800f;
+        private const float MID_SWAP_THRESHOLD_RATIO = MID_SWAP_THRESHOLD_LEGACY / LegacySpreadReference;
+        private const float LATE_SWAP_THRESHOLD_RATIO = LATE_SWAP_THRESHOLD_LEGACY / LegacySpreadReference;
+        private const float LATE_HYSTERESIS_RATIO = LATE_HYSTERESIS_LEGACY / LegacySpreadReference;
+        private const float MIN_PROJECTED_GAIN_RATIO = MIN_PROJECTED_GAIN_LEGACY / LegacySpreadReference;
+
+        private float MID_SWAP_THRESHOLD => balancerSkillSource == "elo"
+            ? MID_SWAP_THRESHOLD_RATIO * currentRosterSpread : MID_SWAP_THRESHOLD_LEGACY;
+        private float LATE_SWAP_THRESHOLD => balancerSkillSource == "elo"
+            ? LATE_SWAP_THRESHOLD_RATIO * currentRosterSpread : LATE_SWAP_THRESHOLD_LEGACY;
+        private float LATE_HYSTERESIS => balancerSkillSource == "elo"
+            ? LATE_HYSTERESIS_RATIO * currentRosterSpread : LATE_HYSTERESIS_LEGACY;
+        private float MIN_PROJECTED_GAIN => balancerSkillSource == "elo"
+            ? MIN_PROJECTED_GAIN_RATIO * currentRosterSpread : MIN_PROJECTED_GAIN_LEGACY;
 
         // Anti-churn
         private const int MIN_ROUNDS_BETWEEN_SWAPS = 3;
         private const int NO_SWAP_LAST_N_ROUNDS = 3;
         private const int MAX_LATE_SWAPS = 1;
         private const int MAX_SWAPS_PER_MAP = 3;
-        private const float EMERGENCY_GAP = 3500f;
+        private const float EMERGENCY_GAP_LEGACY = 3500f;
+        private const float COMP_PENALTY_LEGACY = 300f;
+        private const float EMERGENCY_GAP_RATIO = EMERGENCY_GAP_LEGACY / LegacySpreadReference;
+        private const float COMP_PENALTY_RATIO = COMP_PENALTY_LEGACY / LegacySpreadReference;
+        private const float MIN_ROSTER_SPREAD = 50f;
+
+        private float EMERGENCY_GAP => balancerSkillSource == "elo"
+            ? EMERGENCY_GAP_RATIO * currentRosterSpread : EMERGENCY_GAP_LEGACY;
+        private float CompPenaltyScale => balancerSkillSource == "elo"
+            ? COMP_PENALTY_RATIO * currentRosterSpread : COMP_PENALTY_LEGACY;
+
+        // Unconditionally Elo-scale, regardless of balancer_skill_source -- exist only so
+        // LogShadowSkillComparison has something on the right scale to print next to elo_gap.
+        // The *_LEGACY properties above are branch-correct for real decisions (literal in
+        // gamestats/shadow, ratio*spread only in elo), which means in shadow mode they report
+        // the GameStats-scale numbers -- exactly the wrong thing to compare an Elo-scale gap
+        // against. Same category of bug as the one just fixed in the decision path, caught
+        // one level in: a shadow log nobody can trust is worse than no shadow log, because it
+        // still looks like data.
+        private float EloWarmupTargetDeviation => WARMUP_TARGET_DEVIATION_RATIO * currentRosterSpread;
+        private float EloMidSwapThreshold => MID_SWAP_THRESHOLD_RATIO * currentRosterSpread;
+        private float EloLateSwapThreshold => LATE_SWAP_THRESHOLD_RATIO * currentRosterSpread;
+        private float EloLateHysteresis => LATE_HYSTERESIS_RATIO * currentRosterSpread;
+        private float EloMinProjectedGain => MIN_PROJECTED_GAIN_RATIO * currentRosterSpread;
+        private float EloEmergencyGap => EMERGENCY_GAP_RATIO * currentRosterSpread;
+        private float EloCompPenaltyScale => COMP_PENALTY_RATIO * currentRosterSpread;
 
         private int lastSwapRound = -999;
         private int lateSwapsThisHalf = 0;
@@ -66,6 +152,9 @@ namespace OSBase.Modules {
 
         protected override void OnLoad() {
             gameStats = osbase?.GetGameStats();
+            eloRating = osbase?.GetModule<EloRating>();
+            CreateCustomConfigs();
+            LoadConfig();
             LoadMapInfo();
         }
 
@@ -74,6 +163,7 @@ namespace OSBase.Modules {
             warmupBalanceTimer = null;
 
             gameStats = null;
+            eloRating = null;
 
             currentMap = "";
             bombsites = 2;
@@ -90,7 +180,159 @@ namespace OSBase.Modules {
 
         protected override void OnReloadConfig() {
             gameStats = osbase?.GetGameStats();
+            eloRating = osbase?.GetModule<EloRating>();
+            CreateCustomConfigs();
+            LoadConfig();
             LoadMapInfo();
+        }
+
+        private void CreateCustomConfigs() {
+            config?.CreateCustomConfig(
+                $"{ModuleName}.cfg",
+                "// TeamBalancer Configuration\n" +
+                "// balancer_skill_source: gamestats (default) | elo | shadow.\n" +
+                "// gamestats: unchanged behaviour, GameStats.calcSkill() drives balancing.\n" +
+                "// elo: EloRating.rating drives balancing instead.\n" +
+                "// shadow: balances on gamestats as usual, but also computes and logs what\n" +
+                "//   elo would have shown for the same teams, plus how many of the roster\n" +
+                "//   have cleared min_rated_matches -- use this to observe whether ratings\n" +
+                "//   are ready before actually switching to elo.\n" +
+                "balancer_skill_source gamestats\n" +
+                "// Below this many rated Elo duels, a player's own rating is too noisy to\n" +
+                "// trust for balancing -- treated as the roster median instead (see\n" +
+                "// SkillResolver.GetEffectiveSkill). Nobody knows the right number until real\n" +
+                "// rating data exists.\n" +
+                "min_rated_matches 10\n"
+            );
+        }
+
+        private void LoadConfig() {
+            minRatedMatches = 10;
+            balancerSkillSource = "gamestats";
+
+            List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
+
+            foreach (var rawLine in cfg) {
+                string line = rawLine.Trim();
+                if (string.IsNullOrWhiteSpace(line) || line.StartsWith("//")) {
+                    continue;
+                }
+
+                var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 2) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Invalid config line skipped: {line}");
+                    continue;
+                }
+
+                string key = parts[0].Trim();
+                string value = parts[1].Trim();
+
+                switch (key.ToLowerInvariant()) {
+                    case "min_rated_matches":
+                        if (int.TryParse(value, out int parsed)) {
+                            minRatedMatches = Math.Clamp(parsed, 0, 10000);
+                        }
+                        break;
+                    case "balancer_skill_source":
+                        string src = value.Trim().ToLowerInvariant();
+                        if (src == "gamestats" || src == "elo" || src == "shadow") {
+                            balancerSkillSource = src;
+                        } else {
+                            Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Invalid balancer_skill_source '{value}' -- defaulting to gamestats.");
+                            balancerSkillSource = "gamestats";
+                        }
+                        break;
+                    default:
+                        Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Unknown config key {key}:{value}");
+                        break;
+                }
+            }
+        }
+
+        // Recomputed at the top of every balance pass (not cached longer than that) so
+        // WARMUP_TARGET_DEVIATION/MID_SWAP_THRESHOLD/etc above -- all properties reading
+        // currentRosterSpread -- reflect who's actually connected right now.
+        private void RefreshRosterStats() {
+            var userIds = Utilities.GetPlayers()
+                .Where(p => IsHumanPlayer(p) && IsPlayingTeam(p))
+                .Select(p => p!.UserId!.Value)
+                .ToList();
+
+            currentRosterMedian = SkillResolver.ComputeRosterMedian(eloRating, userIds, minRatedMatches, FallbackSkill);
+            currentRosterSpread = SkillResolver.ComputeRosterSpread(eloRating, userIds, minRatedMatches, MIN_ROSTER_SPREAD);
+
+            // The ratio->absolute conversion is a first cut, not verified against real Elo
+            // data (none exists yet) -- logging the actual computed thresholds every pass is
+            // the only way to calibrate them later. Without this, a silently near-inert
+            // balancer looks identical to a working one until someone notices teams feel off.
+            // These are the thresholds actually governing decisions in the active
+            // balancer_skill_source -- legacy literal values in gamestats/shadow (correct as-is
+            // for that scale), ratio*spread only in elo mode. currentRosterMedian/Spread
+            // themselves are always the Elo-side numbers (needed by shadow's comparison log
+            // regardless of mode), which is why they're worth logging here even outside elo mode.
+            Console.WriteLine(
+                $"[DEBUG] OSBase[{ModuleName}] roster stats (source={balancerSkillSource}): " +
+                $"elo_median={currentRosterMedian:0} elo_spread={currentRosterSpread:0} | " +
+                $"active thresholds: warmup_target={WARMUP_TARGET_DEVIATION:0} mid_swap={MID_SWAP_THRESHOLD:0} " +
+                $"late_swap={LATE_SWAP_THRESHOLD:0} late_hysteresis={LATE_HYSTERESIS:0} " +
+                $"min_gain={MIN_PROJECTED_GAIN:0} emergency_gap={EMERGENCY_GAP:0} comp_penalty_scale={CompPenaltyScale:0}"
+            );
+        }
+
+        // balancer_skill_source=shadow only: the real decision this pass used GameStats (the
+        // gameStatsTAvg/gameStatsCAvg the caller already computed for that purpose -- no
+        // second GameStats computation here). This adds the one number GameStats mode doesn't
+        // otherwise produce: what Elo would have shown for the exact same two teams right now,
+        // plus how many of them have cleared min_rated_matches. Cheap -- both source values are
+        // already in memory, this is just a second average over a roster of a handful of
+        // players, not a second swap search.
+        private void LogShadowSkillComparison(TeamStats tStats, TeamStats cStats, float gameStatsTAvg, float gameStatsCAvg, string source) {
+            if (balancerSkillSource != "shadow") {
+                return;
+            }
+
+            float eloTAvg = ComputeEloTeamAverage(tStats);
+            float eloCAvg = ComputeEloTeamAverage(cStats);
+            float gameStatsGap = MathF.Abs(gameStatsTAvg - gameStatsCAvg);
+            float eloGap = MathF.Abs(eloTAvg - eloCAvg);
+
+            var allUserIds = tStats.playerList.Keys.Concat(cStats.playerList.Keys).ToList();
+            int ready = 0;
+            foreach (int uid in allUserIds) {
+                var p = Utilities.GetPlayerFromUserid(uid);
+                if (p != null && p.IsValid && eloRating != null && eloRating.TryGetRating(p.SteamID, out _, out int matches) && matches >= minRatedMatches) {
+                    ready++;
+                }
+            }
+
+            // elo_gap is meaningless without something on the same scale to compare it
+            // against -- print the would-be Elo thresholds here, not the active ones
+            // (WARMUP_TARGET_DEVIATION etc. are GameStats-scale literals in shadow mode,
+            // since that's what's actually deciding; comparing elo_gap against those would
+            // reproduce the exact bug this whole property split exists to avoid).
+            Console.WriteLine(
+                $"[INFO] OSBase[{ModuleName}] shadow ({source}): " +
+                $"gamestats_gap={gameStatsGap:0} (T={gameStatsTAvg:0} CT={gameStatsCAvg:0}) | " +
+                $"elo_gap={eloGap:0} (T={eloTAvg:0} CT={eloCAvg:0}) | " +
+                $"elo thresholds (would-be, not active): warmup_target={EloWarmupTargetDeviation:0} " +
+                $"mid_swap={EloMidSwapThreshold:0} late_swap={EloLateSwapThreshold:0} " +
+                $"late_hysteresis={EloLateHysteresis:0} min_gain={EloMinProjectedGain:0} " +
+                $"emergency_gap={EloEmergencyGap:0} comp_penalty_scale={EloCompPenaltyScale:0} | " +
+                $"rated_ready={ready}/{allUserIds.Count} (min_rated_matches={minRatedMatches})"
+            );
+        }
+
+        private float ComputeEloTeamAverage(TeamStats team) {
+            if (team.playerList.Count == 0) {
+                return 0f;
+            }
+
+            double sum = 0d;
+            foreach (var kv in team.playerList) {
+                sum += SkillResolver.GetEffectiveSkill(eloRating, kv.Key, currentRosterMedian, minRatedMatches);
+            }
+
+            return (float)(sum / team.playerList.Count);
         }
 
         protected override void RegisterHandlers() {
@@ -168,10 +410,24 @@ namespace OSBase.Modules {
         }
 
         public float GetEffectiveSkillForPriority(CCSPlayerController player) {
+            // Called ad hoc (e.g. from WeaponRestrict), not necessarily during a balance
+            // pass -- refresh so the median/spread aren't stale from whenever the last one ran.
+            RefreshRosterStats();
+
+            if (balancerSkillSource == "elo") {
+                return SkillResolver.GetEffectiveSkillForPlayer(eloRating, player, currentRosterMedian, minRatedMatches);
+            }
+
             return SkillResolver.GetEffectiveSkillForPlayer(gameStats, player);
         }
 
         public float GetEffectiveSkillForPriority(int userId) {
+            RefreshRosterStats();
+
+            if (balancerSkillSource == "elo") {
+                return SkillResolver.GetEffectiveSkill(eloRating, userId, currentRosterMedian, minRatedMatches);
+            }
+
             return SkillResolver.GetEffectiveSkill(gameStats, userId);
         }
 
@@ -310,6 +566,7 @@ namespace OSBase.Modules {
             if (gs == null) return;
 
             SyncTeams(gs);
+            RefreshRosterStats();
 
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
@@ -339,6 +596,7 @@ namespace OSBase.Modules {
             if (gs == null) return;
 
             SyncTeams(gs);
+            RefreshRosterStats();
 
             if (warmupBalancedThisMap) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] WarmupFinalBalance skipped: already ran.");
@@ -394,6 +652,8 @@ namespace OSBase.Modules {
                 return;
             }
 
+            LogShadowSkillComparison(tStats, cStats, TeamWarmupAverage90d(gs, tStats), TeamWarmupAverage90d(gs, cStats), "warmup_final");
+
             int swapsDone = 0;
             while (swapsDone < WARMUP_FINAL_MAX_SWAPS) {
                 float tAvg = TeamWarmupAverage90d(gs, tStats);
@@ -447,6 +707,7 @@ namespace OSBase.Modules {
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] BalanceAtRoundEnd RUN source=roundend_live phase={PhaseName(gs)}");
 
             SyncTeams(gs);
+            RefreshRosterStats();
 
             var tStats = gs.getTeam(TEAM_T);
             var cStats = gs.getTeam(TEAM_CT);
@@ -487,6 +748,8 @@ namespace OSBase.Modules {
             float tAvg = TeamSignalAverage(gs, tStats);
             float cAvg = TeamSignalAverage(gs, cStats);
             float gap = MathF.Abs(tAvg - cAvg);
+
+            LogShadowSkillComparison(tStats, cStats, tAvg, cAvg, "roundend_live");
 
             if (!ShouldSwapThisRound(gs, gap)) {
                 EnsureBestIsSoloIf2v1(gs);
@@ -909,7 +1172,7 @@ namespace OSBase.Modules {
                 }
             }
 
-            float compPenalty = 300f * (MathF.Abs(strongT - strongCT) + MathF.Abs(weakT - weakCT));
+            float compPenalty = CompPenaltyScale * (MathF.Abs(strongT - strongCT) + MathF.Abs(weakT - weakCT));
             return meanGap + compPenalty;
         }
 
@@ -951,11 +1214,18 @@ namespace OSBase.Modules {
             }
 
             float meanGap = MathF.Abs((tn > 0 ? tSum / tn : 0f) - (cn > 0 ? cSum / cn : 0f));
-            float compPenalty = 300f * (MathF.Abs(strongT - strongCT) + MathF.Abs(weakT - weakCT));
+            float compPenalty = CompPenaltyScale * (MathF.Abs(strongT - strongCT) + MathF.Abs(weakT - weakCT));
             return meanGap + compPenalty;
         }
 
+        // "gamestats"/"shadow" both balance on GameStats -- gs/ps only matter in that branch.
+        // Elo has no separate warmup-vs-live signal (see SkillResolver.cs), so in "elo" mode
+        // this is the same lookup as SignalSkill below.
         private float WarmupSignalForPlayer(GameStats gs, int userId, PlayerStats ps) {
+            if (balancerSkillSource == "elo") {
+                return SkillResolver.GetEffectiveSkill(eloRating, userId, currentRosterMedian, minRatedMatches);
+            }
+
             return SkillResolver.GetWarmupSignal(gs, userId, ps);
         }
 
@@ -991,6 +1261,10 @@ namespace OSBase.Modules {
         }
 
         private float SignalSkill(GameStats gs, int userId, PlayerStats ps) {
+            if (balancerSkillSource == "elo") {
+                return SkillResolver.GetEffectiveSkill(eloRating, userId, currentRosterMedian, minRatedMatches);
+            }
+
             return SkillResolver.GetEffectiveSkill(gs, userId, ps);
         }
 

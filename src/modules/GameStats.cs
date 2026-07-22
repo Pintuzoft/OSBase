@@ -443,87 +443,6 @@ namespace OSBase.Modules {
             }
         }
 
-        public int GetTeamBySteam(ulong steamId64) {
-            string sid = steamId64.ToString();
-
-            if (teamList.ContainsKey(TEAM_T)) {
-                foreach (var kv in teamList[TEAM_T].playerList) {
-                    if (kv.Value.steamid == sid) {
-                        return TEAM_T;
-                    }
-                }
-            }
-
-            if (teamList.ContainsKey(TEAM_CT)) {
-                foreach (var kv in teamList[TEAM_CT].playerList) {
-                    if (kv.Value.steamid == sid) {
-                        return TEAM_CT;
-                    }
-                }
-            }
-
-            if (teamList.ContainsKey(TEAM_S)) {
-                foreach (var kv in teamList[TEAM_S].playerList) {
-                    if (kv.Value.steamid == sid) {
-                        return TEAM_S;
-                    }
-                }
-            }
-
-            return TEAM_S;
-        }
-
-        public bool TryGetLiveSkillBySteam(ulong steamId64, out double skill, out int rounds) {
-            string sid = steamId64.ToString();
-
-            if (matchPlayerStats.TryGetValue(sid, out var ps)) {
-                skill = ps.calcSkill();
-                rounds = ps.rounds;
-                return true;
-            }
-
-            skill = 0;
-            rounds = 0;
-            return false;
-        }
-
-        public (double mean, double std, int count) GetLiveSkillMomentsActive() {
-            var vals = new List<double>();
-
-            if (!teamList.ContainsKey(TEAM_T)) {
-                teamList[TEAM_T] = new TeamStats();
-            }
-
-            if (!teamList.ContainsKey(TEAM_CT)) {
-                teamList[TEAM_CT] = new TeamStats();
-            }
-
-            foreach (var kv in teamList[TEAM_T].playerList) {
-                vals.Add(kv.Value.calcSkill());
-            }
-
-            foreach (var kv in teamList[TEAM_CT].playerList) {
-                vals.Add(kv.Value.calcSkill());
-            }
-
-            int n = vals.Count;
-            if (n <= 1) {
-                return (10000.0, 1.0, n);
-            }
-
-            double mean = vals.Average();
-            double variance = 0.0;
-
-            foreach (var v in vals) {
-                variance += (v - mean) * (v - mean);
-            }
-
-            variance /= (n - 1);
-            double std = Math.Sqrt(Math.Max(variance, 1e-6));
-
-            return (mean, std, n);
-        }
-
         // === 90d cache APIs ===
 
         public string GetSteamIdString(int userId) {
@@ -546,43 +465,6 @@ namespace OSBase.Modules {
             }
 
             return 0f;
-        }
-
-        public float GetCached90dBySteam(string steamid) {
-            if (!string.IsNullOrEmpty(steamid) && avg90Cache.TryGetValue(steamid, out var v) && v > 0f) {
-                return v;
-            }
-
-            return 0f;
-        }
-
-        public float TeamAverage90d(int team) {
-            if (!teamList.TryGetValue(team, out var ts) || ts.playerList.Count == 0) {
-                return 0f;
-            }
-
-            float sum = 0f;
-            int n = 0;
-
-            foreach (var kv in ts.playerList) {
-                var ps = kv.Value;
-                float s;
-
-                if (!string.IsNullOrEmpty(ps.steamid) && avg90Cache.TryGetValue(ps.steamid, out var v) && v > 0f) {
-                    s = v;
-                } else {
-                    s = ps.calcSkill();
-                }
-
-                sum += s;
-                n++;
-            }
-
-            if (n == 0) {
-                return 0f;
-            }
-
-            return (sum / n) + ts.streak * 500f;
         }
 
         private void TryRefresh90dCacheAllPlayers() {
@@ -849,7 +731,6 @@ namespace OSBase.Modules {
         public int headshotKills { get; set; }
 
         public int immune { get; set; }
-        public bool disconnected { get; set; }
 
         public void ResetCounters() {
             rounds = 0;
@@ -937,93 +818,6 @@ namespace OSBase.Modules {
             float sum = count > 0 ? getTotalSkill() / count : 0f;
             sum += streak * 500f;
             return sum;
-        }
-
-        public CCSPlayerController? getPlayerBySkill(float targetSkill) {
-            int bestPlayerId = -1;
-            float bestDiff = float.MaxValue;
-
-            foreach (var kvp in playerList) {
-                var stats = kvp.Value;
-                if (stats.immune > 0) {
-                    continue;
-                }
-
-                float diff = Math.Abs(stats.calcSkill() - targetSkill);
-                if (diff < bestDiff) {
-                    bestDiff = diff;
-                    bestPlayerId = kvp.Key;
-                }
-            }
-
-            if (bestPlayerId == -1) {
-                Console.WriteLine($"[DEBUG] OSBase[gamestats] - getPlayerBySkill: No player found for skill {targetSkill}");
-                return null;
-            }
-
-            return Utilities.GetPlayerFromUserid(bestPlayerId);
-        }
-
-        public CCSPlayerController? getPlayerBySkillNonImmune(float targetSkill) {
-            int bestPlayerId = -1;
-            float bestDiff = float.MaxValue;
-
-            foreach (var kvp in playerList) {
-                var stats = kvp.Value;
-                if (stats.immune > 0) {
-                    continue;
-                }
-
-                float diff = Math.Abs(stats.calcSkill() - targetSkill);
-                if (diff < bestDiff) {
-                    bestDiff = diff;
-                    bestPlayerId = kvp.Key;
-                }
-            }
-
-            if (bestPlayerId == -1) {
-                Console.WriteLine($"[DEBUG] OSBase[gamestats] - getPlayerBySkillNonImmune: No player found for skill {targetSkill}");
-                return null;
-            }
-
-            return Utilities.GetPlayerFromUserid(bestPlayerId);
-        }
-
-        public CCSPlayerController? GetPlayerByDeviation(float targetDeviation, bool forStrongTeam) {
-            if (float.IsInfinity(targetDeviation) || float.IsNaN(targetDeviation)) {
-                targetDeviation = 1000f;
-            }
-
-            int leaderId = -1;
-            if (playerList.Count > 0) {
-                leaderId = playerList.OrderByDescending(kvp => kvp.Value.calcSkill()).First().Key;
-            }
-
-            int bestPlayerId = -1;
-            float bestDiff = float.MaxValue;
-            float teamAvg = getAverageSkill();
-
-            foreach (var kvp in playerList) {
-                if (kvp.Value.immune > 0 || kvp.Key == leaderId) {
-                    continue;
-                }
-
-                float playerSkill = kvp.Value.calcSkill();
-                float deviation = forStrongTeam ? (playerSkill - teamAvg) : (teamAvg - playerSkill);
-                float diff = Math.Abs(deviation - targetDeviation);
-
-                if (diff < bestDiff) {
-                    bestDiff = diff;
-                    bestPlayerId = kvp.Key;
-                }
-            }
-
-            if (bestPlayerId == -1) {
-                Console.WriteLine($"[DEBUG] OSBase[gamestats] - GetPlayerByDeviation: No player found for target deviation {targetDeviation}");
-                return null;
-            }
-
-            return Utilities.GetPlayerFromUserid(bestPlayerId);
         }
 
         public void printPlayers() {

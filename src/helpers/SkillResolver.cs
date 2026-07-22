@@ -1,9 +1,21 @@
 using System;
+using System.Collections.Generic;
+using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using OSBase.Modules;
 
 namespace OSBase.Helpers {
+    // Two independent skill signals, selected by TeamBalancer's balancer_skill_source config
+    // (gamestats / elo / shadow -- see ELO-MODULE.md). Both paths stay in this file for as
+    // long as the phased cutover needs them: GameStats.calcSkill()/skill_log is not being
+    // retired on the same day EloRating starts scoring -- skill_log keeps writing regardless
+    // (SaveIfEligible in GameStats.cs is self-contained, triggered by its own round/map-end
+    // hooks, not by anything reading calcSkill() -- verified, not assumed), and the
+    // form-curve/site history has to keep a continuous, unbroken series through the
+    // transition. The GameStats path below is the original blend, unchanged.
     public static class SkillResolver {
+        // ----- GameStats path (original, default at release) -----
+
         private const float OUTLIER_PCT = 0.50f;
         private const float OUTLIER_ABS = 4000f;
         private const float LATE_ABS_CLAMP = 2500f;
@@ -129,6 +141,108 @@ namespace OSBase.Helpers {
 
                 return h == 0 ? 1 : h;
             }
+        }
+
+        // ----- Elo path (new, opt-in via balancer_skill_source elo/shadow) -----
+        //
+        // Feeds from EloRating.rating (part one of the two-part system -- never points, see
+        // ELO-MODULE.md/STATS-MODULE.md asks 4/19/20). No baseline/live blend here -- Elo has
+        // no equivalent of GameStats' continuous in-round recompute; EloRating.liveRating
+        // already IS a single, continuously-updated value at every moment, so there's no
+        // "baseline vs live" question left to answer.
+
+        public static float GetEffectiveSkillForPlayer(EloRating? elo, CCSPlayerController? player, float rosterMedian, int minRatedMatches) {
+            if (player == null || !player.IsValid) {
+                return rosterMedian;
+            }
+
+            return GetEffectiveSkill(elo, player.SteamID, rosterMedian, minRatedMatches);
+        }
+
+        public static float GetEffectiveSkill(EloRating? elo, int userId, float rosterMedian, int minRatedMatches) {
+            var player = Utilities.GetPlayerFromUserid(userId);
+            if (player == null || !player.IsValid) {
+                return rosterMedian;
+            }
+
+            return GetEffectiveSkill(elo, player.SteamID, rosterMedian, minRatedMatches);
+        }
+
+        // Below minRatedMatches duels, a player's own rating is too noisy to trust for team
+        // balancing -- treated as the roster median instead, same as a player with no rating
+        // at all. Matches OSWeb's BalancedDraft: an unranked/barely-rated player is exactly
+        // average for this roster, so they neither drag a team down nor lift it up. A flat
+        // "bad player" default would stack every newcomer onto the same side.
+        public static float GetEffectiveSkill(EloRating? elo, ulong steamId64, float rosterMedian, int minRatedMatches) {
+            if (elo == null || steamId64 == 0) {
+                return rosterMedian;
+            }
+
+            if (!elo.TryGetRating(steamId64, out int rating, out int matches) || matches < minRatedMatches) {
+                return rosterMedian;
+            }
+
+            return rating;
+        }
+
+        // Computed ONCE per balance pass by the caller (cheap either way at CS2 server
+        // headcounts, but there's no reason to rescan the roster for every player's lookup).
+        // Ranked players only (matches >= minRatedMatches) -- an unranked player shouldn't be
+        // able to drag the median toward the fallback that unranked players themselves fall
+        // back to.
+        public static float ComputeRosterMedian(EloRating? elo, IEnumerable<int> userIds, int minRatedMatches, float fallback) {
+            var ratings = new List<int>();
+
+            if (elo != null) {
+                foreach (int userId in userIds) {
+                    var player = Utilities.GetPlayerFromUserid(userId);
+                    if (player == null || !player.IsValid) {
+                        continue;
+                    }
+
+                    if (elo.TryGetRating(player.SteamID, out int rating, out int matches) && matches >= minRatedMatches) {
+                        ratings.Add(rating);
+                    }
+                }
+            }
+
+            if (ratings.Count == 0) {
+                return fallback;
+            }
+
+            ratings.Sort();
+            int mid = ratings.Count / 2;
+            return ratings.Count % 2 == 0 ? (ratings[mid - 1] + ratings[mid]) / 2f : ratings[mid];
+        }
+
+        // Spread (max-min) of the same ranked-only pool the median above uses -- lets swap
+        // thresholds scale to whatever range this rating system actually produces instead of
+        // hardcoding a number tuned for GameStats' old ~4000-11000 skill scale. Floored so a
+        // near-uniform roster (everyone within a few points of each other, which is also
+        // exactly when there's the least to fix) doesn't collapse every threshold to zero.
+        public static float ComputeRosterSpread(EloRating? elo, IEnumerable<int> userIds, int minRatedMatches, float minSpread) {
+            var ratings = new List<int>();
+
+            if (elo != null) {
+                foreach (int userId in userIds) {
+                    var player = Utilities.GetPlayerFromUserid(userId);
+                    if (player == null || !player.IsValid) {
+                        continue;
+                    }
+
+                    if (elo.TryGetRating(player.SteamID, out int rating, out int matches) && matches >= minRatedMatches) {
+                        ratings.Add(rating);
+                    }
+                }
+            }
+
+            if (ratings.Count < 2) {
+                return minSpread;
+            }
+
+            ratings.Sort();
+            float spread = ratings[^1] - ratings[0];
+            return Math.Max(spread, minSpread);
         }
     }
 }
