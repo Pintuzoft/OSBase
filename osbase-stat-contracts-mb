@@ -1,0 +1,175 @@
+# OSBase ↔ OSWeb: four stat tables, and one performance ask
+
+Written 2026-08-03. Companion to `osbase-daily-stat-contract.md`, which covers
+`player_daily_stat` and is **still not deployed** — see the reminder at the end,
+because that one is losing data every day it waits.
+
+Three of the four tables below already exist in OSBase and are already on
+OSWeb's erasure list. What has never been agreed is **what the columns mean**.
+That is the gap this document closes, and it closes it *before* the site starts
+reading them — because a definition that is wrong for three months produces
+three months of numbers that cannot be repaired.
+
+The daily-stat contract earned that caution the hard way: `headshots` has two
+readings that both look right (`hitgroup = 1` from `EventPlayerHurt`, versus
+headshot *kills* from `EventPlayerDeath`) and they are wildly different numbers.
+Every section below names the wrong reading on purpose.
+
+---
+
+## 1. `player_clutch_stat`
+
+A clutch is the moment a community remembers, so it is worth getting the
+boundary right rather than counting something adjacent.
+
+| Column | Must mean | The reading that looks right and isn't |
+|---|---|---|
+| `steamid64` | The clutcher | — |
+| `opponents` | How many enemies were alive **when the clutch began** — i.e. at the moment the player became the last one standing on their side | Not how many they killed. A 1v3 where a teammate's grenade takes one is still a 1v3 |
+| `won` | Did their side win the round | — |
+| `kills` | Kills the clutcher made **during** the clutch | Not their kills for the whole round |
+| `season`, `stamp` | As elsewhere | — |
+
+**Questions we need answered rather than assumed:**
+
+- **Does a 1v1 count?** We would say yes — it is the most common clutch and a
+  1v1 win is a real moment. But if OSBase's existing rows only start at 1v2,
+  say so, because the site would otherwise show a number that means something
+  else than the label claims.
+- **Does a round won on the timer count as a won clutch?** We would say yes.
+  Surviving is winning.
+- **Are lost clutches recorded?** They should be. "Clutches won" without
+  "clutches attempted" is a number nobody can interpret, and the interesting
+  stat is the ratio.
+
+---
+
+## 2. `player_multikill_stat`
+
+| Column | Must mean | The reading that looks right and isn't |
+|---|---|---|
+| `steamid64` | The player | — |
+| `kills` | Kills **in a single round**, 2–5 | Not kills in a time window. A 3k is three kills in one round, however far apart |
+| `count` | How many rounds ended with that many kills | — |
+
+**One row per (player, level, season) with a counter**, not one row per event —
+that is what the existing schema shape suggests, and it is the right one: the
+site wants "how many aces has Kurt had", not a list.
+
+**To confirm:** are team kills excluded? They must be, for the same reason as in
+the daily-stat contract — a TK inflating a multikill is nonsense. And does a
+grenade that kills three at once count as a 3k? We would say yes; it is one
+round and three kills. Say if the plugin counts it differently.
+
+---
+
+## 3. `player_teambet_stat` — and this one should be a **log**
+
+The others are counters. This one the owner wants to be able to *browse*: "show
+me how I bet during July". That means one row per bet, kept, not a running
+total.
+
+| Column | Must mean |
+|---|---|
+| `steamid64` | Who bet |
+| `stamp` | When |
+| `match_id` / `mapname` / round | Enough to place the bet in a session |
+| `pick` | Which side they backed |
+| `stake` | What they put in |
+| `payout` | What came back — **0 on a loss, not NULL** |
+| `outcome` | won / lost / void |
+
+**Index on `(steamid64, stamp)` from day one.** Without it, "my bets in July" is
+a full scan of every bet ever placed. This table grows faster than all the
+others combined: twenty players × twenty-five rounds × ten matches a day is five
+thousand rows a day, roughly two million a year. That is fine for MariaDB and
+not fine without an index.
+
+**The boring case decides whether the log adds up:** a round that is aborted, a
+server that crashes mid-round, a team that forfeits. Is that a loss, a `void`
+row, or no row at all? Whichever it is, it has to be consistent — otherwise the
+sum in the log will not match what people remember, and the first person to add
+it up will report it as a bug.
+
+**And what is a stake?** Elo points, or a separate currency? If separate: does it
+reset per season or run forever? The site needs to know before it prints a
+number next to a name.
+
+---
+
+## 4. Knife and taser kills — a table that does not exist yet
+
+The rarest and most-told moments on a CS server, and worth keeping forever
+*because* they are rare: a couple a day is a thousand rows a year. Storage is
+not the constraint here; nothing is.
+
+| Column | Must mean |
+|---|---|
+| `killer_steamid64` | — |
+| `victim_steamid64` | — |
+| `weapon` | knife / taser / which knife |
+| `mapname`, `stamp`, `match_id` | Where and when |
+
+**Two SteamIDs in one row, which means two things.**
+
+First, both belong on the erasure list, on both columns. A row naming only the
+killer would leave the victim standing after their erasure — exactly how
+`player_weapon_shots` came to leak.
+
+Second, and this is a decision OSWeb has already taken: **the site will never
+build a leaderboard of victims.** A single event with two names is a story
+people tell each other; a ranking of who has been knifed most is a permanent
+record of someone's humiliation, and this site praises rather than embarrasses.
+Individual rows get both names. Aggregates only ever count the dealer.
+
+Nothing is asked of OSBase for that beyond recording both — but it explains why
+the victim column matters and why it is not there to rank anyone.
+
+---
+
+## 5. The performance ask: defer round-end writes by 1–3 seconds
+
+Observed on the live servers: a stutter at the exact moment the last player
+dies. That is round end, which is also when the stat writes fire — the worst
+possible moment, because the server is already busy with death cam, round-end
+logic and the scoreboard.
+
+Deferring the writes by a second or three would move them into the quiet part of
+the round. Three things have to be true for that to work, and the middle one is
+where this usually goes wrong:
+
+**Capture at round end. Write later.** The numbers are correct at the moment the
+round ends and stop being correct immediately afterwards — freeze time, warmup,
+and score resets all follow. If the delay is implemented by reading the data
+later, the data will be wrong. Snapshot the values into a queue at round end;
+delay only the flush.
+
+**Players disconnect at round end.** More than at any other moment. If the write
+path reads from live player objects two seconds later, some of them are gone and
+their round is lost silently. This is the same point as above, and it is the one
+that bites: the fix is not "delay the write", it is "separate capture from
+write".
+
+**Flush on the way out.** The queue must be emptied on round start, map change,
+and shutdown. A deferred write that a map change eats is worse than a stutter —
+one is a hitch nobody reports, the other is a round that never happened.
+
+If the writes are currently many separate statements, **batching them into one
+transaction is likely the bigger win than the delay itself.** Both together
+would be ideal.
+
+---
+
+## Reminder: `player_daily_stat` is still not deployed
+
+Confirmed against prod on 2026-07-26: `Table 'osbase.player_daily_stat' doesn't
+exist`. The contract has been ready since then.
+
+Nothing on the site is broken while it waits — the Highlights widget says
+"nobody played yesterday" and degrades cleanly. But **`rating` per day cannot be
+reconstructed.** A value that was never written down for a given day is gone,
+and every day without the module is a permanent hole in both the form curve and
+the highlights.
+
+That is not a nice-to-have. It is data expiring while we wait.
+
