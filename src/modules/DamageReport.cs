@@ -10,20 +10,22 @@ using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
 using MySqlConnector;
+using OSBase.Helpers;
 using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
 
 namespace OSBase.Modules;
 
 // Alongside its ephemeral per-round chat report, this module persists the durable,
 // career-long counters that back the site's profile stats: body-diagram heatmap, per-weapon
-// accuracy, ADR, nemesis lists, clutches, multikills. See STATS-MODULE.md. Every table is
-// dimensioned by side and (where noted) season at write time -- a dimension left out of the
-// primary key before writing starts can never be split back out of an already-summed
+// accuracy, damage/round, nemesis lists, clutches, multikills. See STATS-MODULE.md. Every
+// table is dimensioned by side and (where noted) season at write time -- a dimension left out
+// of the primary key before writing starts can never be split back out of an already-summed
 // counter, so these are decided once, here, not patched in later:
 //   player_hit_stat       (steamid64, weapon, hitgroup, direction, side, season) -> hits, damage
 //   player_weapon_shots   (steamid64, weapon, side, season) -> shots
 //   player_round_stat     (steamid64, side, season) -> rounds, bomb_plants, bomb_defuses,
-//                         defuse_fails; rounds is ADR's denominator (damage / rounds)
+//                         defuse_fails; rounds is damage/round's denominator (damage / rounds
+//                         -- NOT industry "ADR", damage is uncapped, see STATS-MODULE.md)
 //   player_duel_stat      (attackerid64, victimid64, attacker_side, victim_side, weapon, season)
 //                         -> kills, headshots, noscopes, wallbangs, blind_kills, smoke_kills,
 //                         dominations, revenges; nemesis lists ("who kills me / who I kill")
@@ -48,6 +50,7 @@ public class DamageReport : ModuleBase {
     private const string DailyStatTable = "player_daily_stat";
     private const string DuelTotalTable = "player_duel_total";
     private const string ServerStatSeasonTable = "server_stat_season";
+    private const string KnifeTaserKillTable = "knife_taser_kill_event";
     private const int DirectionDealt = 0;
     private const int DirectionReceived = 1;
 
@@ -84,6 +87,16 @@ public class DamageReport : ModuleBase {
     private EloRating? eloRating;
     private bool flushInProgress;
 
+    // osbase-stat-contracts.md section 5: round-end used to flush synchronously, right at
+    // the worst possible moment. Now the actual DB flush is scheduled a couple seconds out
+    // (into the quiet part of the round) instead of firing on the exact tick. Nothing about
+    // WHAT gets captured changes -- pending counters are still filled live/at round-end as
+    // before; only WHEN the flush's transaction fires is delayed. OnRoundStart still flushes
+    // immediately as a safety net so a fast round can never let more than one round's worth
+    // of writes queue up behind the delay.
+    private const float RoundEndFlushDelaySeconds = 2.0f;
+    private Timer? pendingFlushTimer;
+
     // Ask 11: a filter, not a counter. Decided once at round start and held for the whole
     // round -- re-evaluating at round end would silently exclude normal play whenever people
     // log off late in the evening. Two warm-body pub players farming AWP kills on an empty
@@ -108,6 +121,11 @@ public class DamageReport : ModuleBase {
     private readonly Dictionary<(ulong SteamId64, DateTime Day), PendingDailyCounter> pendingDailyCounters = new();
     private readonly Dictionary<(ulong SteamId64, string Season), PendingDuelTotalCounter> pendingDuelTotalCounters = new();
     private readonly Dictionary<string, PendingServerStatCounter> pendingServerStatCounters = new();
+
+    // osbase-stat-contracts.md section 4: kept forever, never aggregated in memory -- one
+    // row per knife/taser kill, both SteamIDs on the row (see the doc for why the victim
+    // column exists but is never meant to be ranked).
+    private readonly List<PendingKnifeTaserKill> pendingKnifeTaserKills = new();
 
     // Round-scoped state, resolved into the pending counters above at round end, cleared at
     // round start as a safety net.
@@ -155,6 +173,12 @@ public class DamageReport : ModuleBase {
         public int Deaths;
         public int Headshots;
         public int Assists;
+        // Found 2026-08-04: separate counters, not a subtraction from Kills above -- the
+        // user was explicit that a teamkill/suicide penalty must never touch the existing
+        // kill counter (that stays exactly what it's meant, a raw event record). These are
+        // new, additive-only fields answering "how many", not "how much did it cost you".
+        public int TeamKills;
+        public int Suicides;
     }
 
     private sealed class PendingServerStatCounter {
@@ -181,6 +205,17 @@ public class DamageReport : ModuleBase {
         public int Wins;
     }
 
+    private sealed class PendingKnifeTaserKill {
+        public required ulong KillerSteamId64;
+        public required ulong VictimSteamId64;
+        public required int KillerSide;
+        public required int VictimSide;
+        public required string Weapon;
+        public required string Mapname;
+        public int? MatchId;
+        public required DateTime Stamp;
+    }
+
     protected override void OnLoad() {
         CreateCustomConfigs();
         LoadConfig();
@@ -192,6 +227,8 @@ public class DamageReport : ModuleBase {
 
     protected override void OnUnload() {
         CancelAllPendingReports();
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = null;
         FlushPendingStats("Unload");
         ClearDamageData();
         db = null;
@@ -303,13 +340,14 @@ public class DamageReport : ModuleBase {
             return;
         }
 
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = null;
         FlushPendingStats("MapStart");
     }
 
-    // All four tables below are owned by this module alone -- never write to the site's
-    // player_kill_stat (owned by OSWeb's ServerKillTracker off the log stream); two
-    // writers on the same counters double-count silently. steamid64/attackerid64/victimid64
-    // are all VARCHAR(32) -- a Steam64 overflows JS's safe-integer range -- never BIGINT.
+    // All four tables below are owned by this module alone -- two writers on the same
+    // counter double-count silently. steamid64/attackerid64/victimid64 are all VARCHAR(32)
+    // -- a Steam64 overflows JS's safe-integer range -- never BIGINT.
     private void CreateTables() {
         if (db == null) {
             return;
@@ -351,7 +389,8 @@ public class DamageReport : ModuleBase {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
-        // For ADR (average damage per round) = SUM(player_hit_stat.damage WHERE
+        // For damage/round (NOT industry "ADR" -- damage is uncapped, confirmed live
+        // 2026-08-04, see STATS-MODULE.md) = SUM(player_hit_stat.damage WHERE
         // direction=dealt) / player_round_stat.rounds. Rounds, not raw ticks -- one row grows
         // by exactly 1 per player per round played. bomb_plants/bomb_defuses come straight off
         // their events; defuse_fails is a BeginDefuse that never got a matching Defused that
@@ -495,6 +534,10 @@ public class DamageReport : ModuleBase {
         // summary (feeds !elorank) instead of staying a duel-only roll-up -- same scope as
         // kills/deaths above (team kills included, not filtered), same reasoning: it's the
         // same numbers already in hand at the OnPlayerDeath call site, no separate pass needed.
+        // teamkills/suicides added 2026-08-04, per direct user ask: additive-only counters,
+        // deliberately never subtracted from kills/deaths above -- those keep meaning exactly
+        // what they already meant. The scoreboard -1 penalty (TeamDamage.cs) is a separate,
+        // purely cosmetic thing; these two exist so "how often" is answerable at all.
         string duelTotalTable = $"""
         TABLE IF NOT EXISTS {DuelTotalTable} (
             steamid64  VARCHAR(32) NOT NULL,
@@ -503,6 +546,8 @@ public class DamageReport : ModuleBase {
             deaths     INT NOT NULL DEFAULT 0,
             headshots  INT NOT NULL DEFAULT 0,
             assists    INT NOT NULL DEFAULT 0,
+            teamkills  INT NOT NULL DEFAULT 0,
+            suicides   INT NOT NULL DEFAULT 0,
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (steamid64, season)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -525,6 +570,34 @@ public class DamageReport : ModuleBase {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
+        // osbase-stat-contracts.md section 4: kept forever (storage isn't the constraint --
+        // a couple a day is ~1000 rows/year), two SteamIDs on the row on purpose. Both get
+        // ANONYMIZED (2026-08-04 correction -- see ELO-MODULE.md, this was briefly documented
+        // as delete-both, which was wrong) on an erasure request, same shape and reason as
+        // player_duel_stat/elo_kill_event: deleting the row on the victim's request would also
+        // erase the killer's most memorable moment, which they never asked to lose. Team kills
+        // included (not filtered), same reasoning as player_duel_stat/elo_kill_event -- this is
+        // a raw event record, not an achievement counter, nothing to protect from inflation --
+        // but distinguishable via killer_side/victim_side (same SideT/SideCT/SideUnknown scale
+        // as player_duel_stat) so the site can choose per-surface: a highlight feed wants both,
+        // a "best with a knife" leaderboard almost certainly doesn't. No index beyond the PK:
+        // the site never ranks victims (deliberately, per the contract doc) and reads this by
+        // killer or by time, both fine as a scan at this table's size.
+        string knifeTaserKillTable = $"""
+        TABLE IF NOT EXISTS {KnifeTaserKillTable} (
+            id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            killer_steamid64 VARCHAR(32) NOT NULL,
+            victim_steamid64 VARCHAR(32) NOT NULL,
+            killer_side      TINYINT UNSIGNED NOT NULL,
+            victim_side      TINYINT UNSIGNED NOT NULL,
+            weapon           VARCHAR(32) NOT NULL,
+            mapname          VARCHAR(64) NOT NULL,
+            match_id         INT NULL,
+            stamp            DATETIME NOT NULL,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
         try {
             db.create(hitStatTable);
             db.create(shotStatTable);
@@ -535,6 +608,7 @@ public class DamageReport : ModuleBase {
             db.create(dailyStatTable);
             db.create(duelTotalTable);
             db.create(serverStatSeasonTable);
+            db.create(knifeTaserKillTable);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] tables ensured.");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating tables: {e.Message}");
@@ -639,7 +713,7 @@ public class DamageReport : ModuleBase {
         }
     }
 
-    private void AddDuelTotal(ulong steamId64, string season, int kills, int deaths, int headshots = 0, int assists = 0) {
+    private void AddDuelTotal(ulong steamId64, string season, int kills, int deaths, int headshots = 0, int assists = 0, int teamKills = 0, int suicides = 0) {
         if (steamId64 == 0) {
             return;
         }
@@ -654,6 +728,8 @@ public class DamageReport : ModuleBase {
         counter.Deaths += deaths;
         counter.Headshots += headshots;
         counter.Assists += assists;
+        counter.TeamKills += teamKills;
+        counter.Suicides += suicides;
     }
 
     private void AddServerStat(string season, int hits, int damage, int headshots, int shots, int rounds) {
@@ -735,6 +811,23 @@ public class DamageReport : ModuleBase {
 
         var key = (steamId64, side, season, kills);
         pendingMultikillCounters[key] = pendingMultikillCounters.GetValueOrDefault(key, 0) + 1;
+    }
+
+    private void AddKnifeTaserKill(ulong killerSteamId64, ulong victimSteamId64, int killerSide, int victimSide, string weapon, string mapname, int? matchId) {
+        if (killerSteamId64 == 0 || victimSteamId64 == 0) {
+            return;
+        }
+
+        pendingKnifeTaserKills.Add(new PendingKnifeTaserKill {
+            KillerSteamId64 = killerSteamId64,
+            VictimSteamId64 = victimSteamId64,
+            KillerSide = killerSide,
+            VictimSide = victimSide,
+            Weapon = weapon,
+            Mapname = mapname,
+            MatchId = matchId,
+            Stamp = DateTime.UtcNow,
+        });
     }
 
     private static int MapSide(CCSPlayerController? player) {
@@ -839,11 +932,10 @@ public class DamageReport : ModuleBase {
     // counter. Format e.g. "2026Q3". Hit data itself is never reset -- season is only ever a
     // filter, all-time is a SUM across seasons; a quarterly ELO reset (if/when built) is a
     // separate table's concern, not this one's.
-    private static string CurrentSeason() {
-        DateTime now = DateTime.UtcNow;
-        int quarter = ((now.Month - 1) / 3) + 1;
-        return $"{now.Year}Q{quarter}";
-    }
+    // Extracted to SeasonHelper 2026-08-04 (agent-chat #33) -- this used to be its own private
+    // copy, byte-for-byte identical to EloRating.cs's and TeamBets.cs's. See that helper's
+    // comment for why three copies that happen to agree isn't the same guarantee as one.
+    private static string CurrentSeason() => SeasonHelper.CurrentSeason();
 
     // Buffered like EventWeekend/EloRating: accumulate during the round, send between
     // rounds. Unwritten rows on a DB outage are merged back (counts, not overwritten) and
@@ -858,7 +950,7 @@ public class DamageReport : ModuleBase {
             && pendingRoundCounters.Count == 0 && pendingDuelCounters.Count == 0
             && pendingClutchCounters.Count == 0 && pendingMultikillCounters.Count == 0
             && pendingDailyCounters.Count == 0 && pendingDuelTotalCounters.Count == 0
-            && pendingServerStatCounters.Count == 0) {
+            && pendingServerStatCounters.Count == 0 && pendingKnifeTaserKills.Count == 0) {
             return;
         }
 
@@ -889,202 +981,155 @@ public class DamageReport : ModuleBase {
         var serverStatBatch = pendingServerStatCounters.ToList();
         pendingServerStatCounters.Clear();
 
+        var knifeTaserBatch = pendingKnifeTaserKills.ToList();
+        pendingKnifeTaserKills.Clear();
+
         flushInProgress = true;
 
         Task.Run(() => {
-            var unwrittenHits = new List<KeyValuePair<(ulong SteamId64, string Weapon, int Hitgroup, int Direction, int Side, string Season), PendingHitCounter>>();
-            var unwrittenShots = new List<KeyValuePair<(ulong SteamId64, string Weapon, int Side, string Season), int>>();
-            var unwrittenRounds = new List<KeyValuePair<(ulong SteamId64, int Side, string Season, string Map), PendingRoundCounter>>();
-            var unwrittenDuels = new List<KeyValuePair<(ulong AttackerId64, ulong VictimId64, int AttackerSide, int VictimSide, string Weapon, string Season), PendingDuelCounter>>();
-            var unwrittenClutches = new List<KeyValuePair<(ulong SteamId64, int Side, string Season, int Opponents), PendingClutchCounter>>();
-            var unwrittenMultikills = new List<KeyValuePair<(ulong SteamId64, int Side, string Season, int Kills), int>>();
-            var unwrittenDaily = new List<KeyValuePair<(ulong SteamId64, DateTime Day), PendingDailyCounter>>();
-            var unwrittenDuelTotals = new List<KeyValuePair<(ulong SteamId64, string Season), PendingDuelTotalCounter>>();
-            var unwrittenServerStats = new List<KeyValuePair<string, PendingServerStatCounter>>();
-            bool dbDown = false;
+            // Perf fix (osbase-stat-contracts.md section 5): this used to be one
+            // database.insert() -- one connection, one round trip -- per row, run instantly
+            // at round end (the single worst moment: death cam + round-end logic + scoreboard
+            // all competing for the same tick). Collected into ONE transaction instead, and
+            // the caller (OnRoundEnd) now delays invoking this by RoundEndFlushDelaySeconds so
+            // it lands in the quiet part of the round. All rows still commit atomically or
+            // not at all -- on failure the entire batch (every type) goes back to pending for
+            // retry next flush, which is simpler than the old per-type dbDown/partial-cutoff
+            // scheme and no less correct, since a transaction can't half-succeed anyway.
+            var writes = new List<(string query, MySqlParameter[] parameters)>();
+
+            foreach (var row in knifeTaserBatch) {
+                writes.Add(($"INTO {KnifeTaserKillTable} (killer_steamid64, victim_steamid64, killer_side, victim_side, weapon, mapname, match_id, stamp) " +
+                    "VALUES (@killer, @victim, @killer_side, @victim_side, @weapon, @mapname, @match_id, @stamp)",
+                    new MySqlParameter[] {
+                        new("@killer", row.KillerSteamId64.ToString()),
+                        new("@victim", row.VictimSteamId64.ToString()),
+                        new("@killer_side", row.KillerSide),
+                        new("@victim_side", row.VictimSide),
+                        new("@weapon", row.Weapon),
+                        new("@mapname", row.Mapname),
+                        new("@match_id", (object?)row.MatchId ?? DBNull.Value),
+                        new("@stamp", row.Stamp)
+                    }));
+            }
 
             foreach (var kv in hitBatch) {
-                if (dbDown) {
-                    unwrittenHits.Add(kv);
-                    continue;
-                }
-
                 var (steamId64, weapon, hitgroup, direction, side, season) = kv.Key;
                 var counter = kv.Value;
 
-                int affected = database.insert(
-                    $"INTO {HitStatTable} (steamid64, weapon, hitgroup, direction, side, season, hits, damage, first_seen, updated_at) " +
+                writes.Add(($"INTO {HitStatTable} (steamid64, weapon, hitgroup, direction, side, season, hits, damage, first_seen, updated_at) " +
                     "VALUES (@steamid64, @weapon, @hitgroup, @direction, @side, @season, @hits, @damage, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE hits=hits+@hits, damage=damage+@damage, updated_at=NOW()",
-                    new MySqlParameter("@steamid64", steamId64.ToString()),
-                    new MySqlParameter("@weapon", weapon),
-                    new MySqlParameter("@hitgroup", hitgroup),
-                    new MySqlParameter("@direction", direction),
-                    new MySqlParameter("@side", side),
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@hits", counter.Hits),
-                    new MySqlParameter("@damage", counter.Damage)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenHits.Add(kv);
-                }
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@weapon", weapon),
+                        new("@hitgroup", hitgroup),
+                        new("@direction", direction),
+                        new("@side", side),
+                        new("@season", season),
+                        new("@hits", counter.Hits),
+                        new("@damage", counter.Damage)
+                    }));
             }
 
             foreach (var kv in shotBatch) {
-                if (dbDown) {
-                    unwrittenShots.Add(kv);
-                    continue;
-                }
-
                 var (steamId64, weapon, side, season) = kv.Key;
 
-                int affected = database.insert(
-                    $"INTO {ShotStatTable} (steamid64, weapon, side, season, shots, first_seen, updated_at) " +
+                writes.Add(($"INTO {ShotStatTable} (steamid64, weapon, side, season, shots, first_seen, updated_at) " +
                     "VALUES (@steamid64, @weapon, @side, @season, @shots, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE shots=shots+@shots, updated_at=NOW()",
-                    new MySqlParameter("@steamid64", steamId64.ToString()),
-                    new MySqlParameter("@weapon", weapon),
-                    new MySqlParameter("@side", side),
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@shots", kv.Value)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenShots.Add(kv);
-                }
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@weapon", weapon),
+                        new("@side", side),
+                        new("@season", season),
+                        new("@shots", kv.Value)
+                    }));
             }
 
             foreach (var kv in roundBatch) {
-                if (dbDown) {
-                    unwrittenRounds.Add(kv);
-                    continue;
-                }
-
                 var (steamId64, side, season, map) = kv.Key;
                 var counter = kv.Value;
 
-                int affected = database.insert(
-                    $"INTO {RoundStatTable} (steamid64, side, season, map, rounds, rounds_won, bomb_plants, bomb_defuses, defuse_fails, first_seen, updated_at) " +
+                writes.Add(($"INTO {RoundStatTable} (steamid64, side, season, map, rounds, rounds_won, bomb_plants, bomb_defuses, defuse_fails, first_seen, updated_at) " +
                     "VALUES (@steamid64, @side, @season, @map, @rounds, @rounds_won, @plants, @defuses, @fails, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE rounds=rounds+@rounds, rounds_won=rounds_won+@rounds_won, " +
                     "bomb_plants=bomb_plants+@plants, bomb_defuses=bomb_defuses+@defuses, defuse_fails=defuse_fails+@fails, updated_at=NOW()",
-                    new MySqlParameter("@steamid64", steamId64.ToString()),
-                    new MySqlParameter("@side", side),
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@map", map),
-                    new MySqlParameter("@rounds", counter.Rounds),
-                    new MySqlParameter("@rounds_won", counter.RoundsWon),
-                    new MySqlParameter("@plants", counter.BombPlants),
-                    new MySqlParameter("@defuses", counter.BombDefuses),
-                    new MySqlParameter("@fails", counter.DefuseFails)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenRounds.Add(kv);
-                }
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@side", side),
+                        new("@season", season),
+                        new("@map", map),
+                        new("@rounds", counter.Rounds),
+                        new("@rounds_won", counter.RoundsWon),
+                        new("@plants", counter.BombPlants),
+                        new("@defuses", counter.BombDefuses),
+                        new("@fails", counter.DefuseFails)
+                    }));
             }
 
             foreach (var kv in duelBatch) {
-                if (dbDown) {
-                    unwrittenDuels.Add(kv);
-                    continue;
-                }
-
                 var (attackerId64, victimId64, attackerSide, victimSide, weapon, season) = kv.Key;
                 var counter = kv.Value;
 
-                int affected = database.insert(
-                    $"INTO {DuelStatTable} (attackerid64, victimid64, attacker_side, victim_side, weapon, season, " +
+                writes.Add(($"INTO {DuelStatTable} (attackerid64, victimid64, attacker_side, victim_side, weapon, season, " +
                     "kills, headshots, noscopes, wallbangs, blind_kills, smoke_kills, dominations, revenges, first_seen, updated_at) " +
                     "VALUES (@attackerid64, @victimid64, @attacker_side, @victim_side, @weapon, @season, " +
                     "@kills, @headshots, @noscopes, @wallbangs, @blind_kills, @smoke_kills, @dominations, @revenges, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE kills=kills+@kills, headshots=headshots+@headshots, " +
                     "noscopes=noscopes+@noscopes, wallbangs=wallbangs+@wallbangs, blind_kills=blind_kills+@blind_kills, " +
                     "smoke_kills=smoke_kills+@smoke_kills, dominations=dominations+@dominations, revenges=revenges+@revenges, updated_at=NOW()",
-                    new MySqlParameter("@attackerid64", attackerId64.ToString()),
-                    new MySqlParameter("@victimid64", victimId64.ToString()),
-                    new MySqlParameter("@attacker_side", attackerSide),
-                    new MySqlParameter("@victim_side", victimSide),
-                    new MySqlParameter("@weapon", weapon),
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@kills", counter.Kills),
-                    new MySqlParameter("@headshots", counter.Headshots),
-                    new MySqlParameter("@noscopes", counter.Noscopes),
-                    new MySqlParameter("@wallbangs", counter.Wallbangs),
-                    new MySqlParameter("@blind_kills", counter.BlindKills),
-                    new MySqlParameter("@smoke_kills", counter.SmokeKills),
-                    new MySqlParameter("@dominations", counter.Dominations),
-                    new MySqlParameter("@revenges", counter.Revenges)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenDuels.Add(kv);
-                }
+                    new MySqlParameter[] {
+                        new("@attackerid64", attackerId64.ToString()),
+                        new("@victimid64", victimId64.ToString()),
+                        new("@attacker_side", attackerSide),
+                        new("@victim_side", victimSide),
+                        new("@weapon", weapon),
+                        new("@season", season),
+                        new("@kills", counter.Kills),
+                        new("@headshots", counter.Headshots),
+                        new("@noscopes", counter.Noscopes),
+                        new("@wallbangs", counter.Wallbangs),
+                        new("@blind_kills", counter.BlindKills),
+                        new("@smoke_kills", counter.SmokeKills),
+                        new("@dominations", counter.Dominations),
+                        new("@revenges", counter.Revenges)
+                    }));
             }
 
             foreach (var kv in clutchBatch) {
-                if (dbDown) {
-                    unwrittenClutches.Add(kv);
-                    continue;
-                }
-
                 var (steamId64, side, season, opponents) = kv.Key;
                 var counter = kv.Value;
 
-                int affected = database.insert(
-                    $"INTO {ClutchStatTable} (steamid64, side, season, opponents, attempts, wins, first_seen, updated_at) " +
+                writes.Add(($"INTO {ClutchStatTable} (steamid64, side, season, opponents, attempts, wins, first_seen, updated_at) " +
                     "VALUES (@steamid64, @side, @season, @opponents, @attempts, @wins, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE attempts=attempts+@attempts, wins=wins+@wins, updated_at=NOW()",
-                    new MySqlParameter("@steamid64", steamId64.ToString()),
-                    new MySqlParameter("@side", side),
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@opponents", opponents),
-                    new MySqlParameter("@attempts", counter.Attempts),
-                    new MySqlParameter("@wins", counter.Wins)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenClutches.Add(kv);
-                }
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@side", side),
+                        new("@season", season),
+                        new("@opponents", opponents),
+                        new("@attempts", counter.Attempts),
+                        new("@wins", counter.Wins)
+                    }));
             }
 
             foreach (var kv in multikillBatch) {
-                if (dbDown) {
-                    unwrittenMultikills.Add(kv);
-                    continue;
-                }
-
                 var (steamId64, side, season, kills) = kv.Key;
 
-                int affected = database.insert(
-                    $"INTO {MultikillStatTable} (steamid64, side, season, kills, rounds, first_seen, updated_at) " +
+                writes.Add(($"INTO {MultikillStatTable} (steamid64, side, season, kills, rounds, first_seen, updated_at) " +
                     "VALUES (@steamid64, @side, @season, @kills, @rounds, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE rounds=rounds+@rounds, updated_at=NOW()",
-                    new MySqlParameter("@steamid64", steamId64.ToString()),
-                    new MySqlParameter("@side", side),
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@kills", kills),
-                    new MySqlParameter("@rounds", kv.Value)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenMultikills.Add(kv);
-                }
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@side", side),
+                        new("@season", season),
+                        new("@kills", kills),
+                        new("@rounds", kv.Value)
+                    }));
             }
 
             foreach (var kv in dailyBatch) {
-                if (dbDown) {
-                    unwrittenDaily.Add(kv);
-                    continue;
-                }
-
                 var (steamId64, day) = kv.Key;
                 var counter = kv.Value;
 
@@ -1124,74 +1169,63 @@ public class DamageReport : ModuleBase {
                     dailyParams.Add(new MySqlParameter("@points", counter.Points.Value));
                 }
 
-                int affected = database.insert(
-                    $"INTO {DailyStatTable} ({string.Join(", ", insertCols)}, updated_at) " +
+                writes.Add(($"INTO {DailyStatTable} ({string.Join(", ", insertCols)}, updated_at) " +
                     $"VALUES ({string.Join(", ", insertVals)}, NOW()) " +
                     $"ON DUPLICATE KEY UPDATE {string.Join(", ", updateClauses)}, updated_at=NOW()",
-                    dailyParams.ToArray()
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenDaily.Add(kv);
-                }
+                    dailyParams.ToArray()));
             }
 
             foreach (var kv in duelTotalBatch) {
-                if (dbDown) {
-                    unwrittenDuelTotals.Add(kv);
-                    continue;
-                }
-
                 var (steamId64, season) = kv.Key;
                 var counter = kv.Value;
 
-                int affected = database.insert(
-                    $"INTO {DuelTotalTable} (steamid64, season, kills, deaths, headshots, assists, updated_at) " +
-                    "VALUES (@steamid64, @season, @kills, @deaths, @headshots, @assists, NOW()) " +
+                writes.Add(($"INTO {DuelTotalTable} (steamid64, season, kills, deaths, headshots, assists, teamkills, suicides, updated_at) " +
+                    "VALUES (@steamid64, @season, @kills, @deaths, @headshots, @assists, @teamkills, @suicides, NOW()) " +
                     "ON DUPLICATE KEY UPDATE kills=kills+@kills, deaths=deaths+@deaths, " +
-                    "headshots=headshots+@headshots, assists=assists+@assists, updated_at=NOW()",
-                    new MySqlParameter("@steamid64", steamId64.ToString()),
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@kills", counter.Kills),
-                    new MySqlParameter("@deaths", counter.Deaths),
-                    new MySqlParameter("@headshots", counter.Headshots),
-                    new MySqlParameter("@assists", counter.Assists)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenDuelTotals.Add(kv);
-                }
+                    "headshots=headshots+@headshots, assists=assists+@assists, " +
+                    "teamkills=teamkills+@teamkills, suicides=suicides+@suicides, updated_at=NOW()",
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@season", season),
+                        new("@kills", counter.Kills),
+                        new("@deaths", counter.Deaths),
+                        new("@headshots", counter.Headshots),
+                        new("@assists", counter.Assists),
+                        new("@teamkills", counter.TeamKills),
+                        new("@suicides", counter.Suicides)
+                    }));
             }
 
             foreach (var kv in serverStatBatch) {
-                if (dbDown) {
-                    unwrittenServerStats.Add(kv);
-                    continue;
-                }
-
                 string season = kv.Key;
                 var counter = kv.Value;
 
-                int affected = database.insert(
-                    $"INTO {ServerStatSeasonTable} (season, hits, damage, headshots, shots, rounds, updated_at) " +
+                writes.Add(($"INTO {ServerStatSeasonTable} (season, hits, damage, headshots, shots, rounds, updated_at) " +
                     "VALUES (@season, @hits, @damage, @headshots, @shots, @rounds, NOW()) " +
                     "ON DUPLICATE KEY UPDATE hits=hits+@hits, damage=damage+@damage, headshots=headshots+@headshots, " +
                     "shots=shots+@shots, rounds=rounds+@rounds, updated_at=NOW()",
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@hits", counter.Hits),
-                    new MySqlParameter("@damage", counter.Damage),
-                    new MySqlParameter("@headshots", counter.Headshots),
-                    new MySqlParameter("@shots", counter.Shots),
-                    new MySqlParameter("@rounds", counter.Rounds)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwrittenServerStats.Add(kv);
-                }
+                    new MySqlParameter[] {
+                        new("@season", season),
+                        new("@hits", counter.Hits),
+                        new("@damage", counter.Damage),
+                        new("@headshots", counter.Headshots),
+                        new("@shots", counter.Shots),
+                        new("@rounds", counter.Rounds)
+                    }));
             }
+
+            bool ok = writes.Count == 0 || database.ExecuteTransaction(writes) > 0;
+
+            var unwrittenHits = ok ? new() : hitBatch;
+            var unwrittenShots = ok ? new() : shotBatch;
+            var unwrittenRounds = ok ? new() : roundBatch;
+            var unwrittenDuels = ok ? new() : duelBatch;
+            var unwrittenClutches = ok ? new() : clutchBatch;
+            var unwrittenMultikills = ok ? new() : multikillBatch;
+            var unwrittenDaily = ok ? new() : dailyBatch;
+            var unwrittenDuelTotals = ok ? new() : duelTotalBatch;
+            var unwrittenServerStats = ok ? new() : serverStatBatch;
+            var unwrittenKnifeTaserKills = ok ? new() : knifeTaserBatch;
 
             Server.NextFrame(() => {
                 flushInProgress = false;
@@ -1273,8 +1307,17 @@ public class DamageReport : ModuleBase {
                     if (!pendingDuelTotalCounters.TryGetValue(kv.Key, out var existing)) {
                         pendingDuelTotalCounters[kv.Key] = kv.Value;
                     } else {
+                        // Fixed 2026-08-04 while adding TeamKills/Suicides below: this branch
+                        // only merged Kills/Deaths back, silently dropping Headshots/Assists
+                        // from a failed batch whenever new activity had already re-created the
+                        // key in the meantime. Pre-existing, unrelated to the new fields --
+                        // fixed here since it's the exact block being touched anyway.
                         existing.Kills += kv.Value.Kills;
                         existing.Deaths += kv.Value.Deaths;
+                        existing.Headshots += kv.Value.Headshots;
+                        existing.Assists += kv.Value.Assists;
+                        existing.TeamKills += kv.Value.TeamKills;
+                        existing.Suicides += kv.Value.Suicides;
                     }
                 }
 
@@ -1290,9 +1333,12 @@ public class DamageReport : ModuleBase {
                     }
                 }
 
+                pendingKnifeTaserKills.AddRange(unwrittenKnifeTaserKills);
+
                 int unwritten = unwrittenHits.Count + unwrittenShots.Count + unwrittenRounds.Count
                     + unwrittenDuels.Count + unwrittenClutches.Count + unwrittenMultikills.Count
-                    + unwrittenDaily.Count + unwrittenDuelTotals.Count + unwrittenServerStats.Count;
+                    + unwrittenDaily.Count + unwrittenDuelTotals.Count + unwrittenServerStats.Count
+                    + unwrittenKnifeTaserKills.Count;
                 if (unwritten > 0) {
                     Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten} stat rows cached for retry.");
                 } else {
@@ -1300,7 +1346,8 @@ public class DamageReport : ModuleBase {
                         $"[DEBUG] OSBase[{ModuleName}] flushed pending stat writes ({source}): " +
                         $"hitRows={hitBatch.Count}, shotRows={shotBatch.Count}, roundRows={roundBatch.Count}, " +
                         $"duelRows={duelBatch.Count}, clutchRows={clutchBatch.Count}, multikillRows={multikillBatch.Count}, " +
-                        $"dailyRows={dailyBatch.Count}, duelTotalRows={duelTotalBatch.Count}, serverStatRows={serverStatBatch.Count}"
+                        $"dailyRows={dailyBatch.Count}, duelTotalRows={duelTotalBatch.Count}, serverStatRows={serverStatBatch.Count}, " +
+                        $"knifeTaserRows={knifeTaserBatch.Count}"
                     );
                 }
             });
@@ -1315,10 +1362,11 @@ public class DamageReport : ModuleBase {
         return player.SteamID > 0;
     }
 
-    // Best-effort mirror of OSWeb's ServerKillTracker::normaliseWeapon (not a call to it --
-    // that's PHP, out of reach from here) so these counters join cleanly against the site's
-    // own player_kill_stat. Exact knife/taser spelling variants aren't confirmed against that
-    // source; flag any mismatch found in practice rather than assume this list is complete.
+    // Kept consistent across every OSBase table that carries a weapon column
+    // (player_hit_stat, player_weapon_shots, player_duel_stat, elo_kill_event) -- corrected
+    // 2026-08-04 (agent-chat #18): this used to say the goal was matching OSWeb's
+    // ServerKillTracker::normaliseWeapon/player_kill_stat, but neither was ever built. Purely
+    // internal consistency now, not a cross-repo join.
     private static string NormalizeWeapon(string? weapon) {
         string normalized = (weapon ?? string.Empty).Trim().ToLowerInvariant();
 
@@ -1343,6 +1391,19 @@ public class DamageReport : ModuleBase {
         }
 
         return normalized;
+    }
+
+    // Unlike NormalizeWeapon above, deliberately does NOT collapse every knife into "knife" --
+    // osbase-stat-contracts.md section 4 wants "which knife" preserved (e.g. "knife_karambit",
+    // "bayonet"), only the classification check (IsKnifeOrTaser) needs the collapsed form.
+    private static string RawWeaponName(string? weapon) {
+        string normalized = (weapon ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (normalized.StartsWith("weapon_", StringComparison.Ordinal)) {
+            normalized = normalized.Substring("weapon_".Length);
+        }
+
+        return normalized.Length == 0 ? "unknown" : normalized;
     }
 
     private HookResult OnPlayerHurt(EventPlayerHurt e) {
@@ -1459,6 +1520,14 @@ public class DamageReport : ModuleBase {
             ScheduleDamageReport(victimId);
         }
 
+        // World-damage suicide (fall, drowning, a lingering own molotov, ...) reports no
+        // attacker at all, so it never reaches IsRealHuman(e.Attacker) below -- handled here
+        // instead, same deliberately-separate suicides counter as the self-kill case further
+        // down (which does have an attacker: itself).
+        if (statsGateOpen && e.Attacker == null && IsRealHuman(e.Userid)) {
+            AddDuelTotal(e.Userid!.SteamID, CurrentSeason(), kills: 0, deaths: 0, suicides: 1);
+        }
+
         // Nemesis counters -- every kill on every server, not gated to a tournament match
         // window (that gate is EloRating's own scoring decision, separate from whether a duel
         // gets counted here). Self-kills are dropped by AddDuel (attackerId64==victimId64);
@@ -1471,13 +1540,14 @@ public class DamageReport : ModuleBase {
                 if (IsRealHuman(e.Attacker) && IsRealHuman(e.Userid)) {
                     bool isTeamKill = e.Attacker!.TeamNum == e.Userid!.TeamNum;
                     string season = CurrentSeason();
+                    string weaponClass = NormalizeWeapon(e.Weapon);
 
                     AddDuel(
                         e.Attacker.SteamID,
                         e.Userid.SteamID,
                         MapSide(e.Attacker),
                         MapSide(e.Userid),
-                        NormalizeWeapon(e.Weapon),
+                        weaponClass,
                         season,
                         e.Headshot,
                         e.Noscope,
@@ -1488,10 +1558,38 @@ public class DamageReport : ModuleBase {
                         e.Revenge
                     );
 
+                    // osbase-stat-contracts.md section 4. Team kills included, not filtered --
+                    // see the field comment on pendingKnifeTaserKills for why (a raw event
+                    // record, not an achievement counter).
+                    if (weaponClass == "knife" || weaponClass == "taser") {
+                        AddKnifeTaserKill(
+                            e.Attacker.SteamID,
+                            e.Userid.SteamID,
+                            MapSide(e.Attacker),
+                            MapSide(e.Userid),
+                            RawWeaponName(e.Weapon),
+                            CurrentMap(),
+                            eloRating?.CurrentMatchId
+                        );
+                    }
+
                     // Ask 16a/24 roll-up: same scope as player_duel_stat above (team kills
                     // included, not filtered) -- it's the same numbers already in hand here.
                     AddDuelTotal(e.Attacker.SteamID, season, kills: 1, deaths: 0, headshots: e.Headshot ? 1 : 0);
                     AddDuelTotal(e.Userid.SteamID, season, kills: 0, deaths: 1);
+
+                    // Found 2026-08-04 (per user ask): teamkills/suicides, deliberately
+                    // additive-only counters kept separate from kills/deaths above -- those
+                    // stay exactly as they already are, nothing here changes what they mean.
+                    // A self-kill (attacker==victim, e.g. own grenade or the "kill" command)
+                    // is a suicide, not a teamkill, even though isTeamKill above is trivially
+                    // true for it (same TeamNum as itself) -- checked explicitly rather than
+                    // reusing that flag for the wrong thing.
+                    if (e.Attacker.SteamID == e.Userid.SteamID) {
+                        AddDuelTotal(e.Userid.SteamID, season, kills: 0, deaths: 0, suicides: 1);
+                    } else if (isTeamKill) {
+                        AddDuelTotal(e.Attacker.SteamID, season, kills: 0, deaths: 0, teamKills: 1);
+                    }
 
                     // Ask 24: assist half of the period summary. Same eligibility check as
                     // EloRating's assist reward (real human, not the attacker or victim
@@ -1624,6 +1722,13 @@ public class DamageReport : ModuleBase {
         clutchFlaggedThisRound.Clear();
         roundClutchCandidates.Clear();
 
+        // osbase-stat-contracts.md section 5's third requirement: flush on the way out, so a
+        // fast round can never let more than one round's worth of writes queue up behind the
+        // delay timer above. If the timer already fired this is a no-op (nothing pending).
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = null;
+        FlushPendingStats("RoundStart");
+
         // Decided here, not at round end -- see the field comment on statsGateOpen. Held for
         // the whole round regardless of who connects/disconnects while it's live.
         bool warmup = IsWarmupActive();
@@ -1650,15 +1755,24 @@ public class DamageReport : ModuleBase {
 
             ScheduleDamageReport(p.UserId.Value);
 
-            // For ADR: one round played, for whichever side they were actually on.
+            // For damage/round: one round played, for whichever side they were actually on.
             // Spectators/unassigned (MapSide -> unknown) still get a row -- excluding them
             // would silently drop anyone who spent the round on a team that then swapped, and
             // "unknown" is a legitimate, filterable bucket, not an error state. Gated by
             // statsGateOpen, decided at this round's start, not re-checked here.
             if (statsGateOpen && IsRealHuman(p)) {
                 int side = MapSide(p);
+                // Confirmed 2026-08-04 (agent-chat #29/#30): "played this round" and
+                // "won this round" are both presence/side checks at round END, not round
+                // START -- a player who connected mid-round still gets +1 rounds, and a
+                // player who died mid-round still gets rounds_won if their side took it.
+                // Neither is a bug; there's no round-start snapshot to compare against.
                 AddRoundPlayed(p.SteamID, side, season, map, won: side == winnerSide);
 
+                // seconds = time since THIS player's last round-end sample, not time alive
+                // and not total session time -- a rolling per-round-end delta. A player's
+                // first-ever sample has nothing to diff against, so it contributes 0, not
+                // that round's actual duration.
                 int seconds = 0;
                 DateTime now = DateTime.UtcNow;
                 if (lastActivitySample.TryGetValue(p.UserId!.Value, out DateTime lastSample)) {
@@ -1728,7 +1842,13 @@ public class DamageReport : ModuleBase {
             roundKillCount.Clear();
         }
 
-        FlushPendingStats("RoundEnd");
+        // Capture is already done above (everything's in the pending dictionaries now);
+        // only the flush itself is delayed, off the exact round-end tick.
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = osbase?.AddTimer(RoundEndFlushDelaySeconds, () => {
+            pendingFlushTimer = null;
+            FlushPendingStats("RoundEnd");
+        });
 
         return HookResult.Continue;
     }
