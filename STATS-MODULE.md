@@ -103,9 +103,14 @@ this aggregate to a `player_hit_stat` table (`steamid64`, `weapon`,
 `EventPlayerHurt` event — no log parsing, no `mp_logdetail`. Writes are
 buffered per round and flushed between rounds (same pattern as
 `EventWeekend`/`EloRating`'s buffered writes). This table is owned by
-`DamageReport` alone — nothing else should write to it, same guardrail as
-`player_kill_stat` below. The rest of this section is kept as the record of
-why it's shaped the way it is.
+`DamageReport` alone — nothing else should write to it, same never-a-
+second-writer guardrail as everywhere else in this system. The rest of
+this section is kept as the record of why it's shaped the way it is.
+**Note added 2026-08-04 (agent-chat #18):** this section originally also
+pointed at `player_kill_stat` as a second example of the same guardrail —
+that table never existed (`ServerKillTracker`, its intended writer, was
+never built; OSWeb dropped the placeholder table in migration 0169). See
+the corrected headshot table below.
 
 **Also built the same day: shots fired.** `EventPlayerHurt` only fires on an
 actual hit, so it can't answer "accuracy per weapon" on its own — a miss
@@ -139,7 +144,7 @@ building it, because they diverge:**
 
 | Definition | Source | What people usually mean |
 |---|---|---|
-| headshot kills / kills | `player_kill_stat.headshots` (site-owned, migration 0156) | ✅ the classic CS scoreboard stat |
+| headshot kills / kills | `player_duel_total.headshots` / `.kills` (OSBase-owned — **corrected 2026-08-04, agent-chat #18**: originally pointed at `player_kill_stat.headshots`, a site table that was never built) | ✅ the classic CS scoreboard stat |
 | headshot hits / all hits | `player_hit_stat WHERE hitgroup=1 (Head) AND direction=dealt` | More precise, but not what people compare |
 
 A player who chips the body and finishes with one headshot gets a high
@@ -162,9 +167,55 @@ Two new counter tables, same owner (`DamageReport`), same buffer-and-flush
 pattern:
 
 - **`player_round_stat`** — `(steamid64, side, season)` → `rounds`. Exists
-  so ADR (average damage per round) is computable at all:
+  so damage-per-round is computable at all:
   `SUM(player_hit_stat.damage WHERE direction=dealt) / player_round_stat.rounds`.
   Damage alone was already recorded; there was no denominator for it.
+  **Corrected 2026-08-04 (agent-chat #36): not "ADR".** `damage` is raw
+  `DmgHealth`, confirmed uncapped against the victim's remaining HP (live-
+  server test: a Zeus/taser's nominal 500 damage shows as 500 even though
+  max HP is 100) — so this ratio isn't comparable to HLTV/Faceit/Leetify's
+  ADR, which clamps. OSWeb calls the site-facing number "Skada/rond"
+  (damage/round) for exactly this reason; use that term here too, not ADR,
+  so a future reader doesn't assume this ratio means what the industry term
+  means.
+
+**Sealed decision, 2026-08-04 (agent-chat #36/#37/#38), same shape as the
+Ace decision above — recorded so a missing "clamped damage" column doesn't
+read as an oversight later.** A comparable-to-other-sites ADR would need
+its own column: `player_hit_stat.damage` sums raw hits, and a sum can't be
+retroactively clamped, so this is another "capture now or lose forever"
+fork, same family as the victim-weapon and bonus-log fixes earlier this
+week — flagged by OSWeb as time-critical for exactly that reason. **Owner
+decided against it**, immediately after OSWeb raised it: chasing
+comparability with sites this community doesn't compete against isn't
+worth a column and a variable, and the number people actually want
+("am I getting better") is already answered by the existing, uncapped
+`Skada/rond` as long as it's honestly named — which it now is.
+
+The formula, correct and worth keeping even though not built, in case this
+is revisited: **the naive `100 - victim.health` is wrong** — it credits
+the *victim's total health lost that exchange* to whoever lands last,
+double-crediting anyone who also damaged them. The right measure is a
+per-attacker delta against the victim's health *at the moment of each hit*:
+
+```
+// per victim, reset every round start
+lastHealth[victim] = 100
+
+// on each EventPlayerHurt
+taken = lastHealth[victim] - event.Health   // event.Health is POST-hit
+lastHealth[victim] = event.Health
+// credit `taken` to the attacker -- clamping falls out on its own,
+// a killing blow naturally yields exactly what was left
+```
+
+One int per victim, reset at round start (same lifecycle as the clutch/
+round-scoped state already kept there). **The edge that would decide
+whether it's actually comparable, not just different:** HLTV-style ADR
+excludes team damage; `player_duel_stat` deliberately keeps team kills
+unfiltered and should keep doing that, but a clamped-for-comparability
+column would need team damage excluded specifically, or it stays
+incomparable for a new reason instead of the old one.
 - **`player_duel_stat`** — `(attackerid64, victimid64, attacker_side,
   victim_side, weapon)` → `kills`, `headshots`. Feeds nemesis lists ("who
   kills me" / "who I kill", per weapon, per side). Both directions of a pair
@@ -177,14 +228,17 @@ pattern:
   server rivalries live, tournament or not. No `season` column here on
   purpose — rivalries read all-time.
 
-**Weapon-name normalization is best-effort, not confirmed.** `DamageReport`
-now folds `knife_*`/`*bayonet*` → `knife`, `taser`/`zeus`/`zeusx27` →
-`taser`, and strips a trailing `_projectile` suffix, to join cleanly against
-OSWeb's `player_kill_stat` (parsed by `ServerKillTracker::normaliseWeapon`).
-OSBase has no access to that PHP source, so this list is a guess at its
-rules, same situation the `tournament_match` contract was in before it got
-confirmed — flag it if a weapon name mismatch turns up once both sides have
-real data to compare.
+**Weapon-name normalization, kept consistent across OSBase's own tables.**
+`DamageReport` folds `knife_*`/`*bayonet*` → `knife`, `taser`/`zeus`/
+`zeusx27` → `taser`, and strips a trailing `_projectile` suffix — the same
+`NormalizeWeapon` used everywhere a weapon column exists in this system
+(`player_hit_stat`, `player_weapon_shots`, `player_duel_stat`,
+`elo_kill_event`), so a weapon reads identically no matter which table it's
+joined from. **Corrected 2026-08-04 (agent-chat #18):** this note
+originally said the goal was joining against OSWeb's `player_kill_stat`
+(parsed by a `ServerKillTracker::normaliseWeapon` OSBase had no access
+to) — that table and parser were never built; the normalization's actual
+and only job is internal consistency across OSBase's own tables.
 
 **Expanded again 2026-07-21: asks 5-10 (`docs/traffkarta-hit-stats.md`).**
 Six more gaps found while side/season were being wired up on OSWeb's end.
@@ -223,6 +277,22 @@ Six more gaps found while side/season were being wired up on OSWeb's end.
   sizes exceed 5v5, so 6k/7k happen); collapsing to "5k+" at write time would
   make the individual counts unrecoverable, same rule as everything else
   here.
+
+**Sealed decision, 2026-08-04 (agent-chat #26/#27), so it doesn't get
+re-litigated as an oversight later: "Ace" stays pinned to a plain `5k`,
+not derived from enemy team size.** Raised and retracted in the same
+exchange — OSWeb first asked for a `player_clutch_stat.opponents`-style
+"enemies alive" dimension on this table (a true ace is eliminating the
+*whole* enemy team, which a `5k` in an 8v8, or after a disconnect leaves
+four, doesn't actually mean or fail to mean), then withdrew it: the site
+owner decided Ace is what every player already calls a five-kill round —
+a familiar name, not a strictly-correct-but-unrecognized derived term —
+and the edge cases are things that happen to you, not the common case.
+**No `enemies`/team-size column was added here on purpose.** If a
+technically-accurate ace ever becomes wanted later, that's a new column
+and a new ask, not a redefinition of this one — same non-retroactive rule
+as everything else in this document, just applied to a decision *against*
+capturing a dimension rather than for one.
 
 **Two judgment calls made while implementing asks 5-10 — one confirmed, one
 overturned (2026-07-21):**
@@ -343,6 +413,21 @@ Found while OSWeb built its readers against the real schema.
   the ask-11 gates besides. The two will disagree; that's expected, they
   count to different rules, and the site should read one or the other for a
   given number, never both on one page.
+
+**Two behaviors of `rounds`/`rounds_won`, confirmed 2026-08-04 against
+`DamageReport.cs`'s actual `OnRoundEnd` loop (agent-chat #29), neither
+documented anywhere before this:**
+- **A round counts as "played" based on presence at round *end*, not round
+  start.** The loop is `foreach (var p in Utilities.GetPlayers())` run when
+  `EventRoundEnd` fires — there is no round-start snapshot compared
+  against it. A player who connects mid-round and is still present when it
+  ends gets a `rounds`+1 row for that round, same as someone who was there
+  the whole time.
+- **`rounds_won` doesn't check whether the player was alive.** The
+  condition is `side == winnerSide` — a player who died mid-round still
+  gets credited with the win if their team took the round. There is no
+  separate "survived" dimension anywhere in this table.
+
 - **15. `player_daily_stat` (steamid64, day) → hits, damage, headshots,
   shots, rounds.** A season is too coarse for "how have I played this
   week" — in week one of a quarter the season total is nearly empty, so a
@@ -517,6 +602,37 @@ lines and the two modules otherwise have no reason to share code.
 With this, `player_duel_total` is honestly the player's period summary
 table, not just a duel roll-up — the comment on its `CREATE TABLE` says so
 now.
+
+## Teamkill/suicide: a scoreboard penalty and two new counters (2026-08-04)
+
+Direct ask, not from OSWeb: old CS:Source took a player's kill count down by
+one for a teamkill or a suicide. Three separate pieces, kept separate on
+purpose after an explicit "don't touch the existing counter" instruction:
+
+- **`TeamDamage.cs`** now decrements `ActionTrackingServices.MatchStats.Kills`
+  by 1 (verified via `ilspycmd` against the real CounterStrikeSharp DLL, not
+  guessed) for both a teamkill and a suicide. **Purely cosmetic, purely the
+  native CS2 scoreboard** — this line never touches any OSBase-owned table.
+  Suicide detection had to be added here too: `TeamDamage.cs` previously only
+  handled friendly fire (attacker ≠ victim, same team); a suicide is either
+  no attacker at all (world damage — fall, drowning) or attacker == victim
+  (own grenade, the `kill` command), neither of which the old
+  `IsValidFriendlyFire` check matched.
+- **`player_duel_total` gained `teamkills`/`suicides`**, additive-only,
+  explicitly *not* subtracted from `kills`/`deaths` — the user was clear
+  that the existing counter must keep meaning exactly what it already
+  means. A suicide increments the victim's own `suicides`; a teamkill
+  increments the attacker's `teamkills`. Both gated by `statsGateOpen`,
+  same as everything else here.
+- Fixed in the same pass, found while touching the adjacent code: the
+  retry-merge path for a failed `player_duel_total` flush only re-merged
+  `kills`/`deaths` back into the pending counter, silently dropping
+  `headshots`/`assists` from a failed batch whenever new activity had
+  already recreated the same key in the meantime. Pre-existing, unrelated
+  to this ask, fixed because it was the exact block being edited anyway.
+- **Elo side** (rating penalty, not points — see `ELO-MODULE.md`'s
+  `elo_bonus_event` section) is a separate, explicitly requested addition,
+  not implied by the scoreboard/counter pieces above.
 
 ## `!elorank` / `!elotop` — the community's own chat commands (2026-07-22)
 
