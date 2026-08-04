@@ -59,6 +59,14 @@ public class ServerInfo : ModuleBase {
     private const int StaleRowMaxAgeSeconds = 1800;
     private readonly Dictionary<ulong, (long connectedAt, long lastSeen)> sessions = new();
 
+    // GDPR-driven retention sweep, deliberately NOT scoped to our own host/port like
+    // PruneStaleUsers' crash-ghost fallback above - a decommissioned server never runs this
+    // plugin again, so nothing would ever clean up its rows if this stayed self-scoped. Runs at
+    // most once per AncientRowPruneIntervalSeconds regardless of how often PruneStaleUsers fires.
+    private int retentionDays = 30;
+    private const long AncientRowPruneIntervalSeconds = 86400;
+    private long lastAncientRowPruneUnix = 0;
+
     private static long NowUnix() => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
     private bool InMapChangeGrace => NowUnix() < mapChangeGraceUntil;
 
@@ -144,7 +152,11 @@ public class ServerInfo : ModuleBase {
             "port 27015\n" +
             "// Steam Workshop collection ID this server rotates (leave empty for standard/official maps).\n" +
             "// If empty, it is auto-detected from the +host_workshop_collection launch argument.\n" +
-            "workshop_collection \"\"\n"
+            "workshop_collection \"\"\n" +
+            "// GDPR retention: serverinfo_user rows (across ALL servers, not just this one) whose\n" +
+            "// last_seen is older than this many days are deleted. A player who never registers on\n" +
+            "// the site has no other lifecycle event to age this row out.\n" +
+            "retention_days 30\n"
         );
     }
 
@@ -153,6 +165,7 @@ public class ServerInfo : ModuleBase {
         host = string.Empty;
         port = 0;
         workshopCollection = string.Empty;
+        retentionDays = 30;
 
         List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
@@ -190,6 +203,13 @@ public class ServerInfo : ModuleBase {
 
                 case "workshop_collection":
                     workshopCollection = value;
+                    break;
+
+                case "retention_days":
+                    if (!int.TryParse(value, out retentionDays) || retentionDays <= 0) {
+                        Console.WriteLine($"[ERROR] OSBase[{ModuleName}]: Invalid retention_days value: {value}");
+                        retentionDays = 30;
+                    }
                     break;
 
                 default:
@@ -474,6 +494,32 @@ public class ServerInfo : ModuleBase {
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error pruning stale users: {e.Message}");
         }
+
+        PruneAncientRows();
+    }
+
+    private void PruneAncientRows() {
+        if (db == null) {
+            return;
+        }
+
+        long now = NowUnix();
+        if (now - lastAncientRowPruneUnix < AncientRowPruneIntervalSeconds) {
+            return;
+        }
+        lastAncientRowPruneUnix = now;
+
+        try {
+            // Deliberately unscoped by host/port - see the field comment above. Any live server
+            // running this sweep cleans up every server's ancient rows, not just its own.
+            int removed = db.delete(
+                "FROM serverinfo_user WHERE last_seen > 0 AND UNIX_TIMESTAMP() - last_seen > @maxAge",
+                new MySqlParameter("@maxAge", (long)retentionDays * 86400)
+            );
+            Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Retention sweep removed {removed} row(s) older than {retentionDays}d.");
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error pruning ancient rows: {e.Message}");
+        }
     }
 
     private void CreateTables() {
@@ -708,6 +754,13 @@ public class ServerInfo : ModuleBase {
             playerName = player.IsBot ? $"Bot-{player.Index}" : "Unknown";
         }
 
+        // Confirmed 2026-08-04 (agent-chat #29/#30), worth being explicit about since it
+        // surprised OSWeb: these three come from GameStats' own internal PlayerStats, not
+        // from CS2's native scoreboard, DamageReport's counters, or Elo -- a third, separate
+        // kill-counting system. GameStats.ResetCounters() (only called on EventWarmupEnd)
+        // means these do NOT survive a genuine map change under normal play -- a new map's
+        // warmup ending zeroes them, even though nothing here is map-change-triggered
+        // directly.
         int kills = 0;
         int assists = 0;
         int deaths = 0;
