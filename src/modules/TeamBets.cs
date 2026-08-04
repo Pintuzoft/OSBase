@@ -7,6 +7,8 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
 using MySqlConnector;
+using OSBase.Helpers;
+using Timer = CounterStrikeSharp.API.Modules.Timers.Timer;
 
 namespace OSBase.Modules;
 
@@ -19,6 +21,7 @@ public class TeamBets : ModuleBase {
     private const int MaxMoney = 16000;
     private const float LeaderboardDelaySeconds = 1.5f;
     private const string TeamBetStatTable = "player_teambet_stat";
+    private const string TeamBetLogTable = "player_teambet_log";
 
     private bool roundLive = false;
 
@@ -30,7 +33,15 @@ public class TeamBets : ModuleBase {
 
     private Database? db;
     private bool flushInProgress;
+    private EloRating? eloRating;
+    private GameStats? gameStats;
+
+    // osbase-stat-contracts.md section 5, same fix as DamageReport.cs/EloRating.cs: delay
+    // the flush's transaction off the exact round-end tick instead of firing with it.
+    private const float RoundEndFlushDelaySeconds = 2.0f;
+    private Timer? pendingFlushTimer;
     private readonly Dictionary<(ulong SteamId64, string Season), PendingTeamBetCounter> pendingTeamBetCounters = new();
+    private readonly List<PendingTeamBetLogRow> pendingTeamBetLogRows = new();
 
     private sealed class PendingTeamBetCounter {
         public int Bets;
@@ -40,6 +51,21 @@ public class TeamBets : ModuleBase {
         public int BiggestWin;
         public int BiggestWinStake;
         public DateTime? BiggestWinAt;
+    }
+
+    // One row per resolved bet -- browsable log, never aggregated in memory like the
+    // counter above. "outcome" is one of "won"/"lost"/"void"; payout is always a concrete
+    // number, 0 on a loss or void, never NULL (osbase-stat-contracts.md section 3).
+    private sealed class PendingTeamBetLogRow {
+        public required ulong SteamId64;
+        public required DateTime Stamp;
+        public int? MatchId;
+        public required string Mapname;
+        public required int Round;
+        public required int Pick;
+        public required int Stake;
+        public required int Payout;
+        public required string Outcome;
     }
 
     // userid -> bet
@@ -54,7 +80,16 @@ public class TeamBets : ModuleBase {
         public int AliveT { get; }
         public int AliveCt { get; }
 
-        public Bet(ulong steamId64, string playerName, int amount, int team, float odds, int aliveT, int aliveCt) {
+        // Captured at placement time (not resolution) -- "when" for the log means when the
+        // person made the pick, and match_id/mapname/round place it in a session even if the
+        // bet resolves a few seconds later at round end.
+        public DateTime Stamp { get; }
+        public int? MatchId { get; }
+        public string Mapname { get; }
+        public int Round { get; }
+
+        public Bet(ulong steamId64, string playerName, int amount, int team, float odds, int aliveT, int aliveCt,
+                   DateTime stamp, int? matchId, string mapname, int round) {
             SteamId64 = steamId64;
             PlayerName = playerName;
             Amount = amount;
@@ -62,6 +97,10 @@ public class TeamBets : ModuleBase {
             Odds = odds;
             AliveT = aliveT;
             AliveCt = aliveCt;
+            Stamp = stamp;
+            MatchId = matchId;
+            Mapname = mapname;
+            Round = round;
         }
     }
 
@@ -96,9 +135,13 @@ public class TeamBets : ModuleBase {
 
         db = new Database(osbase!, config!);
         CreateTable();
+        eloRating = osbase?.GetModule<EloRating>();
+        gameStats = osbase?.GetGameStats();
     }
 
     protected override void OnUnload() {
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = null;
         FlushPendingTeamBetStats("Unload");
 
         bets.Clear();
@@ -134,6 +177,8 @@ public class TeamBets : ModuleBase {
             return;
         }
 
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = null;
         FlushPendingTeamBetStats("MapStart");
     }
 
@@ -196,11 +241,8 @@ public class TeamBets : ModuleBase {
         );
     }
 
-    private static string CurrentSeason() {
-        DateTime now = DateTime.UtcNow;
-        int quarter = ((now.Month - 1) / 3) + 1;
-        return $"{now.Year}Q{quarter}";
-    }
+    // Extracted to SeasonHelper 2026-08-04 (agent-chat #33) -- see that helper's comment.
+    private static string CurrentSeason() => SeasonHelper.CurrentSeason();
 
     // player_teambet_stat is owned by this module alone. staked/returned are kept separate,
     // never netted -- net is a subtraction away, but you can't split it back into how much
@@ -235,8 +277,31 @@ public class TeamBets : ModuleBase {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
+        // osbase-stat-contracts.md section 3: player_teambet_stat stays the running-total
+        // counter above; this is the browsable log alongside it ("show me how I bet during
+        // July"), one row per resolved bet, never merged/summed. Index on (steamid64, stamp)
+        // from day one -- without it, that query is a full scan of a table growing toward
+        // ~2M rows/year (confirmed sizing in the contract doc).
+        string teamBetLogTable = $"""
+        TABLE IF NOT EXISTS {TeamBetLogTable} (
+            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            steamid64  VARCHAR(32) NOT NULL,
+            stamp      DATETIME NOT NULL,
+            match_id   INT NULL,
+            mapname    VARCHAR(64) NOT NULL,
+            round      INT NOT NULL DEFAULT 0,
+            pick       TINYINT UNSIGNED NOT NULL,
+            stake      INT NOT NULL,
+            payout     INT NOT NULL DEFAULT 0,
+            outcome    VARCHAR(8) NOT NULL,
+            PRIMARY KEY (id),
+            KEY idx_steamid_stamp (steamid64, stamp)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
         try {
             db.create(teamBetStatTable);
+            db.create(teamBetLogTable);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] table ensured.");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating table: {e.Message}");
@@ -270,57 +335,96 @@ public class TeamBets : ModuleBase {
         }
     }
 
+    // outcome is "won"/"lost"/"void" (osbase-stat-contracts.md section 3's exact enum).
+    // Called once per bet per resolution, independent of the counter above -- a log row
+    // is never merged with another, so there's nothing to look up/accumulate here.
+    private void LogTeamBet(Bet bet, string outcome, int payout) {
+        if (bet.SteamId64 == 0) {
+            return;
+        }
+
+        pendingTeamBetLogRows.Add(new PendingTeamBetLogRow {
+            SteamId64 = bet.SteamId64,
+            Stamp = bet.Stamp,
+            MatchId = bet.MatchId,
+            Mapname = bet.Mapname,
+            Round = bet.Round,
+            Pick = bet.Team,
+            Stake = bet.Amount,
+            Payout = payout,
+            Outcome = outcome,
+        });
+    }
+
     // Buffered like DamageReport/EloRating: accumulate, flush between rounds. Unwritten rows
     // on a DB outage are merged back and retried, with biggest_win/biggest_win_at kept as the
     // max seen across whatever pending batches haven't landed yet.
     private void FlushPendingTeamBetStats(string source) {
         var database = db;
-        if (database == null || flushInProgress || pendingTeamBetCounters.Count == 0) {
+        if (database == null || flushInProgress || (pendingTeamBetCounters.Count == 0 && pendingTeamBetLogRows.Count == 0)) {
             return;
         }
 
         var batch = pendingTeamBetCounters.ToList();
         pendingTeamBetCounters.Clear();
 
+        var logBatch = pendingTeamBetLogRows.ToList();
+        pendingTeamBetLogRows.Clear();
+
         flushInProgress = true;
 
         Task.Run(() => {
-            var unwritten = new List<KeyValuePair<(ulong SteamId64, string Season), PendingTeamBetCounter>>();
-            bool dbDown = false;
+            // Perf fix (osbase-stat-contracts.md section 5), same as DamageReport.cs/
+            // EloRating.cs: one transaction instead of one connection/round-trip per row,
+            // and the caller now delays invoking this flush so it lands off the exact
+            // round-end tick. All-or-nothing per flush; on failure the whole batch (both
+            // the counter and the log) goes back for retry.
+            var writes = new List<(string query, MySqlParameter[] parameters)>();
+
+            foreach (var row in logBatch) {
+                writes.Add(($"INTO {TeamBetLogTable} (steamid64, stamp, match_id, mapname, round, pick, stake, payout, outcome) " +
+                    "VALUES (@steamid64, @stamp, @match_id, @mapname, @round, @pick, @stake, @payout, @outcome)",
+                    new MySqlParameter[] {
+                        new("@steamid64", row.SteamId64.ToString()),
+                        new("@stamp", row.Stamp),
+                        new("@match_id", (object?)row.MatchId ?? DBNull.Value),
+                        new("@mapname", row.Mapname),
+                        new("@round", row.Round),
+                        new("@pick", row.Pick),
+                        new("@stake", row.Stake),
+                        new("@payout", row.Payout),
+                        new("@outcome", row.Outcome)
+                    }));
+            }
 
             foreach (var kv in batch) {
-                if (dbDown) {
-                    unwritten.Add(kv);
-                    continue;
-                }
-
                 var (steamId64, season) = kv.Key;
                 var counter = kv.Value;
 
-                int affected = database.insert(
-                    $"INTO {TeamBetStatTable} (steamid64, season, bets, wins, staked, returned, biggest_win, biggest_win_stake, biggest_win_at, first_seen, updated_at) " +
+                writes.Add(($"INTO {TeamBetStatTable} (steamid64, season, bets, wins, staked, returned, biggest_win, biggest_win_stake, biggest_win_at, first_seen, updated_at) " +
                     "VALUES (@steamid64, @season, @bets, @wins, @staked, @returned, @biggest_win, @biggest_win_stake, @biggest_win_at, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE " +
                     "bets=bets+@bets, wins=wins+@wins, staked=staked+@staked, returned=returned+@returned, " +
                     "biggest_win_at=IF(@biggest_win > biggest_win, @biggest_win_at, biggest_win_at), " +
                     "biggest_win_stake=IF(@biggest_win > biggest_win, @biggest_win_stake, biggest_win_stake), " +
                     "biggest_win=GREATEST(biggest_win, @biggest_win), updated_at=NOW()",
-                    new MySqlParameter("@steamid64", steamId64.ToString()),
-                    new MySqlParameter("@season", season),
-                    new MySqlParameter("@bets", counter.Bets),
-                    new MySqlParameter("@wins", counter.Wins),
-                    new MySqlParameter("@staked", counter.Staked),
-                    new MySqlParameter("@returned", counter.Returned),
-                    new MySqlParameter("@biggest_win", counter.BiggestWin),
-                    new MySqlParameter("@biggest_win_stake", counter.BiggestWinStake),
-                    new MySqlParameter("@biggest_win_at", (object?)counter.BiggestWinAt ?? DBNull.Value)
-                );
-
-                if (affected == 0) {
-                    dbDown = true;
-                    unwritten.Add(kv);
-                }
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@season", season),
+                        new("@bets", counter.Bets),
+                        new("@wins", counter.Wins),
+                        new("@staked", counter.Staked),
+                        new("@returned", counter.Returned),
+                        new("@biggest_win", counter.BiggestWin),
+                        new("@biggest_win_stake", counter.BiggestWinStake),
+                        new("@biggest_win_at", (object?)counter.BiggestWinAt ?? DBNull.Value)
+                    }));
             }
+
+            bool ok = writes.Count == 0 || database.ExecuteTransaction(writes) > 0;
+
+            var unwritten = ok ? new() : batch;
+            var unwrittenLogRows = ok ? new() : logBatch;
 
             Server.NextFrame(() => {
                 flushInProgress = false;
@@ -341,10 +445,12 @@ public class TeamBets : ModuleBase {
                     }
                 }
 
-                if (unwritten.Count > 0) {
-                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten.Count} teambet-stat rows cached for retry.");
+                pendingTeamBetLogRows.AddRange(unwrittenLogRows);
+
+                if (unwritten.Count > 0 || unwrittenLogRows.Count > 0) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten.Count} teambet-stat row(s) and {unwrittenLogRows.Count} teambet-log row(s) cached for retry.");
                 } else {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending teambet-stat writes ({source}): rows={batch.Count}");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending teambet writes ({source}): statRows={batch.Count}, logRows={logBatch.Count}");
                 }
             });
         });
@@ -487,7 +593,11 @@ public class TeamBets : ModuleBase {
             betTeam,
             odds,
             aliveT,
-            aliveCt
+            aliveCt,
+            DateTime.UtcNow,
+            eloRating?.CurrentMatchId,
+            Server.MapName ?? osbase?.currentMap ?? string.Empty,
+            gameStats?.roundNumber ?? 0
         );
 
         player.PrintToChat(
@@ -514,6 +624,12 @@ public class TeamBets : ModuleBase {
         int humans = CountConnectedHumans();
         statsGateOpen = !warmup && humans >= minPlayers;
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: round gate {(statsGateOpen ? "open" : "closed")} (humans={humans} min={minPlayers} warmup={warmup})");
+
+        // osbase-stat-contracts.md section 5's flush-on-the-way-out requirement: bounds the
+        // backlog to at most one round even if the round-end delay timer below never fires.
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = null;
+        FlushPendingTeamBetStats("RoundStart");
 
         return HookResult.Continue;
     }
@@ -594,6 +710,7 @@ public class TeamBets : ModuleBase {
 
                 if (statsGateOpen) {
                     AddTeamBetResult(bet.SteamId64, season, won: true, staked: bet.Amount, returned: actualPaid);
+                    LogTeamBet(bet, outcome: "won", payout: actualPaid);
                 }
 
                 Console.WriteLine(
@@ -615,6 +732,7 @@ public class TeamBets : ModuleBase {
 
                 if (statsGateOpen) {
                     AddTeamBetResult(bet.SteamId64, season, won: false, staked: bet.Amount, returned: 0);
+                    LogTeamBet(bet, outcome: "lost", payout: 0);
                 }
 
                 Console.WriteLine(
@@ -626,7 +744,13 @@ public class TeamBets : ModuleBase {
 
         PrintBetLeaderboardDelayed(winningTeam, results);
 
-        FlushPendingTeamBetStats("RoundEnd");
+        // Capture is already done above; only the flush's transaction is delayed off the
+        // exact round-end tick (osbase-stat-contracts.md section 5).
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = osbase?.AddTimer(RoundEndFlushDelaySeconds, () => {
+            pendingFlushTimer = null;
+            FlushPendingTeamBetStats("RoundEnd");
+        });
 
         bets.Clear();
         return HookResult.Continue;
@@ -728,11 +852,23 @@ public class TeamBets : ModuleBase {
             CCSPlayerController? player = Utilities.GetPlayerFromUserid(userId);
             if (player == null || !player.IsValid || player.InGameMoneyServices == null) {
                 BroadcastToChat($"[TeamBets]: {bet.PlayerName} would have been refunded ${bet.Amount}, but is disconnected.");
+
+                // Still a void bet even though the money never made it back -- the boring
+                // case osbase-stat-contracts.md section 3 asks to be consistent about.
+                // payout=0 here for the same reason a disconnected win pays 0: nothing
+                // actually came back to them.
+                if (statsGateOpen) {
+                    LogTeamBet(bet, outcome: "void", payout: 0);
+                }
                 continue;
             }
 
             AddMoney(player, bet.Amount);
             BroadcastToChat($"[TeamBets]: {bet.PlayerName} was refunded ${bet.Amount}.");
+
+            if (statsGateOpen) {
+                LogTeamBet(bet, outcome: "void", payout: bet.Amount);
+            }
         }
     }
 
