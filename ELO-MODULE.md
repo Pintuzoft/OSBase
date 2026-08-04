@@ -465,6 +465,7 @@ is right:**
 | `serverinfo_user`      | `steamid` (`ServerInfo.cs`, not part of its PK)   | `VARCHAR(32)` |
 | `faceit_cache`         | `steamid64` (`Faceit.cs`, PK)                     | `BIGINT UNSIGNED` |
 | `player_teambet_log`   | `steamid64` (`TeamBets.cs`)                       | `VARCHAR(32)` |
+| `player_teambet_matchup_stat` | `steamid64` (`TeamBets.cs`)                | `VARCHAR(32)` |
 | `knife_taser_kill_event` | `killer_steamid64`, `victim_steamid64` (**two** columns, no plain `steamid64`) — **ANONYMIZED, not deleted** | `VARCHAR(32)` each |
 | `elo_bonus_event`      | `steamid64` (**deleted**); `related_attacker_id64`/`related_victim_id64` (**anonymized**, `kind='assist'` rows only) | `VARCHAR(32)` |
 | `weapon_event_kill`    | `attackerid64`, `victimid64` (**two** columns) — **ANONYMIZED, not deleted** (also scrubs `attacker`/`victim` name columns) — same shape as `elo_kill_event`, found late (2026-08-04) because this module's own review never crossed into `EventWeekend.cs` | `VARCHAR(32)` each, NULL-able |
@@ -542,6 +543,23 @@ maintained by hand and updated only when someone remembers to.
 knife/taser table).** `player_teambet_log` is the per-bet browsable log
 alongside the existing `player_teambet_stat` counter — straightforward
 single-`steamid64` erasure, same as the counter it sits next to.
+
+**2026-08-04, direct user ask, same day: `player_teambet_matchup_stat`
+added** — same shape and same erasure treatment as `player_teambet_stat`
+(single `steamid64`, straightforward delete, no second party on the row).
+Breaks down betting performance by the alive-count matchup at the moment
+a bet was placed (`own` = alive on the picked side, `enemy` = alive on the
+other side — not the bettor's own team, since betting the opposing side
+is allowed), so a profile can show e.g. "backed 1-vs-4 underdogs 31 times
+this season, won 2, net -200,000" alongside the existing overall
+bets/wins/staked/returned summary. `own`/`enemy` come straight off
+`Bet.AliveT`/`AliveCt` (already captured at placement time for the odds
+calculation) — no new capture needed, just a second counter update
+alongside the existing `AddTeamBetResult` call at both the won and lost
+branches in `OnRoundEnd`. Void bets excluded, same reasoning as the
+overall table: a refund means no stake was ever actually at risk. Season
+is a filter like everywhere else in this codebase — all-time is a `SUM`
+across seasons at read time, no separate table for it.
 
 **Corrected same day, before this ever shipped:** `knife_taser_kill_event`
 was first documented here (and answered back to OSWeb) as delete-both-
@@ -711,6 +729,7 @@ DELETE FROM skill_log            WHERE steamid = ?;
 DELETE FROM serverinfo_user      WHERE steamid = ?;
 DELETE FROM faceit_cache         WHERE steamid64 = ?;
 DELETE FROM player_teambet_log   WHERE steamid64 = ?;
+DELETE FROM player_teambet_matchup_stat WHERE steamid64 = ?;
 DELETE FROM elo_bonus_event      WHERE steamid64 = ?;
 DELETE FROM weapon_event_score   WHERE steamid64 = ?;
 DELETE FROM knivhelg_admin       WHERE steamid64 = ?;   -- BIGINT: bind numeric, not string
@@ -1004,6 +1023,7 @@ the GDPR list (see above) plus the one non-personal-data table
 | `player_clutch_stat` | `(steamid64, side, season, opponents)` |
 | `player_multikill_stat` | `(steamid64, side, season, kills)` |
 | `player_teambet_stat` | `(steamid64, season)` |
+| `player_teambet_matchup_stat` | `(steamid64, season, own, enemy)` — same table, +alive-count matchup at bet placement |
 | `player_daily_stat` | `(steamid64, day)` — no weapon/hitgroup/side, **`side` a sealed decision, not an oversight — see below** |
 | `player_duel_total` | `(steamid64, season)` — `headshots`/`assists` added ask 24, key unchanged |
 | `server_stat_season` | `(season)` |

@@ -22,6 +22,7 @@ public class TeamBets : ModuleBase {
     private const float LeaderboardDelaySeconds = 1.5f;
     private const string TeamBetStatTable = "player_teambet_stat";
     private const string TeamBetLogTable = "player_teambet_log";
+    private const string TeamBetMatchupStatTable = "player_teambet_matchup_stat";
 
     private bool roundLive = false;
 
@@ -42,6 +43,7 @@ public class TeamBets : ModuleBase {
     private Timer? pendingFlushTimer;
     private readonly Dictionary<(ulong SteamId64, string Season), PendingTeamBetCounter> pendingTeamBetCounters = new();
     private readonly List<PendingTeamBetLogRow> pendingTeamBetLogRows = new();
+    private readonly Dictionary<(ulong SteamId64, string Season, int Own, int Enemy), PendingTeamBetMatchupCounter> pendingTeamBetMatchupCounters = new();
 
     private sealed class PendingTeamBetCounter {
         public int Bets;
@@ -51,6 +53,20 @@ public class TeamBets : ModuleBase {
         public int BiggestWin;
         public int BiggestWinStake;
         public DateTime? BiggestWinAt;
+    }
+
+    // Same shape as PendingTeamBetCounter, one more dimension: own/enemy is the alive count
+    // on the picked side vs. the other side at the moment the bet was placed (Bet.AliveT/
+    // AliveCt below, already captured for the odds calculation -- this just also keys off
+    // it). "1 mot 4" in the site's breakdown means a bet backing the side with 1 alive
+    // against 4 -- not the bettor's own team, the side they picked, since betting the
+    // opposing side is allowed. No biggest_win here -- that's the overall table's job;
+    // this one only answers "how did this shape of bet do, in aggregate".
+    private sealed class PendingTeamBetMatchupCounter {
+        public int Bets;
+        public int Wins;
+        public long Staked;
+        public long Returned;
     }
 
     // One row per resolved bet -- browsable log, never aggregated in memory like the
@@ -299,9 +315,30 @@ public class TeamBets : ModuleBase {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
+        // Found 2026-08-04, direct user ask: a per-matchup breakdown of betting performance
+        // ("how did I do backing 1v4 underdogs this season") -- same shape as the overall
+        // stat table above, own/enemy added to the key. Same season-as-filter rule as
+        // everywhere else: all-time is a SUM across seasons, no separate table for it. Void
+        // bets stay excluded, same as the overall table -- no stake was actually at risk.
+        string teamBetMatchupStatTable = $"""
+        TABLE IF NOT EXISTS {TeamBetMatchupStatTable} (
+            steamid64  VARCHAR(32) NOT NULL,
+            season     VARCHAR(8) NOT NULL,
+            own        TINYINT UNSIGNED NOT NULL,
+            enemy      TINYINT UNSIGNED NOT NULL,
+            bets       INT NOT NULL DEFAULT 0,
+            wins       INT NOT NULL DEFAULT 0,
+            staked     BIGINT NOT NULL DEFAULT 0,
+            returned   BIGINT NOT NULL DEFAULT 0,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (steamid64, season, own, enemy)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
         try {
             db.create(teamBetStatTable);
             db.create(teamBetLogTable);
+            db.create(teamBetMatchupStatTable);
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] table ensured.");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating table: {e.Message}");
@@ -335,6 +372,29 @@ public class TeamBets : ModuleBase {
         }
     }
 
+    // Found 2026-08-04, direct user ask: same shape as AddTeamBetResult, keyed additionally
+    // by the alive-count matchup at placement. Called alongside it, never instead of it --
+    // this is a breakdown of the same event, not a replacement counter.
+    private void AddTeamBetMatchupResult(ulong steamId64, string season, int own, int enemy, bool won, int staked, int returned) {
+        if (steamId64 == 0) {
+            return;
+        }
+
+        var key = (steamId64, season, own, enemy);
+        if (!pendingTeamBetMatchupCounters.TryGetValue(key, out var counter)) {
+            counter = new PendingTeamBetMatchupCounter();
+            pendingTeamBetMatchupCounters[key] = counter;
+        }
+
+        counter.Bets += 1;
+        counter.Staked += staked;
+        counter.Returned += returned;
+
+        if (won) {
+            counter.Wins += 1;
+        }
+    }
+
     // outcome is "won"/"lost"/"void" (osbase-stat-contracts.md section 3's exact enum).
     // Called once per bet per resolution, independent of the counter above -- a log row
     // is never merged with another, so there's nothing to look up/accumulate here.
@@ -361,7 +421,7 @@ public class TeamBets : ModuleBase {
     // max seen across whatever pending batches haven't landed yet.
     private void FlushPendingTeamBetStats(string source) {
         var database = db;
-        if (database == null || flushInProgress || (pendingTeamBetCounters.Count == 0 && pendingTeamBetLogRows.Count == 0)) {
+        if (database == null || flushInProgress || (pendingTeamBetCounters.Count == 0 && pendingTeamBetLogRows.Count == 0 && pendingTeamBetMatchupCounters.Count == 0)) {
             return;
         }
 
@@ -370,6 +430,9 @@ public class TeamBets : ModuleBase {
 
         var logBatch = pendingTeamBetLogRows.ToList();
         pendingTeamBetLogRows.Clear();
+
+        var matchupBatch = pendingTeamBetMatchupCounters.ToList();
+        pendingTeamBetMatchupCounters.Clear();
 
         flushInProgress = true;
 
@@ -421,10 +484,31 @@ public class TeamBets : ModuleBase {
                     }));
             }
 
+            foreach (var kv in matchupBatch) {
+                var (steamId64, season, own, enemy) = kv.Key;
+                var counter = kv.Value;
+
+                writes.Add(($"INTO {TeamBetMatchupStatTable} (steamid64, season, own, enemy, bets, wins, staked, returned, updated_at) " +
+                    "VALUES (@steamid64, @season, @own, @enemy, @bets, @wins, @staked, @returned, NOW()) " +
+                    "ON DUPLICATE KEY UPDATE " +
+                    "bets=bets+@bets, wins=wins+@wins, staked=staked+@staked, returned=returned+@returned, updated_at=NOW()",
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@season", season),
+                        new("@own", own),
+                        new("@enemy", enemy),
+                        new("@bets", counter.Bets),
+                        new("@wins", counter.Wins),
+                        new("@staked", counter.Staked),
+                        new("@returned", counter.Returned)
+                    }));
+            }
+
             bool ok = writes.Count == 0 || database.ExecuteTransaction(writes) > 0;
 
             var unwritten = ok ? new() : batch;
             var unwrittenLogRows = ok ? new() : logBatch;
+            var unwrittenMatchup = ok ? new() : matchupBatch;
 
             Server.NextFrame(() => {
                 flushInProgress = false;
@@ -447,10 +531,21 @@ public class TeamBets : ModuleBase {
 
                 pendingTeamBetLogRows.AddRange(unwrittenLogRows);
 
-                if (unwritten.Count > 0 || unwrittenLogRows.Count > 0) {
-                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten.Count} teambet-stat row(s) and {unwrittenLogRows.Count} teambet-log row(s) cached for retry.");
+                foreach (var kv in unwrittenMatchup) {
+                    if (!pendingTeamBetMatchupCounters.TryGetValue(kv.Key, out var existing)) {
+                        pendingTeamBetMatchupCounters[kv.Key] = kv.Value;
+                    } else {
+                        existing.Bets += kv.Value.Bets;
+                        existing.Wins += kv.Value.Wins;
+                        existing.Staked += kv.Value.Staked;
+                        existing.Returned += kv.Value.Returned;
+                    }
+                }
+
+                if (unwritten.Count > 0 || unwrittenLogRows.Count > 0 || unwrittenMatchup.Count > 0) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten.Count} teambet-stat row(s), {unwrittenLogRows.Count} teambet-log row(s), {unwrittenMatchup.Count} teambet-matchup row(s) cached for retry.");
                 } else {
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending teambet writes ({source}): statRows={batch.Count}, logRows={logBatch.Count}");
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] flushed pending teambet writes ({source}): statRows={batch.Count}, logRows={logBatch.Count}, matchupRows={matchupBatch.Count}");
                 }
             });
         });
@@ -711,6 +806,10 @@ public class TeamBets : ModuleBase {
                 if (statsGateOpen) {
                     AddTeamBetResult(bet.SteamId64, season, won: true, staked: bet.Amount, returned: actualPaid);
                     LogTeamBet(bet, outcome: "won", payout: actualPaid);
+
+                    int own = bet.Team == TeamT ? bet.AliveT : bet.AliveCt;
+                    int enemy = bet.Team == TeamT ? bet.AliveCt : bet.AliveT;
+                    AddTeamBetMatchupResult(bet.SteamId64, season, own, enemy, won: true, staked: bet.Amount, returned: actualPaid);
                 }
 
                 Console.WriteLine(
@@ -733,6 +832,10 @@ public class TeamBets : ModuleBase {
                 if (statsGateOpen) {
                     AddTeamBetResult(bet.SteamId64, season, won: false, staked: bet.Amount, returned: 0);
                     LogTeamBet(bet, outcome: "lost", payout: 0);
+
+                    int own = bet.Team == TeamT ? bet.AliveT : bet.AliveCt;
+                    int enemy = bet.Team == TeamT ? bet.AliveCt : bet.AliveT;
+                    AddTeamBetMatchupResult(bet.SteamId64, season, own, enemy, won: false, staked: bet.Amount, returned: 0);
                 }
 
                 Console.WriteLine(
