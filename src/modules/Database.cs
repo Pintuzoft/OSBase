@@ -210,12 +210,20 @@ public class Database {
         }
     }
 
+    // NormalizeVerb defaults to INSERT: every current caller (DamageReport/EloRating/
+    // TeamBets' batched flushes) writes shorthand "INTO Table (...) VALUES (...)" the same
+    // way single-row insert() expects, not a full statement -- insert() normalizes that,
+    // this didn't, so every batched write silently failed with a SQL syntax error until this
+    // was caught testing against a live database (2026-08-05). Safe for callers that already
+    // pass a complete "INSERT INTO ..." string too (GameStats.cs) -- NormalizeVerb is a no-op
+    // when the verb is already present.
     public int ExecuteTransaction ( IEnumerable<(string query, MySqlParameter[] parameters)> writes ) {
         try {
             using var conn = Open();
             using var tx = conn.BeginTransaction();
             int total = 0;
-            foreach (var (query, parameters) in writes) {
+            foreach (var (rawQuery, parameters) in writes) {
+                string query = NormalizeVerb(rawQuery, "INSERT");
                 using var cmd = new MySqlCommand(query, conn, tx);
                 if (parameters != null && parameters.Length > 0) cmd.Parameters.AddRange(parameters);
                 total += cmd.ExecuteNonQuery();
