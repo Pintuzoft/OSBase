@@ -162,6 +162,7 @@ public class TeamBets : ModuleBase {
 
         bets.Clear();
         roundLive = false;
+        db?.Shutdown();
         db = null;
     }
 

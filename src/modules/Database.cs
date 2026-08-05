@@ -325,6 +325,17 @@ public class Database {
         }
     }
 
+    // Every module owns its own Database instance and must call this from OnUnload --
+    // the write-worker thread is a real OS thread rooted on this instance, and CS#'s
+    // plugin-unload cleanup (commands/listeners/timers) never touches it. Left running,
+    // it keeps OSBase.dll's AssemblyLoadContext uncollectible, which makes any later
+    // css_plugins load fail with "Assembly with same name is already loaded" (found
+    // 2026-08-05, live server, via a hung css_plugins reload).
+    public void Shutdown() {
+        FlushPendingWrites(500);
+        ShutdownWriteWorker();
+    }
+
     private void ShutdownWriteWorker() {
         writeWorkerRunning = false;
         writeSignal.Set();

@@ -78,6 +78,7 @@ public class Faceit : ModuleBase {
         ClearQueue();
 
         db?.FlushPendingWrites(1500);
+        db?.Shutdown();
 
         httpClient?.Dispose();
         httpClient = null;

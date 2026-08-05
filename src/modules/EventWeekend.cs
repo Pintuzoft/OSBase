@@ -105,6 +105,7 @@ public class EventWeekend : ModuleBase {
 
         adminSteamIds.Clear();
         liveEvents.Clear();
+        db?.Shutdown();
         db = null;
         gameStats = null;
     }

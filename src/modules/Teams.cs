@@ -65,6 +65,7 @@ namespace OSBase.Modules {
             playerAliases.Clear();
             teamWins.Clear();
 
+            db?.Shutdown();
             db = null;
 
             if (ReferenceEquals(teams, this)) {

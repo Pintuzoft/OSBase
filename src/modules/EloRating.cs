@@ -267,6 +267,7 @@ public class EloRating : ModuleBase {
         liveRating.Clear();
         liveMatches.Clear();
         currentMatchId = null;
+        db?.Shutdown();
         db = null;
         gameStats = null;
     }

@@ -13,7 +13,7 @@ namespace OSBase;
 
 public class OSBase : BasePlugin {
     public override string ModuleName => "OSBase";
-    public override string ModuleVersion => "0.0.534";
+    public override string ModuleVersion => "0.0.535";
     public override string ModuleAuthor => "Pintuz";
     public override string ModuleDescription => "Plugin for managing CS2 servers";
 
@@ -55,6 +55,9 @@ public class OSBase : BasePlugin {
         UnloadAllModules();
         loadedModules.Clear();
         discoveredModules.Clear();
+
+        gameStats?.Shutdown();
+        gameStats = null;
 
         Console.WriteLine("[INFO] OSBase: plugin unloaded.");
     }

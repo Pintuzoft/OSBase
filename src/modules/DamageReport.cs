@@ -54,10 +54,18 @@ public class DamageReport : ModuleBase {
     private const int DirectionDealt = 0;
     private const int DirectionReceived = 1;
 
-    // side: 0=T, 1=CT, 2=unknown (spectator/mid-transition/unresolved at write time)
-    private const int SideT = 0;
-    private const int SideCT = 1;
-    private const int SideUnknown = 2;
+    // side: CS2's own team numbers, not a private OSBase/OSWeb agreement -- fixed 2026-08-05
+    // (osbase-side-encoding-fix.md) after the module shipped with 0=T/1=CT, which collided with
+    // CS2's real meaning of those digits (0=unassigned, 1=spectator) and was invisible from the
+    // game's own CsTeam enum. player_hit_stat.side and player_duel_stat.attacker_side/victim_side
+    // never receive SideUnknown -- see the guards in AddHitCounter/AddDuel -- so those two
+    // columns can never confuse "unknown" with a real team the way the old 0/1 scheme did.
+    // player_round_stat still legitimately writes SideUnknown for spectators/mid-transition
+    // players (ask 11: "unknown is a filterable bucket, not an error state"), and CsTeam.None is
+    // the real game value for that, not an invented sentinel.
+    private const int SideT = (int)CsTeam.Terrorist;
+    private const int SideCT = (int)CsTeam.CounterTerrorist;
+    private const int SideUnknown = (int)CsTeam.None;
 
     // 0..10 (klassiska). Allt annat -> Uxx(xx)
     private readonly string[] hitboxName = {
@@ -231,6 +239,7 @@ public class DamageReport : ModuleBase {
         pendingFlushTimer = null;
         FlushPendingStats("Unload");
         ClearDamageData();
+        db?.Shutdown();
         db = null;
         eloRating = null;
     }
@@ -616,7 +625,11 @@ public class DamageReport : ModuleBase {
     }
 
     private void AddHitCounter(ulong steamId64, string weapon, int hitgroup, int direction, int side, string season, int damage) {
-        if (steamId64 == 0) {
+        // player_hit_stat.side is a resolved team by contract (osbase-side-encoding-fix.md) --
+        // skip rather than write SideUnknown, since that value is no longer a safe sentinel in
+        // this column (it's CS2's own "None", not a made-up "unknown" that only this table knew
+        // about). Practically dead code: a hit always has a real attacker/victim on T or CT.
+        if (steamId64 == 0 || side == SideUnknown) {
             return;
         }
 
@@ -631,7 +644,9 @@ public class DamageReport : ModuleBase {
     }
 
     private void AddShot(ulong steamId64, string weapon, int side, string season) {
-        if (steamId64 == 0) {
+        // Same side contract as player_hit_stat/player_duel_stat -- accuracy (hits/shots) is
+        // computed per side, so this column needs the same "never ambiguous" guarantee.
+        if (steamId64 == 0 || side == SideUnknown) {
             return;
         }
 
@@ -753,7 +768,14 @@ public class DamageReport : ModuleBase {
         ulong attackerId64, ulong victimId64, int attackerSide, int victimSide, string weapon, string season,
         bool headshot, bool noscope, bool wallbang, bool blind, bool smoke, int dominated, int revenge
     ) {
-        if (attackerId64 == 0 || victimId64 == 0 || attackerId64 == victimId64) {
+        // Same contract as AddHitCounter: attacker_side/victim_side must never carry
+        // SideUnknown, or a genuinely-unknown side and a real Terrorist become the same number
+        // again -- exactly the collision osbase-side-encoding-fix.md's ask 3 was written to
+        // close (OSWeb's teamkill check reads attacker_side = victim_side, and two unresolved
+        // sides would wrongly match each other). Practically dead code: both parties are
+        // verified real, active players before this is called.
+        if (attackerId64 == 0 || victimId64 == 0 || attackerId64 == victimId64 ||
+            attackerSide == SideUnknown || victimSide == SideUnknown) {
             return;
         }
 
@@ -814,7 +836,10 @@ public class DamageReport : ModuleBase {
     }
 
     private void AddKnifeTaserKill(ulong killerSteamId64, ulong victimSteamId64, int killerSide, int victimSide, string weapon, string mapname, int? matchId) {
-        if (killerSteamId64 == 0 || victimSteamId64 == 0) {
+        // Same side contract as AddDuel (which this always runs alongside) -- killer_side/
+        // victim_side are documented as the same scale as player_duel_stat's, so they get the
+        // same guarantee: never SideUnknown.
+        if (killerSteamId64 == 0 || victimSteamId64 == 0 || killerSide == SideUnknown || victimSide == SideUnknown) {
             return;
         }
 

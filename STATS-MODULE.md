@@ -156,10 +156,43 @@ site's stats/ELO ambition grew from "a body diagram" to "the engine behind
 profiles, leaderboards, and nemesis lists" — which meant revisiting the
 dimensions before more history piled up without them, per the one rule
 above. `player_hit_stat` and `player_weapon_shots` both gained `side`
-(`TINYINT`: 0=T, 1=CT, 2=unknown) and `season` (`VARCHAR(8)`, e.g. `2026Q3`,
-computed at write time) in their primary keys — both added to *both* tables
-together, deliberately, so accuracy stays computable per season/side (a
-numerator split finer than its denominator would otherwise silently break).
+(`TINYINT`, CS2's own team numbers: 2=T, 3=CT) and `season` (`VARCHAR(8)`,
+e.g. `2026Q3`, computed at write time) in their primary keys — both added to
+*both* tables together, deliberately, so accuracy stays computable per
+season/side (a numerator split finer than its denominator would otherwise
+silently break).
+
+**Fixed 2026-08-05 (osbase-side-encoding-fix.md): `side` shipped as 0=T/1=CT,
+not the 2=T/3=CT above.** The module used a private 0/1 scheme instead of
+CS2's own `CsTeam` enum, which collided with what those digits actually mean
+in the game (0=unassigned, 1=spectator) and made the encoding unverifiable
+by anyone who didn't read this doc. `player_hit_stat.side`,
+`player_weapon_shots.side`, `player_duel_stat.attacker_side`/`victim_side`,
+and every other table sharing this column (`player_round_stat`,
+`player_clutch_stat`, `player_multikill_stat`,
+`knife_taser_kill_event.killer_side`/`victim_side`) now write CS2's real team
+numbers. `player_hit_stat.side`, `player_weapon_shots.side`, and
+`player_duel_stat.attacker_side`/`victim_side` never carry an "unknown" value
+at all (guarded in `AddHitCounter`/`AddShot`/`AddDuel`/`AddKnifeTaserKill`) —
+under the old scheme, 2 doubled as both a real team and "unknown", which
+would have made every Terrorist-vs-Terrorist duel misread once 2 became a
+real team number. `player_round_stat` still legitimately writes an unknown
+side for spectators/mid-transition players (ask 11) — using CS2's own
+`CsTeam.None` (0) for it, not an invented sentinel.
+
+**Decided 2026-08-05: no migration, the affected tables were truncated
+instead.** A migration would have needed a non-re-runnable `CASE` pass for
+`player_round_stat` (it holds two old-encoding meanings under the same value
+once a Terrorist round overlaps the old "unknown" sentinel) plus a strict
+stop-module-first deploy order — real risk to take on for a module that had
+only been live a few days (2702 hit rows, 188 rounds, 835 duels; all test
+play, no production history worth protecting). `player_hit_stat`,
+`player_weapon_shots`, `player_round_stat`, `player_duel_stat`,
+`player_duel_total`, `player_clutch_stat`, `player_multikill_stat`, and
+`knife_taser_kill_event` were truncated in the same deploy window as this
+fix, module stopped first. `skill_log` (GameStats, no side column, unrelated
+to this bug) and `player_teambet_*` (real balances, never on the affected
+list) were deliberately left alone.
 `season` is a filter only; hit/shot data itself is never reset — a
 quarterly ELO reset, if built, is a separate table's concern.
 

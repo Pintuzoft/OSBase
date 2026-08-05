@@ -79,6 +79,14 @@ namespace OSBase.Modules {
             Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Config reloaded.");
         }
 
+        // GameStats isn't a ModuleBase module (it's constructed directly by OSBase.cs and
+        // has no OnUnload path of its own), so its Database's write-worker thread needs an
+        // explicit stop from OSBase.Unload() -- otherwise it's the same live-thread-blocks-
+        // ALC-collection bug as every other module's db field (see Database.Shutdown).
+        public void Shutdown() {
+            db.Shutdown();
+        }
+
         private void createTables() {
             string query =
                 "CREATE TABLE IF NOT EXISTS skill_log (" +

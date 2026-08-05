@@ -96,6 +96,7 @@ public class ServerInfo : ModuleBase {
         heartbeatTimer = null;
 
         db?.FlushPendingWrites(1500);
+        db?.Shutdown();
         db = null;
 
         sessions.Clear();
