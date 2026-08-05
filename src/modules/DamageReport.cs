@@ -1523,8 +1523,11 @@ public class DamageReport : ModuleBase {
         // World-damage suicide (fall, drowning, a lingering own molotov, ...) reports no
         // attacker at all, so it never reaches IsRealHuman(e.Attacker) below -- handled here
         // instead, same deliberately-separate suicides counter as the self-kill case further
-        // down (which does have an attacker: itself).
-        if (statsGateOpen && e.Attacker == null && IsRealHuman(e.Userid)) {
+        // down (which does have an attacker: itself). Excludes the bomb, found 2026-08-05:
+        // it also reports no attacker but isn't the victim's own fault, so it must not count
+        // toward the suicides column either.
+        if (statsGateOpen && e.Attacker == null && IsRealHuman(e.Userid) &&
+            !string.Equals(e.Weapon, "planted_c4", StringComparison.OrdinalIgnoreCase)) {
             AddDuelTotal(e.Userid!.SteamID, CurrentSeason(), kills: 0, deaths: 0, suicides: 1);
         }
 

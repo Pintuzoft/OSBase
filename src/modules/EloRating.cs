@@ -878,7 +878,10 @@ public class EloRating : ModuleBase {
         // Found 2026-08-04, per direct user ask: world-damage suicide (fall, drowning, ...)
         // reports no attacker at all, so it has to be caught here -- the real-player check
         // just below would otherwise drop it silently, same as it always has.
-        if (attacker == null && IsRealPlayer(victim)) {
+        // Excludes the bomb, found 2026-08-05: a bomb explosion also reports no attacker but
+        // isn't the victim's own fault, so it must not eat the suicide-points penalty either.
+        if (attacker == null && IsRealPlayer(victim) &&
+            !string.Equals(eventInfo.Weapon, "planted_c4", StringComparison.OrdinalIgnoreCase)) {
             ApplyPenalty(victim!.SteamID, CleanName(victim.PlayerName), "suicide_penalty",
                 suicidePointsPenalty, CurrentSeason(), osbase?.currentMap ?? Server.MapName ?? "", null);
             return HookResult.Continue;

@@ -60,7 +60,7 @@ public class TeamDamage : ModuleBase {
         // own kill count down by one, cosmetic only. Checked first and returns -- a suicide
         // is never also "friendly fire" (IsValidFriendlyFire already excludes attacker==
         // victim), so there's no double-handling risk here.
-        if (IsSuicide(attacker, victim)) {
+        if (IsSuicide(attacker, victim, eventInfo.Weapon)) {
             AdjustScoreboardKills(victim!, -1);
             Server.PrintToChatAll($"[Suicide] {victim!.PlayerName ?? "Unknown"} took themselves out.");
             return HookResult.Continue;
@@ -85,14 +85,15 @@ public class TeamDamage : ModuleBase {
 
     // World damage (fall, drowning, a lingering own molotov, etc.) reports no attacker at
     // all; a direct self-kill (own grenade, the "kill" console command) reports the victim
-    // as their own attacker. Both read as the same thing here.
-    private static bool IsSuicide(CCSPlayerController? attacker, CCSPlayerController? victim) {
+    // as their own attacker. Both read as the same thing here -- except the bomb, which also
+    // reports no attacker but isn't the victim's own fault, so it's excluded explicitly.
+    private static bool IsSuicide(CCSPlayerController? attacker, CCSPlayerController? victim, string? weapon) {
         if (victim == null || !victim.IsValid || !victim.UserId.HasValue) {
             return false;
         }
 
         if (attacker == null) {
-            return true;
+            return !string.Equals(weapon, "planted_c4", StringComparison.OrdinalIgnoreCase);
         }
 
         return attacker.IsValid && attacker.UserId.HasValue && attacker.UserId.Value == victim.UserId.Value;
