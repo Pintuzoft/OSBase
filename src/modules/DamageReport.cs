@@ -53,6 +53,7 @@ public class DamageReport : ModuleBase {
     private const string DuelTotalTable = "player_duel_total";
     private const string ServerStatSeasonTable = "server_stat_season";
     private const string KnifeTaserKillTable = "knife_taser_kill_event";
+    private const string MapResultTable = "player_map_result";
     private const int DirectionDealt = 0;
     private const int DirectionReceived = 1;
 
@@ -137,6 +138,9 @@ public class DamageReport : ModuleBase {
     // column exists but is never meant to be ranked).
     private readonly List<PendingKnifeTaserKill> pendingKnifeTaserKills = new();
 
+    // Ask 29: same shape as pendingKnifeTaserKills -- a raw log, never aggregated in memory.
+    private readonly List<PendingMapResult> pendingMapResults = new();
+
     // Round-scoped state, resolved into the pending counters above at round end, cleared at
     // round start as a safety net.
     private readonly HashSet<int> roundDefuseBegan = new();          // userId -> began a defuse, no matching EventBombDefused yet
@@ -152,6 +156,18 @@ public class DamageReport : ModuleBase {
     private int plantedBySide = SideUnknown;
     private readonly HashSet<ulong> clutchFlaggedThisRound = new();  // steamid64 already recorded as clutching this round
     private readonly List<(ulong SteamId64, int Side, int Opponents)> roundClutchCandidates = new();
+
+    // Ask 29: map-scoped, not round-scoped -- reset in OnMapStart, read once in OnMapEnd,
+    // not touched by the per-round safety net above. roundsThisMap only counts rounds
+    // where statsGateOpen was true (same gate as everywhere else), so a map that spent
+    // most of its time under-populated reports a low number rather than the engine's raw
+    // round count -- ask 11's gates "on top" of the row, per the ask. mapStartSide is
+    // captured on the map's first EventRoundStart, not OnMapStart itself: team assignment
+    // isn't guaranteed settled the instant a map loads, but it is by the time a round
+    // actually begins.
+    private int roundsThisMap;
+    private bool captureMapStartSideNext;
+    private readonly Dictionary<ulong, int> mapStartSide = new();
 
     // Ask 18 "seconds" (player_daily_stat): sampled at round end against a per-player last
     // credited timestamp, not derived from connect/disconnect deltas -- a crash or ungraceful
@@ -242,6 +258,22 @@ public class DamageReport : ModuleBase {
         // taser kill -- see ReportKnifeMoneyMoved). Mutable, unlike the fields above: this
         // is the one column on this row that isn't known at the moment the row is built.
         public int? MoneyMoved;
+    }
+
+    // Ask 29: a log, not a counter -- one row per player per finished map, `stamp` in the
+    // PK so the same player/map pair accumulates rows across sessions instead of merging.
+    // kills/deaths/score are read straight off the game's own scoreboard (see AddMapResult's
+    // caller in OnMapEnd), not computed from any counter this module already keeps.
+    private sealed class PendingMapResult {
+        public required ulong SteamId64;
+        public required string Map;
+        public required string Season;
+        public required DateTime Stamp;
+        public required int Kills;
+        public required int Deaths;
+        public required int Score;
+        public required int Rounds;
+        public required int SideStart;
     }
 
     protected override void OnLoad() {
@@ -348,6 +380,7 @@ public class DamageReport : ModuleBase {
         osbase?.SubscribeToEvent<EventPlayerConnect>(OnPlayerConnect);
         osbase?.SubscribeToEvent<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
         osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
     }
 
     protected override void UnregisterHandlers() {
@@ -364,6 +397,7 @@ public class DamageReport : ModuleBase {
         osbase?.UnsubscribeFromEvent<EventPlayerConnect>(OnPlayerConnect);
         osbase?.UnsubscribeFromEvent<EventPlayerDisconnect>(OnPlayerDisconnectEvent);
         osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
+        osbase?.RemoveListener<Listeners.OnMapEnd>(OnMapEnd);
     }
 
     private void OnMapStart(string mapName) {
@@ -374,6 +408,51 @@ public class DamageReport : ModuleBase {
         pendingFlushTimer?.Kill();
         pendingFlushTimer = null;
         FlushPendingStats("MapStart");
+
+        // Ask 29: fresh map, fresh count. mapStartSide is deliberately NOT captured here --
+        // see captureMapStartSideNext's field comment for why it waits for the map's first
+        // round instead.
+        roundsThisMap = 0;
+        captureMapStartSideNext = true;
+    }
+
+    // Ask 29: read at map end, before the disconnect churn -- ServerInfo.cs's OnMapEnd
+    // already established that ordering for this exact listener (its grace-window comment).
+    // Whether CS2 has already reset ActionTrackingServices/Score by this point is NOT
+    // verified from source, same caveat as ask 27's read-order trap; only a live map end
+    // with known scores confirms it.
+    private void OnMapEnd() {
+        if (!isActive) {
+            return;
+        }
+
+        try {
+            string season = CurrentSeason();
+            string map = CurrentMap();
+            int rounds = roundsThisMap;
+
+            foreach (var p in Utilities.GetPlayers()) {
+                if (!IsRealHuman(p)) {
+                    continue;
+                }
+
+                var tracking = p.ActionTrackingServices;
+                if (tracking == null) {
+                    continue;
+                }
+
+                int sideStart = mapStartSide.TryGetValue(p.SteamID, out int capturedSide) ? capturedSide : SideUnknown;
+                AddMapResult(p.SteamID, map, season, tracking.MatchStats.Kills, tracking.MatchStats.Deaths, p.Score, rounds, sideStart);
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in OnMapEnd: {ex}");
+        }
+
+        // Immediate, not delayed like the round-end flush -- there is no next round to wait
+        // out, and players can start disconnecting for the map change any moment.
+        pendingFlushTimer?.Kill();
+        pendingFlushTimer = null;
+        FlushPendingStats("MapEnd");
     }
 
     // All four tables below are owned by this module alone -- two writers on the same
@@ -662,6 +741,34 @@ public class DamageReport : ModuleBase {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
+        // Ask 29: a log (stamp in the PK, never merged), not a counter -- one row per player
+        // per finished map. kills/deaths/score are the game's own scoreboard numbers, read at
+        // OnMapEnd, same "read rather than computed" rule ask 27 already established for
+        // score-shaped columns. Indexed on (map, kills), not (map, score): the settled
+        // decision below is that kills is what a "best on Mirage" board actually sorts on --
+        // score rides along on the row but isn't the leaderboard key. rounds is on the row so
+        // a map cut short (restart/vote/crash) can't quietly set a record next to a real
+        // 30-round map; it only counts rounds where ask 11's gate was open, so a map that
+        // spent most of its time under-populated reports a low number, not the engine's raw
+        // round count. side_start is best-effort (SideUnknown for anyone who joined after the
+        // map's first round) and is genuinely optional per the ask.
+        string mapResultTable = $"""
+        TABLE IF NOT EXISTS {MapResultTable} (
+            steamid64  VARCHAR(32) NOT NULL,
+            map        VARCHAR(32) NOT NULL,
+            season     VARCHAR(8) NOT NULL,
+            stamp      DATETIME NOT NULL,
+            kills      INT NOT NULL DEFAULT 0,
+            deaths     INT NOT NULL DEFAULT 0,
+            score      INT NOT NULL DEFAULT 0,
+            rounds     INT NOT NULL DEFAULT 0,
+            side_start TINYINT UNSIGNED NOT NULL,
+            PRIMARY KEY (steamid64, map, stamp),
+            KEY idx_map_kills (map, kills),
+            KEY idx_steamid_stamp (steamid64, stamp)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
         try {
             db.create(hitStatTable);
             db.create(shotStatTable);
@@ -673,6 +780,7 @@ public class DamageReport : ModuleBase {
             db.create(duelTotalTable);
             db.create(serverStatSeasonTable);
             db.create(knifeTaserKillTable);
+            db.create(mapResultTable);
 
             // Migration for pre-existing installs (ask 26, 2026-08-06): CREATE TABLE IF NOT
             // EXISTS above is a no-op against the already-deployed player_round_stat. Default
@@ -992,6 +1100,24 @@ public class DamageReport : ModuleBase {
         }
     }
 
+    private void AddMapResult(ulong steamId64, string map, string season, int kills, int deaths, int score, int rounds, int sideStart) {
+        if (steamId64 == 0) {
+            return;
+        }
+
+        pendingMapResults.Add(new PendingMapResult {
+            SteamId64 = steamId64,
+            Map = map,
+            Season = season,
+            Stamp = DateTime.UtcNow,
+            Kills = kills,
+            Deaths = deaths,
+            Score = score,
+            Rounds = rounds,
+            SideStart = sideStart,
+        });
+    }
+
     private static int MapSide(CCSPlayerController? player) {
         if (player == null) {
             return SideUnknown;
@@ -1112,7 +1238,8 @@ public class DamageReport : ModuleBase {
             && pendingRoundCounters.Count == 0 && pendingDuelCounters.Count == 0
             && pendingClutchCounters.Count == 0 && pendingMultikillCounters.Count == 0
             && pendingDailyCounters.Count == 0 && pendingDuelTotalCounters.Count == 0
-            && pendingServerStatCounters.Count == 0 && pendingKnifeTaserKills.Count == 0) {
+            && pendingServerStatCounters.Count == 0 && pendingKnifeTaserKills.Count == 0
+            && pendingMapResults.Count == 0) {
             return;
         }
 
@@ -1146,6 +1273,9 @@ public class DamageReport : ModuleBase {
         var knifeTaserBatch = pendingKnifeTaserKills.ToList();
         pendingKnifeTaserKills.Clear();
 
+        var mapResultBatch = pendingMapResults.ToList();
+        pendingMapResults.Clear();
+
         flushInProgress = true;
 
         Task.Run(() => {
@@ -1175,6 +1305,22 @@ public class DamageReport : ModuleBase {
                         new("@killer_money", row.KillerMoney),
                         new("@victim_money", row.VictimMoney),
                         new("@money_moved", (object?)row.MoneyMoved ?? DBNull.Value)
+                    }));
+            }
+
+            foreach (var row in mapResultBatch) {
+                writes.Add(($"INTO {MapResultTable} (steamid64, map, season, stamp, kills, deaths, score, rounds, side_start) " +
+                    "VALUES (@steamid64, @map, @season, @stamp, @kills, @deaths, @score, @rounds, @side_start)",
+                    new MySqlParameter[] {
+                        new("@steamid64", row.SteamId64.ToString()),
+                        new("@map", row.Map),
+                        new("@season", row.Season),
+                        new("@stamp", row.Stamp),
+                        new("@kills", row.Kills),
+                        new("@deaths", row.Deaths),
+                        new("@score", row.Score),
+                        new("@rounds", row.Rounds),
+                        new("@side_start", row.SideStart)
                     }));
             }
 
@@ -1394,6 +1540,7 @@ public class DamageReport : ModuleBase {
             var unwrittenDuelTotals = ok ? new() : duelTotalBatch;
             var unwrittenServerStats = ok ? new() : serverStatBatch;
             var unwrittenKnifeTaserKills = ok ? new() : knifeTaserBatch;
+            var unwrittenMapResults = ok ? new() : mapResultBatch;
 
             Server.NextFrame(() => {
                 flushInProgress = false;
@@ -1504,11 +1651,12 @@ public class DamageReport : ModuleBase {
                 }
 
                 pendingKnifeTaserKills.AddRange(unwrittenKnifeTaserKills);
+                pendingMapResults.AddRange(unwrittenMapResults);
 
                 int unwritten = unwrittenHits.Count + unwrittenShots.Count + unwrittenRounds.Count
                     + unwrittenDuels.Count + unwrittenClutches.Count + unwrittenMultikills.Count
                     + unwrittenDaily.Count + unwrittenDuelTotals.Count + unwrittenServerStats.Count
-                    + unwrittenKnifeTaserKills.Count;
+                    + unwrittenKnifeTaserKills.Count + unwrittenMapResults.Count;
                 if (unwritten > 0) {
                     Console.WriteLine($"[WARN] OSBase[{ModuleName}] database unavailable ({source}): kept {unwritten} stat rows cached for retry.");
                 } else {
@@ -1517,7 +1665,7 @@ public class DamageReport : ModuleBase {
                         $"hitRows={hitBatch.Count}, shotRows={shotBatch.Count}, roundRows={roundBatch.Count}, " +
                         $"duelRows={duelBatch.Count}, clutchRows={clutchBatch.Count}, multikillRows={multikillBatch.Count}, " +
                         $"dailyRows={dailyBatch.Count}, duelTotalRows={duelTotalBatch.Count}, serverStatRows={serverStatBatch.Count}, " +
-                        $"knifeTaserRows={knifeTaserBatch.Count}"
+                        $"knifeTaserRows={knifeTaserBatch.Count}, mapResultRows={mapResultBatch.Count}"
                     );
                 }
             });
@@ -1963,6 +2111,19 @@ public class DamageReport : ModuleBase {
         statsGateOpen = !warmup && humans >= minPlayers;
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}]: round gate {(statsGateOpen ? "open" : "closed")} (humans={humans} min={minPlayers} warmup={warmup})");
 
+        // Ask 29: the map's first round, now that team assignment has had a chance to
+        // settle -- see the field comment on captureMapStartSideNext for why this doesn't
+        // happen in OnMapStart itself.
+        if (captureMapStartSideNext) {
+            captureMapStartSideNext = false;
+            mapStartSide.Clear();
+            foreach (var p in Utilities.GetPlayers()) {
+                if (IsRealHuman(p)) {
+                    mapStartSide[p.SteamID] = MapSide(p);
+                }
+            }
+        }
+
         return HookResult.Continue;
     }
 
@@ -1974,6 +2135,13 @@ public class DamageReport : ModuleBase {
         string season = CurrentSeason();
         string map = CurrentMap();
         int winnerSide = MapWinnerSide(e.Winner);
+
+        // Ask 29: one map-level counter, not per-player -- gated the same as everything else
+        // in this round, so a map that spent most of its time under-populated ends with a
+        // low count rather than the engine's raw round total.
+        if (statsGateOpen) {
+            roundsThisMap += 1;
+        }
 
         foreach (var p in Utilities.GetPlayers()) {
             if (p == null || !p.IsValid || p.IsHLTV || !p.UserId.HasValue) {

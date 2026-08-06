@@ -1076,7 +1076,7 @@ season. "Kills this season versus last" compares two months against three and
 renders as a slump that never happened. This applies exactly once — `2026Q4`
 and everything after it is a full quarter.
 
-### The in-game commands are an eleventh reader, and OSBase's
+### 24. The in-game commands are an eleventh reader, and OSBase's
 
 Raised by the owner (2026-07-22): cs2rank contributes chat commands — `!top`
 for where you sit on the ladder, `!rank` for your own figures. Switch the plugin
@@ -1475,9 +1475,10 @@ money_moved INT NULL   -- signed, from the KILLER's side:
                        --   > 0  taken from the victim
                        --   < 0  paid to a knifed team-mate (Mug's penalty)
                        --   = 0  the transfer ran and moved nothing
-                       --  NULL  Mug never ran for this kill -- taser, AND
-                       --        (unintentionally) bayonet; see the note below.
-                       --        Read the weapon column, never infer from this.
+                       --  NULL  Mug never ran for this kill: taser only, as of
+                       --        the bayonet fix in v0.0.537. Rows written
+                       --        BEFORE that release also carry NULL for
+                       --        bayonet kills -- see the note below.
 ```
 
 **`NULL` and `0` mean different things, deliberately** — the same call OSBase
@@ -1573,6 +1574,204 @@ notes: the three stat asks change nothing anyone on the server notices, this
 changes how the game behaves mid-session. Its own verification once live:
 `money_moved` should stop being `NULL` on bayonet rows -- that was the bug's
 signature, and it going away is the confirmation the fix landed.
+
+**The fix shipped in v0.0.537, and it gave `NormalizeWeapon` a second job — that
+is the thing to remember, not the bayonet.** It is now both a *display fold*
+(every knife skin reads as `knife` in the stats) and a *gameplay gate* (Mug asks
+it whether to move money). One function, two callers, two entirely different
+consequences for being changed.
+
+The trap that sets: the moment anyone wants per-skin knife stats — "which knife
+do people actually get knifed with" is an obvious future ask — the natural fix
+is to stop folding the skins together. That change is made for a stats reason,
+looks like a stats change, and silently switches mugging off for every skin it
+unfolds. Nothing fails, no test goes red, and the symptom appears on the server
+as "the bayonet thing is back" months later.
+
+Not a reason to keep two copies — the two copies are what caused the original
+bug. It is a reason for the gameplay caller to be *visible from the classifier*,
+so that whoever unfolds it is told, at the point of the edit, that money depends
+on the answer. Same family as the load-order warning in ask 27: a guarantee that
+holds today and breaks quietly is worth a comment where it would break, not
+where it was discovered.
+
+### 29. The map result — score per player per map, because a session is not a sum
+
+The owner wants **best and worst score on a map** (2026-08-06). Nothing in this
+schema can answer it: `score` appears in no table, and a map session is a
+single-event figure that quarterly counters cannot be worked backwards into.
+Same category as `biggest_win` in ask 12 — records are not derivable from
+totals, ever.
+
+```sql
+player_map_result
+  steamid64  VARCHAR(32),
+  map        VARCHAR(32),
+  season     VARCHAR(8),
+  stamp      DATETIME,     -- when the map ended
+  kills      INT,          -- what the board actually leads with
+  deaths     INT,          -- so a 35-kill map can say what it cost
+  score      INT,          -- the game's own scoreboard score, alongside
+  rounds     INT,          -- how many rounds the map actually ran
+  side_start TINYINT,      -- optional; which side they began on
+  PRIMARY KEY (steamid64, map, stamp),
+  KEY (map, score),        -- "best on Mirage"
+  KEY (steamid64, stamp)   -- "my history on Mirage"
+```
+
+**A log, not a counter — and the row count is why that is affordable.** One row
+per player per finished map: twenty players across five maps an evening is a
+hundred rows a day, roughly 36 000 a year. That is the same order as
+`player_daily_stat` and nothing next to `player_hit_stat`. Storing only a
+best-so-far column would answer this one question and kill every other one:
+score distribution ("is 40 good on Nuke?"), a player's own trend on a map,
+"you have never broken 30 on Train".
+
+**Kills lead, score rides along** (owner, 2026-08-06, giving the example that
+settled it: *"om nån lyckas få 35 kills så kan man se det"*). That is the
+sentence people say about a map — nobody retells a score of 78. So `kills` is
+the column the board sorts on and the headline prints, and `deaths` sits beside
+it so a monster map can say what it cost. Neither is derivable from anything
+that exists: `player_daily_stat.kills` is a whole day and `player_duel_total` is
+a whole season, and a map session cannot be cut back out of either.
+
+`score` is still worth capturing in the same row — it is free at that moment,
+it is the number on the screen everyone just looked at, and a board that
+disagrees with the scoreboard is a support question. It simply is not the
+headline.
+
+**`score` must be the game's own number, read rather than computed.** CS2's
+scoreboard score is not kills — it folds in assists and objective play, and the
+weighting is the game's, not ours. If the site prints "score" and it disagrees
+with what people watched on the end-of-map scoreboard, the number is wrong no
+matter how defensible the formula was. Read the controller's score; do not
+reconstruct it from the counters this document already collects.
+
+**The timing trap, and it is the same shape as ask 27's:** it has to be read at
+map end but *before* the scoreboard resets or players start dropping. Whichever
+event that is, the row's meaning depends on it, so it belongs written down here
+once it is known — not inferred later from the numbers.
+
+**`rounds` is on the row so a short map cannot quietly set a record.** A map
+abandoned after five rounds produces a small score, and an admin-restarted or
+crash-shortened map produces a partial one; without the round count both sit in
+the same board as a full 30-round map and are compared as equals. With it, the
+reader can require a real map. Ask 11's gates apply on top as usual — a record
+set 2v2 during warmup is not a record.
+
+**The display decision the data does not settle, and it is the owner's**
+(flagged 2026-08-06, deliberately not resolved here): a *server-wide* "worst
+score on a map" board is the one feature in this document that runs against the
+site's own rule — it praises rather than embarrasses, which is why ask 27 bans a
+"most robbed" ranking and why the Ace and mug decisions went the way they did.
+"Sämsta mugg" survives that test because it is a funny thing you *did* once;
+"worst score on Mirage" is a ranking of who is worst at the game, held
+permanently, with a name on it.
+
+The version that keeps the joke and loses the pillory: **worst is personal.**
+Your own worst map sits on your own profile beside your best — the honest
+"where am I bad" number people actually want — while the *server* board only
+ever ranks bests. The storage above supports either, so nothing is lost by
+deciding this after the rows exist, which is the rare case in this document
+where waiting costs nothing.
+
+**Answered by the OSBase side (2026-08-06): built, one correction made to the
+sketch, one trap left open exactly like ask 27's.**
+
+`kills`/`deaths`/`score` are read from CS2's own fields, not computed:
+`player.ActionTrackingServices.MatchStats.Kills`/`.Deaths` (the same
+`m_iKills`/`m_iDeaths` schema members `TeamDamage.cs` already writes to for
+the teamkill-penalty scoreboard adjustment -- confirmed to exist by
+decompiling the installed CounterStrikeSharp API, not assumed) and
+`player.Score` (`m_iScore`) directly on the controller.
+
+**Correction:** indexed on `(map, kills)`, not `(map, score)` as the SQL
+sketch had it. The sketch's own index comment ("best on Mirage") and the
+prose two paragraphs later ("kills is the column the board sorts on and the
+headline prints") disagree with each other -- read as the sketch predating
+the settled decision, not as two separate requests, so the index follows the
+prose.
+
+**The open trap, same shape as ask 27's:** read at `Listeners.OnMapEnd`,
+because `ServerInfo.cs` already established (its own grace-window comment)
+that this specific listener fires before the map-change disconnect churn.
+Whether CS2 has reset `MatchStats`/`Score` by that point is *not* verified
+from source -- there was nothing in this codebase that needed to read final-
+match numbers before this ask. Needs the same live check ask 27's
+`killer_money` ordering does: finish a map with a known kill count on a known
+player and read the row.
+
+`rounds` counts only rounds where ask 11's gate was open (not the engine's
+own round counter), so a map that spent most of its time under-populated
+reports a low number instead of a misleadingly-real-looking one. `side_start`
+is captured on the map's *first round start*, not `OnMapStart` itself -- team
+assignment isn't guaranteed settled the instant a map loads -- and is
+`SideUnknown` for anyone who joined after that point, which the ask already
+called optional.
+
+`player_map_result` is a brand new table (no migration needed, unlike asks
+26-28's already-live ones).
+
+### 30. How the round ended — `rounds_won` says that, never how
+
+Raised by the owner (2026-08-06) while looking at the bomb columns: *"rundor kan
+ju sluta på 3 olika vis, bomben sprängs, man skjuter alla fiender eller tid"*.
+Correct, and it is more than three — a defusal is a fourth and a hostage rescue
+a fifth if those maps are in rotation.
+
+**The reason exists on `EventRoundEnd`, is used at that instant, and is thrown
+away.** Ask 14 records `rounds_won`; nothing records how. So "you win on the
+bomb, he wins on the timer" is unanswerable, permanently, for every round played
+before this column exists.
+
+**This one is already half-built on the site side, which is the argument for
+it.** `docs/rank-and-points-design.md` pays *differently* per round end — bomb
+detonated 5, defused 5, everyone eliminated 2, hostages rescued 10 — precisely
+because the community distinguishes them. A points system that grades the
+outcome, over data that cannot say what the outcome was, can never show anyone
+why their round points differ.
+
+```sql
+-- player_round_stat, joining side/season/map in the PRIMARY KEY
+end_reason TINYINT   -- the GAME's own EventRoundEnd reason value
+```
+
+**A key dimension, not five columns** — same call ask 9 made for clutch
+`opponents` over `clutch_1v1 … clutch_1v5`. A new reason value is then a new
+row rather than a migration, and `rounds`/`rounds_won` keep summing back to
+exactly what they mean today. Row cost stays in the cheap category ask 17
+established for this table: a player holds one row per side × season × map ×
+reason, so a ten-map rotation runs to roughly a hundred rows a quarter.
+
+**Store the game's own value. Do not invent an encoding.** This document has
+already paid for that lesson once — `side` shipped as a private 0/1 scheme and
+had to be truncated and rewritten as CS2's real team numbers, because an
+encoding nobody can verify from the data is one that gets quoted wrongly and
+tested against its own wrong assumption. Same rule here, same reason: write
+whatever `EventRoundEnd` carries, then **verify the mapping against real rows on
+a live server and write the observed table into this document** — not the enum
+somebody remembers.
+
+**One asymmetry worth knowing before anyone reads a chart:** a running-out clock
+is not a symmetric outcome. In CS2 the CTs take the round when time expires, so
+"won on time" is a CT-only row and, for a T, the same reason only ever appears
+as a loss. That is not a bug in the data and does not need a column — `side` is
+already in the key, which is exactly what makes it readable — but a site chart
+that puts "wins by time" side by side without saying so will look broken to the
+T-side player who has none.
+
+**It also gives the bomb columns their denominator.** Ask 26 counts what
+happened to *your* plants; this counts how *rounds* ended. Together they answer
+the thing neither can alone: whether a map is decided on the objective at all,
+or whether the bomb is mostly a formality on a server that fights it out.
+
+**This one was written, then lost to a concurrent edit, then rewritten**
+(2026-08-06) — both sides had the same file open in the same working tree, and
+neither had committed. Worth a line of its own: `osbase-contracts-readme.md`
+argues for one home rather than drifting copies, and it is right, but one home
+with two uncommitted writers is not version control — it is last-write-wins with
+no conflict to notice. **Commit between hand-offs.** Git can merge two edits to
+different sections of a file; an unsaved working tree cannot.
 
 ### Priority between these asks
 
