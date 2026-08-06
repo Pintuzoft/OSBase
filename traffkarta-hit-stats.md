@@ -1076,6 +1076,106 @@ season. "Kills this season versus last" compares two months against three and
 renders as a slump that never happened. This applies exactly once — `2026Q4`
 and everything after it is a full quarter.
 
+**Measured 2026-08-06, and it contradicts the premise this whole section rests
+on: the parallel run has not been happening.** Checked on the live database
+rather than assumed:
+
+```
+SELECT COUNT(*) FROM elo_rating;   ->  0
+SELECT COUNT(*) FROM elo_points;   ->  0
+player_daily_stat: 59 rows, 40+ players, 2026-08-05 and 2026-08-06
+                   rating = NULL and points = NULL on EVERY row
+```
+
+`elo_rating` was deliberately **not** in that evening's truncate, precisely to
+protect the run-up — so an empty table is not something the truncate did. And
+the NULLs say what happened instead: OSBase's own convention from ask 22 is
+that `player_daily_stat.rating` is `INT NULL` where **NULL means "the ELO
+module is not loaded"**, read from EloRating's in-memory cache. Two independent
+signals, same conclusion: **ELO has never written a row.**
+
+**The NULL-versus-0 decision is what made this visible at all.** Had those
+columns defaulted to `0`, this would read as "everyone is rated zero" — a
+plausible-looking field nobody would question — and the gap would have been
+found in late September instead, by which point the only remedy costs the same
+weeks it was meant to save. A convention that distinguishes *absent* from
+*zero* paid for itself here, once, for the whole project.
+
+**What it costs, in the order that matters:**
+
+1. **1 October stops being a warm switch and becomes a cold start** — which
+   this section calls, in its own words, the worst possible moment to change
+   systems. Points can begin at zero; a rating cannot.
+2. **Nothing has been calibrated.** Every figure this document marks as a guess
+   — `headshot_bonus_pct`, `assist_reward`, the balancer's seven derived
+   thresholds, the nemesis weights — was to be checked against a quarter of real
+   rows. There are none.
+3. **The balancer's switch 3 cannot be measured**, because
+   `min_rated_matches` has nothing to count.
+4. **The form curve's future source is empty too.** `player_daily_stat.rating`
+   is the snapshot ask 22 added so the curve survives GameStats' retirement; two
+   days of NULL means the curve is not quietly accumulating in the background
+   the way that ask assumed.
+
+**The question this hands to the OSBase side is narrow:** is `EloRating` in the
+module list on the live server, and if it is, why is it not writing? That is
+readable from their end and from nowhere else.
+
+**And the planning consequence is the owner's, not a technical one.** Either
+ELO starts writing now and gets roughly eight weeks instead of nine — nearly
+the whole intended run-up, since the calendar has barely moved — or 1 October
+is no longer the date this section argued for, and the cutover moves to the
+quarter after. What is not available is the version where the switch happens on
+schedule against ratings that never converged: that is the failure this whole
+section was written to avoid, arriving by a route it did not consider.
+
+**Every day this stays unfixed costs a day of the only thing here that cannot
+be bought later.** Rows can be recollected; convergence has to be played.
+
+**Answered same evening (owner, 2026-08-06): the module was not running.** Not
+misconfigured, not failing to write, not gated out — simply not loaded. Both
+signals were pointing at exactly what they were defined to mean, and the narrow
+question turned out to have the narrowest possible answer.
+
+**The lesson is the size of what rested on it.** This section is the longest in
+the document. It sequences three switches, argues a cutover date to the day,
+designs a shadow mode so the balancer's readiness can be measured rather than
+guessed, and works out what a partial first season does to a label. All of it
+was built on one unexamined bit: *that the thing was on*. Nobody checked,
+because it was never a question anyone thought to ask — the plan was about what
+to do with the ratings, and the ratings' existence was the floor it stood on
+rather than a step in it.
+
+Every other trap in this document is subtle: an encoding two people read
+differently, a gate that fails open, a merge written against a column list. This
+one is not subtle at all, and it survived three weeks of careful planning
+precisely because it is not subtle. **The assumptions worth checking first are
+the ones so basic they never got written down as assumptions.**
+
+It also says something for the instruments. `elo_rating` being empty could have
+been a dozen things; it was `player_daily_stat.rating` being *NULL rather than
+0* that narrowed it to one, before anyone looked at a server. Ask 22's
+NULL-versus-0 call was made for a different reason entirely — a gap in a curve
+instead of a false collapse — and it happened to be the thing that made a
+different failure diagnosable from the database alone.
+
+**Started the same evening (owner, 2026-08-06).** So the run-up is roughly
+eight weeks to 1 October instead of the nine this section assumed — the
+calendar had barely moved, which is the whole reason this was worth finding
+tonight rather than in September. **1 October stands as the cutover date.**
+
+**Two things are now worth watching rather than assuming, and both are cheap:**
+
+- **That it is actually writing**, checkable tomorrow rather than in six weeks:
+  `SELECT COUNT(*) FROM elo_rating` should be non-zero after an evening of
+  play, and `player_daily_stat.rating` should stop being NULL. The same two
+  signals that diagnosed it, read the other way round.
+- **That the calibration actually gets done.** The parallel run's second purpose
+  was never automatic — `headshot_bonus_pct`, `assist_reward`, the balancer's
+  thresholds and the nemesis weights are all still guesses, and a quarter of
+  rows only helps if somebody looks at them. Eight weeks of data nobody compares
+  is the same as no data on switch day.
+
 ### 24. The in-game commands are an eleventh reader, and OSBase's
 
 Raised by the owner (2026-07-22): cs2rank contributes chat commands — `!top`
