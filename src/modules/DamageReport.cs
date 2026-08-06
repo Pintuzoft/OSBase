@@ -24,10 +24,10 @@ namespace OSBase.Modules;
 // counter, so these are decided once, here, not patched in later:
 //   player_hit_stat       (steamid64, weapon, hitgroup, direction, side, season) -> hits, damage
 //   player_weapon_shots   (steamid64, weapon, side, season) -> shots
-//   player_round_stat     (steamid64, side, season) -> rounds, bomb_plants, bomb_defuses,
-//                         defuse_fails, plants_exploded, plants_defused; rounds is
-//                         damage/round's denominator (damage / rounds -- NOT industry "ADR",
-//                         damage is uncapped, see STATS-MODULE.md)
+//   player_round_stat     (steamid64, side, season, map, end_reason) -> rounds, bomb_plants,
+//                         bomb_defuses, defuse_fails, plants_exploded, plants_defused; rounds
+//                         is damage/round's denominator (damage / rounds -- NOT industry
+//                         "ADR", damage is uncapped, see STATS-MODULE.md)
 //   player_duel_stat      (attackerid64, victimid64, attacker_side, victim_side, weapon, season)
 //                         -> kills, headshots, noscopes, wallbangs, blind_kills, smoke_kills,
 //                         dominations, revenges; nemesis lists ("who kills me / who I kill")
@@ -117,7 +117,18 @@ public class DamageReport : ModuleBase {
     private int minPlayers = 4;
     private readonly Dictionary<(ulong SteamId64, string Weapon, int Hitgroup, int Direction, int Side, string Season), PendingHitCounter> pendingHitCounters = new();
     private readonly Dictionary<(ulong SteamId64, string Weapon, int Side, string Season), int> pendingShotCounters = new();
-    private readonly Dictionary<(ulong SteamId64, int Side, string Season, string Map), PendingRoundCounter> pendingRoundCounters = new();
+    // Ask 30: end_reason joins player_round_stat's key. Kept here, not on
+    // roundStagingCounters below -- see that field's comment for why the two are separate.
+    private readonly Dictionary<(ulong SteamId64, int Side, string Season, string Map, int EndReason), PendingRoundCounter> pendingRoundCounters = new();
+
+    // Ask 30: which reason a round ends with is only known when EventRoundEnd fires, but
+    // bomb_plants/bomb_defuses/plants_exploded/plants_defused all happen at OTHER events,
+    // mid-round, before that's known. This stages this round's contributions without
+    // end_reason; OnRoundEnd drains it into pendingRoundCounters once e.Reason is in hand,
+    // then clears it. AddRoundPlayed/AddDefuseFail could skip the staging step (they already
+    // run inside OnRoundEnd, after the reason is known) but go through it anyway so there is
+    // one path for every column on this table, not two to keep in sync.
+    private readonly Dictionary<(ulong SteamId64, int Side, string Season, string Map), PendingRoundCounter> roundStagingCounters = new();
     private readonly Dictionary<(ulong AttackerId64, ulong VictimId64, int AttackerSide, int VictimSide, string Weapon, string Season), PendingDuelCounter> pendingDuelCounters = new();
     private readonly Dictionary<(ulong SteamId64, int Side, string Season, int Opponents), PendingClutchCounter> pendingClutchCounters = new();
     private readonly Dictionary<(ulong SteamId64, int Side, string Season, int Kills), int> pendingMultikillCounters = new();
@@ -522,12 +533,21 @@ public class DamageReport : ModuleBase {
         // (plantedBySteamId64 below), not EventBombExploded's Userid -- that field is
         // whoever's near the bomb when it goes off, not who planted it, and it goes stale
         // the moment the planter disconnects before the timer runs out.
+        // end_reason (ask 30): the game's OWN EventRoundEnd.Reason value, stored as-is --
+        // no invented encoding, same rule the side-encoding fix paid for once already.
+        // TINYINT UNSIGNED is enough (CS2's RoundEndReason enum tops out at 22).
+        // A key dimension, not five extra columns -- same call ask 9 made for clutch
+        // `opponents`. Every column on this table now also splits by how the round ended,
+        // which is why it joins the SAME primary key as side/season/map, not a plain
+        // ADD COLUMN -- see EnsureEndReasonInPrimaryKey for the migration this requires on
+        // the already-live table.
         string roundStatTable = $"""
         TABLE IF NOT EXISTS {RoundStatTable} (
             steamid64    VARCHAR(32) NOT NULL,
             side         TINYINT UNSIGNED NOT NULL,
             season       VARCHAR(8) NOT NULL,
             map          VARCHAR(32) NOT NULL,
+            end_reason   TINYINT UNSIGNED NOT NULL DEFAULT 0,
             rounds       INT NOT NULL DEFAULT 0,
             rounds_won   INT NOT NULL DEFAULT 0,
             bomb_plants  INT NOT NULL DEFAULT 0,
@@ -537,7 +557,7 @@ public class DamageReport : ModuleBase {
             plants_defused  INT NOT NULL DEFAULT 0,
             first_seen   DATETIME NOT NULL,
             updated_at   DATETIME NOT NULL,
-            PRIMARY KEY (steamid64, side, season, map)
+            PRIMARY KEY (steamid64, side, season, map, end_reason)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
@@ -798,6 +818,11 @@ public class DamageReport : ModuleBase {
             // captured for any of them (not "definitely zero").
             EnsureColumn(KnifeTaserKillTable, "money_moved", "INT NULL");
 
+            // Ask 30, 2026-08-06: end_reason joins the primary key, which EnsureColumn
+            // can't do -- see EnsureEndReasonInPrimaryKey for why running it here is safe
+            // against the table's active writer.
+            EnsureEndReasonInPrimaryKey();
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] tables ensured.");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating tables: {e.Message}");
@@ -826,6 +851,52 @@ public class DamageReport : ModuleBase {
             }
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error ensuring column {table}.{column}: {e.Message}");
+        }
+    }
+
+    // Ask 30: unlike EnsureColumn, this isn't a plain ADD COLUMN -- end_reason joins the
+    // PRIMARY KEY, which needs its own ALTER (DROP + re-ADD, InnoDB rebuilds the clustered
+    // index either way). Run as one statement so the column and the key change land
+    // atomically -- no window where the column exists but the old 4-part key is still live.
+    //
+    // Safe against concurrent writers by construction, not by timing: this only ever runs
+    // from CreateTables(), which OnLoad calls before RegisterHandlers wires up any event
+    // subscription (ModuleBase.Load: OnLoad() then LoadHandlers()). On a cold start nothing
+    // has subscribed yet. On a hot reload, Unload() already unregistered the old handlers
+    // and flushed pending writes before the new Load() reaches this point. Either way there
+    // is no in-flight write against player_round_stat while this runs -- same deploy
+    // ordering the side-encoding fix needed, but guaranteed by the module lifecycle instead
+    // of a manual step.
+    //
+    // DEFAULT 0 for pre-existing rows is RoundEndReason.Unknown (confirmed against
+    // CounterStrikeSharp.API.Modules.Entities.Constants.RoundEndReason: Unknown = 0u), CS2's
+    // own "we don't know" value -- not an invented sentinel, same precedent as
+    // SideUnknown/CsTeam.None elsewhere on this exact table. No backfill: every round played
+    // before this migration genuinely never had its reason recorded.
+    private void EnsureEndReasonInPrimaryKey() {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            DataTable existing = db.select(
+                "column_name FROM information_schema.columns " +
+                "WHERE table_schema = DATABASE() AND table_name = @table AND column_name = @column",
+                new MySqlParameter("@table", RoundStatTable),
+                new MySqlParameter("@column", "end_reason")
+            );
+
+            if (existing.Rows.Count == 0) {
+                db.alter(
+                    $"TABLE {RoundStatTable} " +
+                    "ADD COLUMN end_reason TINYINT UNSIGNED NOT NULL DEFAULT 0, " +
+                    "DROP PRIMARY KEY, " +
+                    "ADD PRIMARY KEY (steamid64, side, season, map, end_reason)"
+                );
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Migrated {RoundStatTable}'s primary key to include end_reason.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error migrating {RoundStatTable}'s primary key: {e.Message}");
         }
     }
 
@@ -861,12 +932,38 @@ public class DamageReport : ModuleBase {
 
     private PendingRoundCounter GetOrCreateRoundCounter(ulong steamId64, int side, string season, string map) {
         var key = (steamId64, side, season, map);
-        if (!pendingRoundCounters.TryGetValue(key, out var counter)) {
+        if (!roundStagingCounters.TryGetValue(key, out var counter)) {
             counter = new PendingRoundCounter();
-            pendingRoundCounters[key] = counter;
+            roundStagingCounters[key] = counter;
         }
 
         return counter;
+    }
+
+    // Ask 30: called once per round, from OnRoundEnd, once e.Reason is known. Folds this
+    // round's staged contributions into the real, end_reason-keyed pending dictionary and
+    // empties the staging area so it starts clean next round.
+    private void DrainRoundStagingCounters(int endReason) {
+        foreach (var kv in roundStagingCounters) {
+            var (steamId64, side, season, map) = kv.Key;
+            var staged = kv.Value;
+
+            var key = (steamId64, side, season, map, endReason);
+            if (!pendingRoundCounters.TryGetValue(key, out var counter)) {
+                counter = new PendingRoundCounter();
+                pendingRoundCounters[key] = counter;
+            }
+
+            counter.Rounds += staged.Rounds;
+            counter.RoundsWon += staged.RoundsWon;
+            counter.BombPlants += staged.BombPlants;
+            counter.BombDefuses += staged.BombDefuses;
+            counter.DefuseFails += staged.DefuseFails;
+            counter.PlantsExploded += staged.PlantsExploded;
+            counter.PlantsDefused += staged.PlantsDefused;
+        }
+
+        roundStagingCounters.Clear();
     }
 
     private void AddRoundPlayed(ulong steamId64, int side, string season, string map, bool won) {
@@ -1359,11 +1456,11 @@ public class DamageReport : ModuleBase {
             }
 
             foreach (var kv in roundBatch) {
-                var (steamId64, side, season, map) = kv.Key;
+                var (steamId64, side, season, map, endReason) = kv.Key;
                 var counter = kv.Value;
 
-                writes.Add(($"INTO {RoundStatTable} (steamid64, side, season, map, rounds, rounds_won, bomb_plants, bomb_defuses, defuse_fails, plants_exploded, plants_defused, first_seen, updated_at) " +
-                    "VALUES (@steamid64, @side, @season, @map, @rounds, @rounds_won, @plants, @defuses, @fails, @plants_exploded, @plants_defused, NOW(), NOW()) " +
+                writes.Add(($"INTO {RoundStatTable} (steamid64, side, season, map, end_reason, rounds, rounds_won, bomb_plants, bomb_defuses, defuse_fails, plants_exploded, plants_defused, first_seen, updated_at) " +
+                    "VALUES (@steamid64, @side, @season, @map, @end_reason, @rounds, @rounds_won, @plants, @defuses, @fails, @plants_exploded, @plants_defused, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE rounds=rounds+@rounds, rounds_won=rounds_won+@rounds_won, " +
                     "bomb_plants=bomb_plants+@plants, bomb_defuses=bomb_defuses+@defuses, defuse_fails=defuse_fails+@fails, " +
                     "plants_exploded=plants_exploded+@plants_exploded, plants_defused=plants_defused+@plants_defused, updated_at=NOW()",
@@ -1372,6 +1469,7 @@ public class DamageReport : ModuleBase {
                         new("@side", side),
                         new("@season", season),
                         new("@map", map),
+                        new("@end_reason", endReason),
                         new("@rounds", counter.Rounds),
                         new("@rounds_won", counter.RoundsWon),
                         new("@plants", counter.BombPlants),
@@ -2094,6 +2192,7 @@ public class DamageReport : ModuleBase {
         roundKillCount.Clear();
         clutchFlaggedThisRound.Clear();
         roundClutchCandidates.Clear();
+        roundStagingCounters.Clear();
         plantedBySteamId64 = null;
         plantedBySide = SideUnknown;
 
@@ -2235,6 +2334,15 @@ public class DamageReport : ModuleBase {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception resolving multikill stats in OnRoundEnd: {ex}");
         } finally {
             roundKillCount.Clear();
+        }
+
+        // Ask 30: last, now that every Add* call above for this round has run and staged
+        // its contribution -- e.Reason is the game's own value, stored as-is (no invented
+        // encoding, same rule as side).
+        try {
+            DrainRoundStagingCounters(e.Reason);
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception draining round staging counters in OnRoundEnd: {ex}");
         }
 
         // Capture is already done above (everything's in the pending dictionaries now);

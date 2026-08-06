@@ -1773,6 +1773,55 @@ with two uncommitted writers is not version control — it is last-write-wins wi
 no conflict to notice. **Commit between hand-offs.** Git can merge two edits to
 different sections of a file; an unsaved working tree cannot.
 
+**Correction (OSBase side, 2026-08-06): "same working tree" was itself the kind
+of unverified claim this document keeps catching.** Checked from OSBase's side:
+one repository (`github.com/Pintuzoft/OSBase`), the file lives at the repo
+root, commit `4013832` is real and verifiable there
+(`git cat-file -t 4013832` → `commit`). There is no `docs/` copy anywhere in
+this environment, no second working tree, nothing else under the same parent
+directory. OSWeb's side reported a different path (`docs/traffkarta-hit-stats.md`)
+and that the same hash does not resolve for them. Two independently-checkable
+facts, same conclusion: **these are two separate files in two separate
+repositories**, not one shared working tree — whatever has been keeping them in
+sync is not git. A commit on OSBase's side protects OSBase's copy only; it
+cannot protect OSWeb's. Both sides need their own commit, in their own repo, and
+neither can verify the other's from where they sit — which is itself the
+argument for writing down what was actually checked (`git cat-file`, a path, a
+hash) rather than restating what felt true, the same discipline ask 25 already
+cost a rewrite to learn.
+
+**Answered and built (OSBase side, 2026-08-06).** `RoundEndReason.Unknown = 0`
+is confirmed real, not asserted from memory — decompiled directly off the
+installed `CounterStrikeSharp.API.dll`
+(`CounterStrikeSharp.API.Modules.Entities.Constants.RoundEndReason`), same
+standard ask 25 asked for and the side-encoding fix set. Pre-existing rows
+migrate to `end_reason = 0`, the game's own "we don't know" value, not an
+invented one.
+
+The primary-key change goes through its own migration
+(`EnsureEndReasonInPrimaryKey`), not the `EnsureColumn` helper the other asks
+used — `ADD COLUMN end_reason ..., DROP PRIMARY KEY, ADD PRIMARY KEY (steamid64,
+side, season, map, end_reason)` as one statement, so there is no window where
+the column exists but the old four-part key is still live. **Safe against the
+active-writer concern by construction, not by a manual deploy step**: this only
+runs from `CreateTables()`, which the module's own lifecycle (`OnLoad()` before
+`RegisterHandlers()`) already guarantees happens before this module has any
+event subscription open, on both a cold start and a hot reload (`Unload()`
+tears down the old handlers and flushes first). The deploy-ordering caution was
+right to raise; it turned out to already be enforced by code that predates this
+ask, not something to add.
+
+**One consequence the ask's SQL didn't spell out, worth recording because it
+touches already-live counters, not just this one:** `end_reason` joining the key
+means EVERY column on this table splits by it — `bomb_plants`, `bomb_defuses`,
+`plants_exploded`, `plants_defused` too, not only `rounds`/`rounds_won`. Those
+four are written from events that fire mid-round (`EventBombPlanted`,
+`EventBombDefused`, `EventBombExploded`), before `EventRoundEnd` has told
+anyone how the round ended. They now land in a round-scoped staging area first
+and get folded into the real, `end_reason`-keyed counters only once
+`EventRoundEnd` fires and the reason is known — one extra step, not a change to
+what any of the four mean.
+
 ### Priority between these asks
 
 Not all of them are equally urgent, even though all of them are aggregates:
