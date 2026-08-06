@@ -25,9 +25,10 @@ namespace OSBase.Modules;
 //   player_hit_stat       (steamid64, weapon, hitgroup, direction, side, season) -> hits, damage
 //   player_weapon_shots   (steamid64, weapon, side, season) -> shots
 //   player_round_stat     (steamid64, side, season, map, end_reason) -> rounds, bomb_plants,
-//                         bomb_defuses, defuse_fails, plants_exploded, plants_defused; rounds
-//                         is damage/round's denominator (damage / rounds -- NOT industry
-//                         "ADR", damage is uncapped, see STATS-MODULE.md)
+//                         bomb_defuses, defuse_fails, plants_exploded, plants_defused,
+//                         hostages_rescued, hostages_killed; rounds is damage/round's
+//                         denominator (damage / rounds -- NOT industry "ADR", damage is
+//                         uncapped, see STATS-MODULE.md)
 //   player_duel_stat      (attackerid64, victimid64, attacker_side, victim_side, weapon, season)
 //                         -> kills, headshots, noscopes, wallbangs, blind_kills, smoke_kills,
 //                         dominations, revenges; nemesis lists ("who kills me / who I kill")
@@ -210,6 +211,8 @@ public class DamageReport : ModuleBase {
         public int DefuseFails;
         public int PlantsExploded;
         public int PlantsDefused;
+        public int HostagesRescued;
+        public int HostagesKilled;
     }
 
     private sealed class PendingDailyCounter {
@@ -394,6 +397,8 @@ public class DamageReport : ModuleBase {
         osbase?.SubscribeToEvent<EventBombDefused>(OnBombDefused);
         osbase?.SubscribeToEvent<EventBombExploded>(OnBombExploded);
         osbase?.SubscribeToEvent<EventBombBegindefuse>(OnBombBeginDefuse);
+        osbase?.SubscribeToEvent<EventHostageRescued>(OnHostageRescued);
+        osbase?.SubscribeToEvent<EventHostageKilled>(OnHostageKilled);
         osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
         osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.SubscribeToEvent<EventPlayerConnect>(OnPlayerConnect);
@@ -411,6 +416,8 @@ public class DamageReport : ModuleBase {
         osbase?.UnsubscribeFromEvent<EventBombDefused>(OnBombDefused);
         osbase?.UnsubscribeFromEvent<EventBombExploded>(OnBombExploded);
         osbase?.UnsubscribeFromEvent<EventBombBegindefuse>(OnBombBeginDefuse);
+        osbase?.UnsubscribeFromEvent<EventHostageRescued>(OnHostageRescued);
+        osbase?.UnsubscribeFromEvent<EventHostageKilled>(OnHostageKilled);
         osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
         osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
         osbase?.UnsubscribeFromEvent<EventPlayerConnect>(OnPlayerConnect);
@@ -549,6 +556,13 @@ public class DamageReport : ModuleBase {
         // which is why it joins the SAME primary key as side/season/map, not a plain
         // ADD COLUMN -- see EnsureEndReasonInPrimaryKey for the migration this requires on
         // the already-live table.
+        // hostages_rescued/hostages_killed (ask 31): the other objective, same shape as
+        // plants_exploded/plants_defused -- counts hostages, not rounds (a round can hold
+        // several, the event fires per hostage), staged and drained through the same
+        // end_reason-keyed path as the bomb counters. Only hostages_rescued is CT-only (a
+        // Terrorist cannot rescue) -- hostages_killed is not, EventHostageKilled.Userid is
+        // whoever pulled the trigger, either side. Neither column is forced to a side here;
+        // MapSide(e.Userid) records whatever the game reports.
         string roundStatTable = $"""
         TABLE IF NOT EXISTS {RoundStatTable} (
             steamid64    VARCHAR(32) NOT NULL,
@@ -563,6 +577,8 @@ public class DamageReport : ModuleBase {
             defuse_fails INT NOT NULL DEFAULT 0,
             plants_exploded INT NOT NULL DEFAULT 0,
             plants_defused  INT NOT NULL DEFAULT 0,
+            hostages_rescued INT NOT NULL DEFAULT 0,
+            hostages_killed  INT NOT NULL DEFAULT 0,
             first_seen   DATETIME NOT NULL,
             updated_at   DATETIME NOT NULL,
             PRIMARY KEY (steamid64, side, season, map, end_reason)
@@ -817,6 +833,10 @@ public class DamageReport : ModuleBase {
             EnsureColumn(RoundStatTable, "plants_exploded", "INT NOT NULL DEFAULT 0");
             EnsureColumn(RoundStatTable, "plants_defused", "INT NOT NULL DEFAULT 0");
 
+            // Ask 31, 2026-08-06: same story, same table, already live.
+            EnsureColumn(RoundStatTable, "hostages_rescued", "INT NOT NULL DEFAULT 0");
+            EnsureColumn(RoundStatTable, "hostages_killed", "INT NOT NULL DEFAULT 0");
+
             // Ask 27, same day: knife_taser_kill_event is also already live.
             EnsureColumn(KnifeTaserKillTable, "killer_money", "INT NOT NULL DEFAULT 0");
             EnsureColumn(KnifeTaserKillTable, "victim_money", "INT NOT NULL DEFAULT 0");
@@ -971,6 +991,8 @@ public class DamageReport : ModuleBase {
             counter.DefuseFails += staged.DefuseFails;
             counter.PlantsExploded += staged.PlantsExploded;
             counter.PlantsDefused += staged.PlantsDefused;
+            counter.HostagesRescued += staged.HostagesRescued;
+            counter.HostagesKilled += staged.HostagesKilled;
         }
 
         roundStagingCounters.Clear();
@@ -1026,6 +1048,22 @@ public class DamageReport : ModuleBase {
         }
 
         GetOrCreateRoundCounter(steamId64, side, season, map).PlantsDefused += 1;
+    }
+
+    private void AddHostageRescued(ulong steamId64, int side, string season, string map) {
+        if (steamId64 == 0) {
+            return;
+        }
+
+        GetOrCreateRoundCounter(steamId64, side, season, map).HostagesRescued += 1;
+    }
+
+    private void AddHostageKilled(ulong steamId64, int side, string season, string map) {
+        if (steamId64 == 0) {
+            return;
+        }
+
+        GetOrCreateRoundCounter(steamId64, side, season, map).HostagesKilled += 1;
     }
 
     private void AddDailyStat(ulong steamId64, int hits, int damage, int headshots, int kills, int shots, int rounds, int seconds, int? rating = null, int? points = null) {
@@ -1469,11 +1507,12 @@ public class DamageReport : ModuleBase {
                 var (steamId64, side, season, map, endReason) = kv.Key;
                 var counter = kv.Value;
 
-                writes.Add(($"INTO {RoundStatTable} (steamid64, side, season, map, end_reason, rounds, rounds_won, bomb_plants, bomb_defuses, defuse_fails, plants_exploded, plants_defused, first_seen, updated_at) " +
-                    "VALUES (@steamid64, @side, @season, @map, @end_reason, @rounds, @rounds_won, @plants, @defuses, @fails, @plants_exploded, @plants_defused, NOW(), NOW()) " +
+                writes.Add(($"INTO {RoundStatTable} (steamid64, side, season, map, end_reason, rounds, rounds_won, bomb_plants, bomb_defuses, defuse_fails, plants_exploded, plants_defused, hostages_rescued, hostages_killed, first_seen, updated_at) " +
+                    "VALUES (@steamid64, @side, @season, @map, @end_reason, @rounds, @rounds_won, @plants, @defuses, @fails, @plants_exploded, @plants_defused, @hostages_rescued, @hostages_killed, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE rounds=rounds+@rounds, rounds_won=rounds_won+@rounds_won, " +
                     "bomb_plants=bomb_plants+@plants, bomb_defuses=bomb_defuses+@defuses, defuse_fails=defuse_fails+@fails, " +
-                    "plants_exploded=plants_exploded+@plants_exploded, plants_defused=plants_defused+@plants_defused, updated_at=NOW()",
+                    "plants_exploded=plants_exploded+@plants_exploded, plants_defused=plants_defused+@plants_defused, " +
+                    "hostages_rescued=hostages_rescued+@hostages_rescued, hostages_killed=hostages_killed+@hostages_killed, updated_at=NOW()",
                     new MySqlParameter[] {
                         new("@steamid64", steamId64.ToString()),
                         new("@side", side),
@@ -1486,7 +1525,9 @@ public class DamageReport : ModuleBase {
                         new("@defuses", counter.BombDefuses),
                         new("@fails", counter.DefuseFails),
                         new("@plants_exploded", counter.PlantsExploded),
-                        new("@plants_defused", counter.PlantsDefused)
+                        new("@plants_defused", counter.PlantsDefused),
+                        new("@hostages_rescued", counter.HostagesRescued),
+                        new("@hostages_killed", counter.HostagesKilled)
                     }));
             }
 
@@ -1677,6 +1718,8 @@ public class DamageReport : ModuleBase {
                         existing.DefuseFails += kv.Value.DefuseFails;
                         existing.PlantsExploded += kv.Value.PlantsExploded;
                         existing.PlantsDefused += kv.Value.PlantsDefused;
+                        existing.HostagesRescued += kv.Value.HostagesRescued;
+                        existing.HostagesKilled += kv.Value.HostagesKilled;
                     }
                 }
 
@@ -2181,6 +2224,42 @@ public class DamageReport : ModuleBase {
             }
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in OnBombBeginDefuse: {ex}");
+        }
+
+        return HookResult.Continue;
+    }
+
+    // Ask 31: event names read off the decompiled API (EventHostageRescued/EventHostageKilled),
+    // not assumed, per the doc's rule. Fires per hostage, not per round -- see AddHostageRescued's
+    // caller comment on this table. Staged through roundStagingCounters like the bomb counters,
+    // since end_reason is only known once EventRoundEnd fires.
+    private HookResult OnHostageRescued(EventHostageRescued e) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        try {
+            if (statsGateOpen && IsRealHuman(e.Userid)) {
+                AddHostageRescued(e.Userid!.SteamID, MapSide(e.Userid), CurrentSeason(), CurrentMap());
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in OnHostageRescued: {ex}");
+        }
+
+        return HookResult.Continue;
+    }
+
+    private HookResult OnHostageKilled(EventHostageKilled e) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        try {
+            if (statsGateOpen && IsRealHuman(e.Userid)) {
+                AddHostageKilled(e.Userid!.SteamID, MapSide(e.Userid), CurrentSeason(), CurrentMap());
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in OnHostageKilled: {ex}");
         }
 
         return HookResult.Continue;

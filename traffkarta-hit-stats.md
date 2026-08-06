@@ -1486,6 +1486,22 @@ made for `player_daily_stat.rating`, and for the same reason. A taser row is not
 a mugging that came up empty; it is a kill the mechanic never touched. Collapsed
 into one value, every taser kill would quietly join the "worst mug" board.
 
+**And the taser's exclusion is a decision, not the bayonet bug wearing a
+different hat** (owner, 2026-08-06: *"man muggar inte nån med taser bara
+kniv"*). Recorded because the two are indistinguishable in the data — both are
+`money_moved = NULL`, both are "a weapon that didn't move money" — and this
+document now tells a prominent story about a knife that should have mugged and
+silently didn't. Somebody reading that, then finding the taser, has every
+reason to file it as the same bug found again.
+
+It is the opposite. The bayonet *is* a knife to everyone holding one, and
+excluding it matched nobody's expectation. A taser is not a knife to anyone,
+and mugging is a knife mechanic. The shared classifier is what makes the
+difference legible in code rather than incidental: `NormalizeWeapon` folds
+every skin to `knife` and the taser spellings to `taser`, so `Mug` asking for
+`knife` excludes the taser *by saying so*, not by a substring happening not to
+match.
+
 **`DamageReport` stays the table's only writer. `Mug` reports, it does not
 write.** Two writers on one table is the guardrail this whole system keeps —
 and here it is also the practical answer, since the row is `DamageReport`'s to
@@ -1752,18 +1768,71 @@ whatever `EventRoundEnd` carries, then **verify the mapping against real rows on
 a live server and write the observed table into this document** — not the enum
 somebody remembers.
 
-**One asymmetry worth knowing before anyone reads a chart:** a running-out clock
-is not a symmetric outcome. In CS2 the CTs take the round when time expires, so
-"won on time" is a CT-only row and, for a T, the same reason only ever appears
-as a loss. That is not a bug in the data and does not need a column — `side` is
-already in the key, which is exactly what makes it readable — but a site chart
-that puts "wins by time" side by side without saying so will look broken to the
-T-side player who has none.
+**An asymmetry worth knowing before anyone reads a chart — and the first
+version of this paragraph got it wrong.** It said "the CTs take the round when
+time expires, so *won on time* is a CT-only row". **The owner corrected it
+(2026-08-06): on a hostage map the clock running out is a T win** — the CTs are
+the side under the deadline there, because rescuing is their job.
+
+So "time ran out" is not one outcome with a fixed winner. It is **two different
+reasons with opposite winners**, and which one can occur is decided by the map
+type. That is a better argument for the shape than the wrong version was:
+`map` is already in this key from ask 17, so a hostage map's reasons simply
+never appear on a `de_` row, and the pair never has to be told apart by
+guesswork.
+
+What survives from the mistake is the display warning, now for the right
+reason: **do not label a column "wins by time" and put the two sides beside
+each other.** Which side that favours depends on the map, so a single bar
+labelled that way is two different facts stacked into one, and a chart is the
+worst place to discover it.
+
+The mistake itself is the one this document keeps recording: a rule that is
+true for the maps you happen to think of first, stated as if it were the game's
+rule. Bomb maps are the default in everyone's head — and the servers run
+hostage maps too.
 
 **It also gives the bomb columns their denominator.** Ask 26 counts what
 happened to *your* plants; this counts how *rounds* ended. Together they answer
 the thing neither can alone: whether a map is decided on the objective at all,
 or whether the bomb is mostly a formality on a server that fights it out.
+
+**Settled 2026-08-06 by truncating the counter tables, so `end_reason = 0`
+means exactly one thing.** The 225 rows that existed when the migration ran
+were pre-`end_reason` rows collapsed onto the default — harmless in
+themselves, and distinguishable by `first_seen` predating the deploy. What
+made them worth removing is what happens *next*: an unresolved round drains
+under `0`, and for a player who already had a `0` row on the same
+`(side, season, map)` that is an `UPDATE` of the old row, not a new one.
+`first_seen` is INSERT-only, so from that moment the row would have meant both
+"recorded before the column existed" and "this round never resolved", with no
+way left to separate them. A documented ambiguity that repairs itself by being
+deleted while it is three hours old is not worth keeping.
+
+**What was deliberately NOT reset, and why the list matters more than the
+truncate.** `player_hit_stat`, `player_weapon_shots`, `player_round_stat`,
+`player_duel_stat`, `player_duel_total`, `player_clutch_stat`,
+`player_multikill_stat` and `knife_taser_kill_event` all went — days-old test
+play with no reader on the site. Left alone:
+
+- **`elo_rating` / `elo_points` / `elo_kill_event`.** Ask 23's entire argument
+  for running ELO in parallel since 1 August is that a *rating needs a
+  run-up* — points can start from zero, a rating cannot. Truncating it would
+  put every player back on the default, leave the balancer treating the whole
+  server as roster median, and the only way to earn that week back is to play
+  it again. It is the one thing here that costs time rather than rows.
+- **`player_teambet_*`.** Real balances, exactly as in the side-encoding
+  truncate a day earlier.
+- **`skill_log`.** Untouched by any of this, and the form curve's only source
+  until ELO takes over.
+- **`player_daily_stat`.** The judgement call, kept on purpose. It holds
+  end-of-day rating and points snapshots, and ask 22 says the strongest thing
+  in this document about any table: it loses *time itself*. Five days of curve
+  is not much, and it is five days nobody can reproduce. The price is a known
+  inconsistency — the daily table carries history the quarterly tables no
+  longer do — which is acceptable only because this document already forbids
+  summing the two together, and `first_seen` answers "since when" for the new
+  ones.
 
 **This one was written, then lost to a concurrent edit, then rewritten**
 (2026-08-06) — both sides had the same file open in the same working tree, and
@@ -1865,6 +1934,82 @@ this table changed shape: `rounds`/`rounds_won`/`defuse_fails` were already
 only ever written from inside `OnRoundEnd` itself, before or after this ask, so
 they were never at risk the way the bomb counters were.
 
+### 31. The other objective — hostages
+
+Raised by the owner (2026-08-06) straight out of the hostage-map correction in
+ask 30: if the clock behaves differently on `cs_` maps, the maps are in
+rotation — and **nothing anywhere counts a rescue.** The bomb has five columns
+between asks 8 and 26. The hostages have none, while
+`docs/rank-and-points-design.md` already pays 5 for a rescue and 10 to the team
+for rescuing them all. Same gap as ask 30's, one objective over.
+
+```sql
+-- player_round_stat, beside the bomb counters (asks 8 and 26)
+hostages_rescued INT,   -- hostages this player brought home
+hostages_killed  INT,   -- and the ones they shot
+```
+
+**It counts hostages, not rounds** — a round can hold several, and the event
+fires per hostage. Worth saying because the two are different numbers and only
+one of them is being stored: "rounds in which you rescued someone" cannot be
+derived from a hostage count afterwards. If that turns out to be the number
+people actually mean, it is a separate column and a separate ask, not a
+reinterpretation of this one. Same rule as the Ace decision.
+
+**`hostages_killed` is recorded and will never be ranked** (owner, 2026-08-06:
+"hostages killed kanske också är statistik" — yes, and it is worth being
+precise about what that permits). Shooting a hostage is a real thing that
+happens, mostly by accident, and the game already punishes it — HLstatsX
+scored it −15. Keeping it costs one column and makes a profile honest about a
+bad night; building a "most hostages shot" board out of it would be the
+mug-victim leaderboard in a new hat.
+
+**The line this is the third example of, so it is worth stating once as a
+rule.** The site praising rather than embarrassing has never been an argument
+against *recording* an unflattering number, or against *showing someone their
+own*. It is an argument about one thing only: **sorting people against each
+other by it.** Your own worst map on your own profile (ask 29), the mugging
+that paid you nothing (ask 28), the hostage you shot (here) — all three are
+fine, and the first two were argued from scratch before this was said plainly.
+
+The test that separates them: **does the number appear on a page the subject
+did not open?** A profile is somewhere you look someone up, and a bad figure
+there sits inside the whole picture of a player. A leaderboard is a page about
+everyone, and being on the wrong end of one is a thing that happens *to* you,
+repeatedly, without your ever visiting it.
+
+So: capture everything the events carry — the unflattering half is
+non-retroactive exactly like the rest, and a column withheld out of tact is a
+column nobody can add back. Decide what gets *sorted* separately, and later.
+
+**Only one of these two columns is CT-only, and saying "these" was the same
+mistake as ask 30's first draft, one ask later** (owner, 2026-08-06): a rule
+true of the case in front of you, stated as if it covered the rest. "Hostages
+are a CT thing" is true of the *objective* — a Terrorist cannot rescue, so
+`hostages_rescued` really is zero on every T row, a fact rather than a gap,
+and a chart that lines the two sides up beside each other for it will look
+broken for exactly the reason the "wins by time" one would.
+
+`hostages_killed` is not that column. Nothing stops a Terrorist from shooting
+a hostage, and the event credits whoever pulled the trigger — `Userid` on
+`EventHostageKilled` — not CTs specifically. It can carry either side, and
+`side` is in the key precisely so the two columns are never forced to agree.
+
+**And they are zero on every `de_` map**, which `map` in the key (ask 17)
+makes readable rather than mysterious. A player with no hostage numbers has
+either never played `cs_` or never gone for it, and the map breakdown is what
+tells those two apart.
+
+**Event names deliberately not asserted here.** CS2 reworked hostages from
+"follow me" to carrying, so whatever the API calls the rescue, the pick-up and
+the death is for the OSBase side to read off the actual enum rather than for
+this document to guess — the rule ask 25 exists to enforce. What is being asked
+for is the two counts, not a particular handler.
+
+With this, the objective picture is complete: what you did with the bomb
+(ask 8), what became of it (ask 26), what you did with the hostages (here), and
+how the round actually ended (ask 30).
+
 ### Priority between these asks
 
 Not all of them are equally urgent, even though all of them are aggregates:
@@ -1913,14 +2058,26 @@ than `player_hit_stat`.
 - `EventPlayerHurt` → `player_hit_stat` (+ `player_weapon_shots` on fire)
 - `EventPlayerDeath` → `player_duel_stat`, including the kill-flag counters
   (ask 6) and `dominated`/`revenge` (ask 7); also the running per-player kill
-  tally for multi-kills, and the alive-count that tells you a clutch has begun
+  tally for multi-kills, and the alive-count that tells you a clutch has begun.
+  A knife or taser kill additionally writes `knife_taser_kill_event` with both
+  wallets read *before* `Mug` moves anything (ask 27), which `Mug` then reports
+  back into as `money_moved` (ask 28) — the ordering is load-order, not luck
 - `EventBombPlanted` / `EventBombDefused` / `EventBombBeginDefuse` → the bomb
   counters (ask 8); the plant also opens round state holding the planter, which
   `EventBombExploded` / `EventBombDefused` then resolve into `plants_exploded` /
   `plants_defused` (ask 26)
+- hostage rescue / hostage death → `hostages_rescued`, `hostages_killed`
+  (ask 31 — event names to be read off the API, not assumed)
 - round end → the rounds counter, the multi-kill row for each player's final
-  tally (ask 10), and the resolution of any clutch attempt opened during the
-  round (ask 9)
+  tally (ask 10), the resolution of any clutch attempt opened during the round
+  (ask 9), and `end_reason` (ask 30), which is also the moment the round's
+  staged objective counters are drained into their real rows
+- **round aborted without an end** (map change, `mp_restartgame`, the server
+  emptying) → the same drain, under `RoundEndReason.Unknown` (0), so an
+  interrupted round is a visible bucket instead of a silent subtraction
+  (ask 30)
+- `OnMapEnd` → one `player_map_result` row per player, read before the
+  scoreboard resets (ask 29)
 
 ## What OSWeb does with it
 
@@ -1994,13 +2151,41 @@ being built at the time will miss whatever was already there.
 Worth stating because unloading GameStats will not fix it — the table stops
 growing and stays, holding years of it.
 
-**Both lists now name the same thirteen** (checked against OSBase's DDL
-2026-07-21): `skill_log`, `elo_rating`, `elo_points`, `elo_kill_event`, `player_hit_stat`,
-`player_weapon_shots`, `player_round_stat`, `player_duel_stat`,
-`player_clutch_stat`, `player_multikill_stat`, `player_teambet_stat`,
-`player_daily_stat`, `player_duel_total`. `elo_kill_event` and
-`player_duel_stat` are each cleared from BOTH the attacker and victim column;
-the rest key on `steamid64`.
+**This section used to copy the list out, and the copy went stale — so it
+does not any more.** It read "both lists now name the same thirteen (checked
+against OSBase's DDL 2026-07-21)" until 2026-08-06, by which point the real
+list held **twenty-eight tables**: 22 deleted outright, 7 anonymised, with
+`elo_bonus_event` in both because it names a person in one column and a
+counterparty in two others. Missing from the snapshot were, among others,
+`knife_taser_kill_event`, `player_teambet_log`,
+`player_teambet_matchup_stat`, `player_map_result`, `elo_bonus_event`, the
+`weapon_event_*` family and the theme-weekend tables.
+
+**Nothing had leaked.** Every one of those had been added to the code on the
+day it started mattering — that discipline held. What drifted was this
+paragraph, which nobody had a reason to open while doing it.
+
+**So the authority is `OsbaseStatsRepository::ERASE` and `::ANONYMISE`, and
+this document deliberately does not restate their contents.** A prose copy of
+a list that changes weekly is a second home for a fact — the exact thing
+`osbase-contracts-readme.md` argues against — and it fails in the worst
+direction, because a stale erasure list reads as reassurance. Read the
+constants; they carry a comment per table saying why it is on the list, which
+is the part worth writing down and the part that does not go stale.
+
+**Found by OSBase diffing this paragraph against their own table constants
+(2026-08-06), not by anyone here noticing.** Same shape as the `skill_log`
+miss it already records, one level up: that was a table nobody's current work
+pointed at, this was a paragraph nobody's current work pointed at. The rule
+that catches both is the one the teambet tables demonstrate — ask whether the
+list covers what was just built, in the same change, rather than trusting a
+sentence that was true once.
+
+The split itself is stable and worth stating in prose, because it is a
+judgement rather than an inventory: **a table that names one person is
+deleted; a table that names two is anonymised**, so an erasure never destroys
+the other person's half of a shared moment. Every knife kill, duel and bonus
+event has two people in it.
 
 `server_stat_season` is deliberately absent from both lists and should stay
 that way: it holds server-wide totals with no steamid column, so there is
