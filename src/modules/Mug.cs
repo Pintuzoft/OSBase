@@ -11,6 +11,20 @@ public class Mug : ModuleBase {
     private const int MinMoney = 0;
     private const int MaxMoney = 16000;
 
+    private DamageReport? damageReport;
+
+    protected override void OnLoad() {
+        damageReport = osbase?.GetModule<DamageReport>();
+    }
+
+    protected override void OnUnload() {
+        damageReport = null;
+    }
+
+    protected override void OnReloadConfig() {
+        damageReport = osbase?.GetModule<DamageReport>();
+    }
+
     protected override void RegisterHandlers() {
         osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
     }
@@ -52,13 +66,21 @@ public class Mug : ModuleBase {
         string attackerName = attacker.PlayerName ?? "Unknown";
         string victimName = victim.PlayerName ?? "Unknown";
 
+        // Ask 28: report the signed figure into the row DamageReport already buffered for
+        // this exact kill (>0 taken from the victim, <0 paid as a teamkill penalty, =0 the
+        // mechanic ran and moved nothing). Every exit past this point is a knife kill the
+        // mechanic touched, so every one of them reports -- only a taser kill (filtered
+        // above) leaves the column unreported, which is what makes NULL mean "never
+        // touched" rather than "moved nothing".
         if (attacker.TeamNum == victim.TeamNum) {
             if (victimMoney <= 0) {
                 Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Victim had no money, no team punish transfer applied.");
+                damageReport?.ReportKnifeMoneyMoved(attacker.SteamID, victim.SteamID, 0);
                 return HookResult.Continue;
             }
 
             int transferred = TransferMoney(attacker, victim, victimMoney);
+            damageReport?.ReportKnifeMoneyMoved(attacker.SteamID, victim.SteamID, -transferred);
 
             if (transferred > 0) {
                 Server.PrintToChatAll($"{attackerName} tried to mug their teammate {victimName} and lost ${transferred} as punishment!");
@@ -71,10 +93,12 @@ public class Mug : ModuleBase {
 
         if (victimMoney <= 0) {
             Server.PrintToChatAll($"{attackerName} mugged {victimName} but they had no money!");
+            damageReport?.ReportKnifeMoneyMoved(attacker.SteamID, victim.SteamID, 0);
             return HookResult.Continue;
         }
 
         int mugged = TransferMoney(victim, attacker, victimMoney);
+        damageReport?.ReportKnifeMoneyMoved(attacker.SteamID, victim.SteamID, mugged);
 
         if (mugged > 0) {
             Server.PrintToChatAll($"{attackerName} mugged {victimName} for ${mugged}!");

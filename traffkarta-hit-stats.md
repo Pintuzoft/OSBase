@@ -1,5 +1,7 @@
 # Player stats collection — what OSBase should record
 
+**RÄTTAT 2026-08-05:** skalan är CS2:s egna lagnummer, **2 = T, 3 = CT**. Texten nedan sa 0/1 och citerades vidare tills den lät som ett faktum — vår egen dev-seed skrev 0/1, så varje test hade rätt data för fel antagande. Ingen i kedjan läste någonsin en rad en modul skrivit. `bin/doctor.php` frågar numera tabellen i stället.
+
 Written 2026-07-21, revised the same day once the real OSBase schema was read.
 A handoff to the OSBase side (github.com/Pintuzoft/OSBase, C#) so the profile
 features on OSWeb can be fed real data. **OSBase writes; OSWeb only reads.**
@@ -50,7 +52,7 @@ per weapon, plus damage. And `player_weapon_shots` gives real accuracy
 
 ### 1. `player_hit_stat`: add `side` to the primary key
 
-`side TINYINT` — 0 = T, 1 = CT, 2 = unknown.
+`side TINYINT` — CS2:s egna lagnummer: **2 = T, 3 = CT**. (0 = ej tilldelad, 1 = åskådare; ingen av dem skriver statistik.)
 
 The profile shows a player's own operator with their hit zones on it, split by
 the side they were playing. Without this column the T/CT choice is only a skin
@@ -78,7 +80,7 @@ round) — one of the most standard CS numbers — cannot be computed at all.
 player_duel_stat
   attackerid64  VARCHAR(32),
   victimid64    VARCHAR(32),
-  attacker_side TINYINT,        -- 0=T 1=CT 2=unknown
+  attacker_side TINYINT,        -- 2 = T, 3 = CT (CS2:s lagnummer)
   victim_side   TINYINT,
   weapon        VARCHAR(32),
   kills         INT,
@@ -682,11 +684,21 @@ own record, and the site's north star is that content is never deleted — only 
 GDPR erasure removes anything.
 
 So the Rank pages have two jobs in that change, not one: point the live ladder
-at ELO, and keep the cs2rank seasons reachable as an archive, clearly labelled
-as the old system. A member who topped a 2025 season should still be able to
-find it. The two numbers must not be compared, since they measure different
-things — which is an argument for labelling the archive plainly, not for
-throwing it away.
+at ELO, and keep the cs2rank seasons reachable as an archive. A member who
+topped a 2025 season should still be able to find it.
+
+**On its own page, not the new system's** (owner, 2026-07-22, improving on the
+draft here). This originally said "reachable as an archive, clearly labelled" —
+the same page with a caveat on it. A separate page is stronger for the same
+reason a chat line shows one number: two scoring systems side by side invite
+comparison, and a label is only a request not to. Putting them on different
+pages makes comparing them take effort instead of taking none.
+
+**And it means `RankSeasonRepository` needs no rewrite at all.** It reads frozen
+tables that stop being written on 1 October and then never change again. The
+code already works, against data that is now permanent. It needs a new home and
+a heading saying what it is — which moves one of the ten readers from "rewrite"
+to "relocate".
 
 ### 20. Rewarding time played WITHOUT putting time back into the rating
 
@@ -876,6 +888,678 @@ The alternative — keeping GameStats alive purely so the curve has data — is 
 thing this whole consolidation exists to avoid: two skill numbers on one site,
 drifting apart every evening.
 
+**Built (OSBase, 2026-07-21)**, with two decisions worth keeping: the columns
+are `INT NULL` where NULL means "the ELO module is not loaded" rather than a
+rating of 0 — a gap in the curve instead of a false collapse to zero — and they
+are read from EloRating's in-memory cache rather than the database, because
+`DamageReport` and `EloRating` both subscribe to `EventRoundEnd` independently
+with no guaranteed order between them.
+
+**What this costs OSWeb's reader, which is fine but not nothing.**
+`SkillRepository::dailyHistory()` returns `maps` and `best` per day alongside
+the skill: how many maps that day rests on, and the best single map result. A
+snapshot has neither. `rounds` on the same table is the better activity figure
+anyway, but the *best map of the day* is simply gone as a concept — a rating has
+no per-map high score to take the max of. The peak in `summarise()` becomes the
+highest end-of-day rating, which is still the number people mean by "my best".
+The rewrite also has to skip NULL rows rather than read them as zero.
+
+### 23. The cutover: run both, switch at a reset we choose
+
+The owner's sequencing (2026-07-21), and it removes the hardest part of this
+change: **cs2rank runs as a separate plugin, so it can keep running until we
+reset.** There is no big-bang cutover. ELO starts writing, cs2rank keeps writing,
+the site keeps reading the old numbers, and the switch happens at a season
+boundary we pick.
+
+**This does not break the one-number rule.** "Two competing skill numbers" is a
+statement about what the site *displays*, not about what the plugins write. Two
+writers with one reader is fine, and it is the only version of this change that
+can be verified before anyone sees it.
+
+**Correcting an overstatement made here earlier:** `Services\Ai\RankSeasonReset`
+was described as a job that would fire at the next quarter boundary against a
+table nobody writes any more. It cannot. It is off until armed
+(`rank.auto_reset`, unset), and it is not calendar-bound — it fires only once
+`rank.season_days` (90) have passed since `rank.last_reset_at`, which is also
+unset. It is a lever, not a deadline. The rewrite still has to happen before it
+is ever armed against ELO, but nothing forces the date.
+
+**The argument for deploying OSBase now rather than at the switch: a rating
+needs a running start.** Points can begin from zero — that is what a season is.
+A rating cannot. It converges from matches, so on day one everyone sits at their
+default, and the ladder shows a flat field while the balancer treats the entire
+server as median. Run it for a quarter first and the day we flip, the ratings
+are already true and the standings mean something immediately.
+
+**And it is the only chance to calibrate.** Every number in this document marked
+as a guess — `headshot_bonus_pct`, `assist_reward`, the balancer's seven derived
+thresholds, the nemesis weights and style ceilings — has nothing to check
+against until real rows exist. A parallel quarter provides them while cs2rank is
+still the number on the page, so a wrong weight is an observation instead of an
+incident. The two ladders can be compared directly: if ELO's top twenty is
+unrecognisable next to cs2rank's, that is worth knowing before it is the only
+ladder.
+
+**The gates are the exception to "it can wait".** Ask 11 is not calibration —
+a round recorded without them is permanently contaminated, parallel run or not.
+They are built, so this costs nothing, but it is the reason the parallel run is
+safe at all.
+
+**The next reset is a week away (owner, 2026-07-21), and the recommendation is
+to let it pass.** Switch at the one after it. A reset is the worst possible
+moment to also change systems: everyone's standings go to zero anyway, so a cold
+ELO launched the same day makes the two disruptions indistinguishable — nobody
+on the server can tell "new season" from "the new thing is broken", and every
+complaint becomes unattributable. A cold rating on top of a zeroed ladder looks
+like a failure even when it is working correctly.
+
+**What the week IS for: release OSBase's writing side AT that reset, not after.**
+If ELO starts mid-quarter its first season is a stub, and comparing it against
+cs2rank's full season compares different things. Starting both clocks in the
+same moment is what makes the two ladders directly comparable, which was the
+entire point of running them in parallel. The site changes nothing that week:
+cs2rank resets as usual and stays the number on the page.
+
+**The schema is the only thing that must be right before that button.** After
+the first write the dimensions are locked forever — the rule this document opens
+with. It is the last cheap moment to read the primary keys once more.
+
+**It is THREE switches, not one** (owner, 2026-07-21, correcting a conflation
+made here). The reset zeroes cs2rank's ladder and nothing else — `skill_log`
+keeps being written straight through it. So the balancer's current source
+survives the reset untouched, and the three moves come apart:
+
+1. **The visible ladder**, cs2rank → `elo_points`. Happens at a reset, because
+   that is when standings go to zero anyway.
+2. **The profile form curve**, `skill_log` → `player_daily_stat.rating`. Waits
+   for enough daily snapshots to draw a line at all.
+3. **The team balancer**, `skill_log` → `elo_rating`. Waits for the ratings to
+   converge — and can wait, precisely because GameStats is not what gets reset.
+
+Keeping GameStats alive a while past the ladder switch costs nothing and keeps
+the balancer on a known-good source while the ratings warm up.
+
+**Don't date switch 3 — measure it.** A month is a guess, and the thing that
+actually matters is how many of the regulars have passed `min_rated_matches`.
+Switch while most of them are still below it and the balancer treats nearly
+everyone as roster median, which is the inert-balancer failure in a new costume.
+
+Better, and nearly free while both sources are live: **run the balancer's Elo
+path in shadow.** Each time it balances, compute the division it *would* have
+made from ratings alongside the one it actually makes from skill, and log the
+divergence. That turns "is it ready" into an observation instead of a
+prediction, and it is the same argument as the parallel ladder — a wrong
+threshold found in a log is not an incident. The overlap month also gives the
+only direct check the form curve will ever get: `skill_log` and the daily rating
+snapshots describing the same players over the same days.
+
+**A bug that only existed because the switch was made safe** (OSBase,
+2026-07-21, found and fixed while adding `balancer_skill_source`). The seven
+relativised thresholds used `ratio * currentRosterSpread` unconditionally, and
+that spread is always on the Elo scale — so with `gamestats` as the default it
+would have fed GameStats-scale gaps against Elo-scale thresholds from day one.
+
+Worth recording as its own lesson. In the original build, where the source was
+replaced outright, the code was self-consistent: Elo scale throughout. Adding
+the default-off mode created a mixed-scale state that neither the old design nor
+the new one had. It would have shipped as "we deployed with the safe default and
+the balancer went strange immediately" — exactly what the safe default existed
+to prevent, and nearly unattributable, since everyone would have been looking at
+the Elo path on the assumption that the inert default could not be the cause.
+
+The general shape: making a switch toggleable creates states that neither
+end of the switch has, and those states are the ones nobody designed. The
+thresholds are now properties branching on the mode — literal constants for
+`gamestats`, ratio × spread only for `elo`.
+
+**Which leaves the same question one level in, for `shadow`.** That mode
+balances on GameStats and computes what Elo *would* have done. Those are two
+divisions on two scales in one pass, so it needs BOTH threshold sets live at
+once — literals for the division it actually makes, ratio × spread for the one
+it only logs. If the property returns the `gamestats` literals throughout, the
+shadow log measures the wrong thresholds rather than the rating, and reports
+divergence that is an artefact. The entire point of shadow mode is that its
+numbers can be trusted without anyone watching.
+
+**The two systems do not share a season boundary.** cs2rank resets on a rolling
+90-day clock from whenever it was last run — so a reset in late July lands in the
+middle of Q3, while ELO's `2026Q3` has been running since 1 July. They sit about
+a month apart. The parallel run is still worth having, but it compares shapes
+rather than the same dates.
+
+**That makes 1 October the cutover, not "cs2rank's next reset"** (which would be
+late October and arbitrary). On 1 October ELO's points roll to `2026Q4` by
+themselves, with nothing to run — the whole point of season-in-the-key. cs2rank
+gets a real final season rather than the three-day stub an August cut would have
+archived forever, and ELO has roughly nine weeks of warm ratings behind it on
+the day it becomes the visible ladder.
+
+**What quietly disappears at that boundary: the announcement.**
+`Services\Ai\RankSeasonReset` does two jobs, and only one of them is the rename.
+The other is editorial — it posts a news article naming the winner, computes the
+season's awards (K/D, headshot rate, accuracy, win rate, each with a 50-kill
+floor so one lucky round cannot take a title) and links the frozen board. That
+is the part members actually see.
+
+Its trigger was "90 days have passed since the last reset". With season-in-the-
+key nothing fires at all: the rows simply start carrying a new string. So the
+mechanical half vanishing is exactly what makes the editorial half easy to lose
+— the boundary passes cleanly, the new season starts fine, and nobody announces
+that the old one ended. Success and silence look identical.
+
+It needs its own calendar trigger on the quarter boundary. One property makes
+that much safer than what it replaces: the closing season's data never moves, so
+the job reads `WHERE season = '2026Q3'` whenever it happens to run. Under the
+rename, running late meant new rows landing in the table being frozen. The new
+shape cannot corrupt the boundary by being late — it can only be late.
+
+**The first season will be a partial one, and it is labelled as a full one.**
+Writing starts 1 August; `season` is computed from the round's date, so those
+rows carry `2026Q3` — a label that means 1 July to 30 September. Nothing in the
+row says collection began two months in.
+
+For the trial season itself this costs nothing, since nobody is reading it. The
+label is what outlives it: a year from now `2026Q3` sits in the table looking
+like any other quarter.
+
+**Ask 13 is what stops that becoming a lie**, and it is already built.
+`first_seen DATETIME`, written on INSERT and never touched again, makes the
+partial season describe itself rather than depending on someone remembering.
+Without it `MIN(season) = 2026Q3` would read as "since July" permanently — which
+is precisely the wrong reading ask 13 was added to prevent, arriving earlier
+than expected.
+
+**The rule this puts on the reading side: season-over-season may compare rates,
+never totals.** ADR, headshot rate, accuracy and win rate all survive a short
+season. "Kills this season versus last" compares two months against three and
+renders as a slump that never happened. This applies exactly once — `2026Q4`
+and everything after it is a full quarter.
+
+### The in-game commands are an eleventh reader, and OSBase's
+
+Raised by the owner (2026-07-22): cs2rank contributes chat commands — `!top`
+for where you sit on the ladder, `!rank` for your own figures. Switch the plugin
+off and they vanish from the server that second. Every reader counted so far is
+a web page; this is the one players actually touch, and its absence is noticed
+immediately by everyone rather than eventually by somebody.
+
+**The real output, captured from the server (owner, 2026-07-22), and the
+command list is closed at these two — nothing else matters:**
+
+```
+[ Ranks ] Your position in the top: #1/387
+[ Ranks ] Experience: 164123 (Rank: 18K+)
+[ Ranks ] Kills: 7274 (Headshot: 3133) | Deaths: 6024 | Assists: 1890
+[ Ranks ] Winning rounds: 4400 | Losing rounds: 3787
+[ Ranks ] Percentage Headshot: 43.07 | KD: 1.21
+[ Ranks ] Total Play Time: 8 Days, 2 Hours, 9 Minutes, 45 Seconds
+
+[ Top Players ]
+1. Pintuz [18K+] - experience: 164123
+2. Skabbräv [18K+] - experience: 153922
+```
+
+That is not two commands, it is a statistics screen — and reading it against the
+new schema found three things.
+
+**a) `assists` are stored nowhere. Now-or-never.** They appear in this document
+only as an INPUT to the rating formula (`e.Assister` earns a flat reward), never
+as a counter. So `Assists: 1890` has no source after the switch, and neither
+does any future assist leaderboard. The event is already handled; the count is
+simply not kept.
+
+**Where they go changed once writing out the command spec.** The first draft put
+them on `player_round_stat`. That works but is the wrong home: writing `!rank`
+line by line shows it wants a player's period totals in one place, and
+`player_duel_total (steamid64, season) → kills, deaths` is already exactly that
+shape. Adding `assists` and `headshots` there turns most of `!rank` into a
+single-row lookup instead of an aggregation over every opponent pair the player
+met that season.
+
+That table was created in ask 16a for the nemesis query. `!rank` is a second,
+independent reason for the same roll-up, arriving from a completely different
+direction — which is usually the sign that a roll-up is real rather than an
+optimisation for one caller. Worth acknowledging that the name is now narrower
+than the contents: it is the player's period summary, not only a duel total.
+
+**b) The day-one regression was over-called here, and the owner's correction
+removes most of it.** This was written up as the biggest perception risk in the
+project: `!rank` printing 7 274 kills today and two months' worth on switch day,
+with the heaviest players losing the most visible history.
+
+That misread the screen. **`!rank` already shows the current period, not a
+lifetime** — those 7 274 kills and eight days are since the last reset. So the
+numbers going to zero is not a regression at all; it is what every quarter
+already does, and what everybody on the server already recognises.
+
+The mistake is the same one made about `[18K+]` in the same reading: the figures
+were large, so they were assumed to be lifetime. Twice in one screenshot.
+
+Cutting over exactly on a season boundary is what makes this land softly, and
+that was already the plan for other reasons. `!rank` goes from "Q3 nearly over"
+to "Q4 just started", which is what it does anyway. The change hides inside
+something that already happens.
+
+**A division was proposed here and immediately corrected** (owner, 2026-07-22).
+The draft said "the period lives in chat, the lifetime lives on the web", which
+is too tidy: the site has a whole rank section — the ladder, the seasons
+archive, the skill card on a profile — and it reads the period too.
+
+The real difference is not the data but how much each surface holds. A chat line
+shows one thing, so `!rank` shows the period. A web page has room and
+navigation, so it can show period and lifetime together and page back through
+seasons.
+
+**What stays true is that nothing is merged across the boundary.** cs2rank's
+totals were counted with no gates at all — warmup, bots and two-player servers
+all included, which is what ask 11 exists to exclude — so folding them into the
+new counters would corrupt them permanently. Both are shown; neither is added to
+the other.
+
+**Two site features the owner wants from this** (2026-07-22): a **stats page**
+listing everyone in a proper leaderboard, and the **current standing on the
+profile** — "third this period" visible where you already look someone up.
+
+That makes the Rank work a rebuild rather than a repoint, which is worth being
+honest about in the estimate: today's page is built around cs2rank's columns and
+its frozen tables, and the new one shows two numbers per player against a season
+column.
+
+**One design point to settle now, of the same kind as OSBase's NULL-versus-0
+call on the rating: a player with no rows this season has NO position, not last
+place.** `#387/387` for somebody who has not played since March is wrong in a
+way that looks right, and once the code computes a number anyway the distinction
+cannot be recovered by a later reader. The position itself is cheap — `COUNT(*)
++ 1 WHERE season = ? AND points > ?` over a few hundred rows — so it needs no
+stored column.
+
+**The seasons page gets simpler, not harder.** `/rank/seasons` currently
+discovers frozen `lvl_base_YYYYMMDD` tables by looking for table names of the
+right shape. With season in the key it becomes `SELECT DISTINCT season FROM
+elo_points ORDER BY season DESC` — a query instead of table-name archaeology,
+and seasons can be compared against each other in one statement, which was not
+possible at all when each lived in its own table.
+
+**c) `[18K+]` needs no replacement, and reading it as one was a mistake worth
+recording.** It was written up here as a named tier — the badge people identify
+with, a thing ELO would have to reproduce and calibrate thresholds for. The
+owner corrected it: it means "more than 18 000 points", the top bracket of a
+threshold list and nothing more.
+
+The evidence was in the same screenshot and got walked straight past. **All ten
+players in `!top` carry `[18K+]`** — Pintuz on 164 123 and Bl@ck on 70 097 wear
+the same label across a 2.3× gap. A badge shared by everyone in the top ten is
+not an identity; it is a ceiling that was passed years ago and has said nothing
+about anybody since.
+
+That dissolves the question rather than answering it: no tier system to design,
+no thresholds to guess. It is also a small argument for the change, since a
+rating separates those ten and the badge cannot.
+
+**It forces the question left open in ask 20 — which number goes next to a
+member's name.** On a profile both can be shown with room to explain. A chat
+line has no such room: `!rank` prints one thing. So the answer has to be decided
+before the commands are written, not after.
+
+The shape that probably fits: `!rank` leads with the quarterly points, because
+that is the standings and the thing that moves tonight, with the rating beside
+it as what you *are*. `!top` ranks by points for the same reason — a leaderboard
+people climb has to be climbable. But that is a recommendation, and it is the
+owner's call.
+
+**Starting collection early is free; a reset mechanism is not.** Beginning to
+write before 1 August costs nothing and buys the rating a longer run-up, which
+is the only part that needs one. Building a way to zero the points on demand
+would put back exactly what season-in-the-key removed: a reset stops being an
+operation at all, since a new season is just a new string. On-demand zeroing
+means either deleting `2026Q3`'s rows, against the rule that nothing here is
+deleted, or inventing a season label that is not a quarter, at which point it no
+longer falls out of the round's date. The boundary on 1 October arrives by
+itself and cannot be forgotten.
+
+**Open, and the owner's call: what happens to the trial quarter's points.**
+They are a real season's standings written while nobody was looking at them.
+Discarding them is the tidy answer; keeping them as an archived, plainly
+labelled trial season is the one that matches the rule that nothing here is
+deleted.
+
+### 25. GameStats is two things in one module — and one gate fails open
+
+Answered by the OSBase side (2026-07-22) after the owner pointed out that
+GameStats does more than write stats: it holds the match state. The research
+confirms it and closes the question. GameStats bundles two responsibilities:
+
+- **The skill-scoring engine** — `calcSkill()`, `skill_log`, the 90-day cache.
+  This is the part being migrated, and only `SkillResolver` reads it from
+  outside. `TeamBalancer` never touches it directly.
+- **A de-facto shared match-state and team-roster service** — the warmup flag,
+  the round counter, the team rosters, raw per-player counters, the swap
+  immunity. No migration path exists for any of it, and it is load-bearing for
+  five other modules independently of skill: `WeaponRestrict`, `TeamBets`,
+  `DamageReport`, `EventWeekend` and `EloRating` itself.
+
+So GameStats cannot be retired by this project, and the Elo cutover does not
+bring its removal any closer. That is the better outcome, as noted in the
+balancer discussion: `balancer_skill_source` stays a way back permanently rather
+than only during a transition.
+
+**The finding inside the report that matters more than its conclusion: the
+warmup gate fails open.** `EloRating.cs:218` reads `gameStats?.IsWarmup`. With a
+null-conditional the expression is `null` when GameStats is absent, and `null ==
+true` is `false` — which reads as "not warmup". The same shape appears in
+`TeamBets.cs:745`, `DamageReport.cs:262` and `EventWeekend.cs:407`.
+
+Warmup is one of ask 11's three gates, and gates are the one category in this
+whole document that cannot be repaired afterwards. A gate that fails open,
+silently, into lifetime counters is the worst available failure mode here.
+
+**Three of those four were wrong, and the mistake is worth recording because it
+is the one this document keeps catching in other people.** `EloRating`,
+`TeamBets` and `DamageReport` all write `gameStats?.IsWarmup ?? true` — the
+`?? true` closes the gate exactly as it should. The analysis above is correct
+about the bare `?.` expression and simply never saw the rest of the line.
+
+The cause: the claim was reasoned from the line references and the fragment
+quoted in the dependency report, not from the source. OSBase's code is not
+readable from this side at all, so every statement here about it is inference
+from a second-hand summary — and it was still phrased as a finding rather than a
+question. "Check these four places" would have been true; "these four are broken"
+was not.
+
+**One was real.** `EventWeekend.cs:407` read `ignoreWarmup && gameStats != null
+&& gameStats.IsWarmup`, where a null GameStats makes the whole condition false,
+so the kill is scored without knowing whether it was warmup. Pre-existing, and
+fixed to the same fail-closed shape as the other three. `weapon_event_kill` is
+exactly as non-retroactive as everything else here.
+
+That one hit does not make the method sound. One in four, stated confidently, is
+a bad rate for assertions about code you cannot read.
+
+None of it was a live bug in any case: `gameStats` is constructed unconditionally
+in `OSBase.cs:42` and is never null today. The principle stands for whatever
+comes next — a gate should fail closed, because absent state means we do not
+know, and "do not know" must never resolve to "yes, count it".
+
+### 26. What happened to the bomb you planted
+
+Ask 8 counts the plant and stops there. A plant that ticks down to a detonation
+and a plant a CT walks up and defuses are the same row today, and the difference
+is the whole thing people argue about — planting early into a lost site and
+planting when the site is actually held look identical in `bomb_plants`.
+
+```sql
+-- player_round_stat, alongside bomb_plants (ask 8)
+plants_exploded INT,   -- of the bombs THIS player planted, how many detonated
+plants_defused  INT,   -- ... and how many a CT got to in time
+```
+
+**Credit the planter, not whoever is standing there when it goes off.**
+`EventBombExploded` does carry a `userid`, but nothing should depend on it:
+remember the planter's steamid64 in the round state that already exists for
+`defuse_fails`, and resolve it on `EventBombExploded` / `EventBombDefused`. A
+stored id also survives the planter disconnecting before the timer runs out,
+which a live player slot does not.
+
+**Both outcomes get their own counter — do not derive one from the other.**
+`bomb_plants - plants_exploded` is *not* "got defused": a round can end with the
+bomb still ticking (`mp_restartgame`, map change, match end, everyone leaving),
+and those plants have no outcome at all. Two observed counters make the third
+derivable *and* visible; one counter quietly dresses up server operations as CT
+skill. Same rule as `attempts` beside `wins` in ask 9.
+
+**It rides in `player_round_stat` on purpose** — same key as `bomb_plants`, so
+it inherits side, season and map (ask 17) for free, and "my plants survive on
+Mirage and die on Nuke" is one query rather than a new table.
+
+Not asked for, so it does not read as an oversight later: **no bombsite (A/B)
+dimension.** That is a different question from this one, and this one is worth
+having first.
+
+Priority-wise this belongs with 8/9/10 below: nothing is being written *wrong*
+in the meantime, it simply does not exist — but every plant played before the
+column does is one whose outcome can never be recovered.
+
+Note it is unrelated to bomb-explosion *deaths*, which are plain kills and stay
+that way (recorded decision, `STATS-MODULE.md`).
+
+**Built (OSBase, 2026-08-06), and both cautions above were honoured.** The
+columns arrive via an `EnsureColumn` migration rather than a fresh
+`CREATE TABLE`, since `player_round_stat` is already live — so there is no
+backfill and no history before this deploy, exactly as the priority note says.
+The planter is held in a single `plantedBySteamId64` slot (only one bomb can be
+live at a time), resolved on a new `EventBombExploded` subscription or on
+`EventBombDefused`, and cleared in both plus at round start as a safety net —
+the same shape as the existing `roundDefuseBegan` state. `EventBombExploded`'s
+`Userid` was deliberately not used.
+
+Two things they did beyond the ask, both worth recording:
+
+- **`plantedBySide` is stored with the planter**, so the row lands on the side
+  the bomb was planted from even if that player switches team mid-round. The ask
+  said the columns inherit `side` for free; that is only true if the side is
+  captured at plant time, which is a detail the ask left implicit.
+- **The slot only opens on a *counted* plant**, which is what makes the outcome
+  inherit ask 11's gates automatically. Opening it on every plant would have let
+  a warmup plant resolve inside a real round — a gate leaking sideways through
+  state that outlives the event it came from.
+
+They also found and fixed a pre-existing hole while wiring it: the DB-outage
+retry-merge path around `unwrittenRounds` would have silently dropped both new
+fields on a failed flush retry. Worth noting as its own small pattern — a merge
+written against a column list is a place every future column has to be added by
+hand, and nothing fails loudly when one is forgotten.
+
+**The team-stat objection was raised and waved through** (owner, 2026-08-06),
+recorded so it is not re-opened as though nobody had thought of it. The share of
+your plants that detonate measures the round *after* the plant as much as the
+plant itself — your team holding the site, a retake you had no part in. The
+owner's answer: true, and it is still a stat worth having. Same family as the
+Ace decision — a number people recognise and enjoy beats a stricter one nobody
+asked for. The obligation it leaves is on the **wording**, not the data: the
+heading must not claim it measures the planter alone.
+
+### 27. What the knifed player was carrying
+
+`knife_taser_kill_event` records the rarest moments on the server and keeps them
+forever, deliberately — a couple a day is a thousand rows a year. It records who,
+with what, where and when. It does not record **the wallet**, and that is the
+part of a knife kill people actually retell: not that you knifed him, but that
+you knifed him while he was sitting on 12 500.
+
+```sql
+-- knife_taser_kill_event
+victim_money INT,   -- the victim's cash at the instant they died
+killer_money INT,   -- the killer's cash at the same instant
+```
+
+**A premise that has to be checked before the columns are named, not after.**
+The ask arrived as "knifing steals the victim's money" (owner, 2026-08-06). That
+may be a plugin on these servers, or it may be the game's ordinary knife kill
+award being remembered as a transfer. From the OSWeb side there is no way to
+tell — OSBase's source is not readable here, and ask 25 is this document's own
+record of what happens when that gets forgotten and an inference is written down
+as a finding. **So this is a question for the OSBase side first: does anything
+actually move the victim's cash to the killer, or is the reward the game's own?**
+
+The columns above are the answer that survives either way, which is why they are
+worded as wallets rather than as loot. `victim_money` is the story regardless of
+where the money goes. ~~If there IS a transfer, the amount is `victim_money` and
+needs no column of its own~~ — **that clause was wrong, and the answer below is
+what proves it; see "the cap" further down.** The rest holds: a `stolen` column
+written before the mechanic was confirmed would have been a number the site
+invented, and this document's one rule means it would have been wrong forever
+rather than briefly.
+
+**The trap, and it decides what the numbers mean:** money is read at
+`OnPlayerDeath`, and the kill award is applied by the game around the same
+moment. Whether `killer_money` is before or after the reward is not obvious from
+inside the handler, and both readings look identical in the column. Whichever it
+is has to be established by observation on a live server — knife someone with a
+known balance and read the row — and written down here, in the same spirit as
+the side-encoding fix: an encoding nobody can verify from the data is one that
+will be quoted wrongly later.
+
+**No roll-up is asked for.** "Most stolen this season" is a SUM over an event
+table that gains a thousand rows a year — cheap from the detail, and worth
+leaving there rather than maintaining a counter for it.
+
+**The rule from section 4 of `osbase-stat-contracts.md` applies here with more
+force, not less: aggregates count the dealer, never the victim.** A total of
+what you have knifed off people is a boast. A leaderboard of who has been robbed
+most is a permanent record of somebody's worst evenings, and this site praises
+rather than embarrasses. Both names stay on the individual row, as they already
+do; only one of them is ever summed.
+
+**Answered and built (OSBase, 2026-08-06). The premise was true: it is a real
+transfer, and it is theirs, not the game's.** `Mug.cs` subscribes to
+`EventPlayerDeath` and moves money whenever the weapon name contains `knife`
+(a taser moves nothing at all): knife an opponent and their whole balance goes
+to you; knife a team-mate and it runs backwards as a penalty, the killer paying
+the victim.
+
+**The read-order trap resolved itself rather than being guessed at**, which is
+the part worth keeping. `AddKnifeTaserKill` reads the wallets inside
+`DamageReport`'s own `OnPlayerDeath`; the event bus runs subscribers in
+registration order, and modules load alphabetically by class name in
+`OSBase.cs`, so `DamageReport` is guaranteed to have read before `Mug` moves
+anything. Deterministic, not a race. It is also **a guarantee that breaks
+silently**: any future module sorting before `DamageReport` that touches money
+in the same event moves the numbers without any test failing. They put that
+warning in the code beside it, which is the right place for it.
+
+**Still open, and only a live server can close it:** whether CS2's own economy
+has already credited a knife bonus to `killer_money` before the event reaches
+plugins at all. Unreadable from source on either side.
+
+**The cap is what makes `stolen` a real question again, and it is why the
+struck-through clause above was wrong.** The transfer is bounded by the killer's
+headroom under a local $16 000 ceiling, so what actually moves is not
+`victim_money` but something like
+`min(victim_money, 16000 - killer_money)` — and for a knifed team-mate the
+whole thing inverts. Three consequences, in order of how much they matter:
+
+1. **The site must not print "stole X" from the two wallet columns.** That
+   formula hardcodes a constant owned by a different module, in a different
+   repository, on the reading side — precisely the shape this document keeps
+   catching. If the ceiling ever changes, every historical row silently starts
+   being read against the wrong rule, and nothing anywhere says so.
+2. **The wording carries it instead, exactly like ask 26's heading.** "Hade
+   12 500 på sig" is true from `victim_money` alone, needs no constant, and is
+   the sentence people actually say. That is the version being built unless
+   somebody asks for the other one.
+3. **A true "stolen" figure has one correct owner, and it is not
+   `DamageReport`.** The ordering guarantee that solves the read problem also
+   means `DamageReport` reads *before* the transfer and can never observe its
+   outcome. Recomputing Mug's rule in a second place would be a copy that drifts
+   the day the ceiling moves. If the number is wanted, **`Mug` should report
+   what it actually moved** — the module that moves the money is the only thing
+   that knows. Not asked for yet; recorded so the shape is settled if it is.
+
+### 28. `Mug` has to report what it moved — because "bästa mugg" is a real board now
+
+The owner wants a **best and worst mug** on the site (2026-08-06). That turns the
+parked item at the end of ask 27 into an actual requirement, so it is written up
+as its own ask rather than left as a note.
+
+**Why `victim_money` alone cannot carry the board.** A superlative built on it
+ranks *whose wallet was fattest when they died*, not what the knifer came away
+with — and the cap is what separates those two exactly where a leaderboard is
+most visible. A knifer already near the $16 000 ceiling tops the board on a
+mugging that paid them almost nothing. The number would be wrong in its top row,
+which is the one row everybody reads.
+
+```sql
+-- knife_taser_kill_event
+money_moved INT NULL   -- signed, from the KILLER's side:
+                       --   > 0  taken from the victim
+                       --   < 0  paid to a knifed team-mate (Mug's penalty)
+                       --   = 0  the transfer ran and moved nothing
+                       --  NULL  Mug never ran for this kill -- taser, AND
+                       --        (unintentionally) bayonet; see the note below.
+                       --        Read the weapon column, never infer from this.
+```
+
+**`NULL` and `0` mean different things, deliberately** — the same call OSBase
+made for `player_daily_stat.rating`, and for the same reason. A taser row is not
+a mugging that came up empty; it is a kill the mechanic never touched. Collapsed
+into one value, every taser kill would quietly join the "worst mug" board.
+
+**`DamageReport` stays the table's only writer. `Mug` reports, it does not
+write.** Two writers on one table is the guardrail this whole system keeps —
+and here it is also the practical answer, since the row is `DamageReport`'s to
+begin with.
+
+**The ordering question is yours to answer, and it is a question, not a
+finding.** `DamageReport.OnPlayerDeath` runs *before* `Mug` in the same event —
+that is the guarantee ask 27 rests on — so the amount does not exist yet when
+the row is built. Two shapes work, and only OSBase can see which fits:
+
+- If knife rows are buffered to the round-end flush like the rest of
+  `DamageReport`'s writes, `Mug` can fill the figure into the pending row within
+  the same event, long before it reaches the database.
+- If the row is written immediately, `Mug` hands the figure to `DamageReport`
+  through a small call and `DamageReport` does the writing.
+
+Either way the ordering that made the wallets trustworthy is what makes this
+work: `Mug` runs second, so by the time it reports, the money has actually
+moved.
+
+**What the site will and will not do with it**, so the shape of the board is
+agreed before the column exists:
+
+- **Best mug: `MAX(money_moved)`,** naming the knifer. The victim appears on the
+  individual row as they already do — a story with two people in it — but never
+  as a ranked column. Section 4 of `osbase-stat-contracts.md`, unchanged.
+- **Worst mug is two rows, not one** (owner, 2026-08-06, offered a choice
+  between them and took both): the **stingiest** haul and the **inverted** one,
+  where you knifed a team-mate and *paid* them (`money_moved < 0`). They are
+  different jokes and neither subsumes the other, so the block runs to three
+  rows: best, stingiest, inverted.
+- **The stingiest row needs `money_moved > 0`, or it is not a row at all.**
+  Plenty of people die broke, so a plain `MIN` lands on a zero shared by
+  hundreds of muggings and picks a winner arbitrarily — a named "record" that
+  changes every evening for no reason anyone can see. Restricted to muggings
+  that actually paid something, it becomes what it was meant to be: the person
+  who knifed someone for their last 50. Same family as the 50-kill floor on the
+  season awards — a superlative over a degenerate set is not a superlative.
+- **"Most robbed" is not a board and will not become one**, in any of the three.
+
+Non-retroactive like everything else: every knife kill from now until this
+column exists is a haul nobody can recover. It is *approximately* derivable
+today from `min(victim_money, 16000 - killer_money)` — but that formula lives on
+the reading side and hardcodes another module's constant, which is exactly what
+point 1 of ask 27 says not to build.
+
+**Answered by the OSBase side (2026-08-06): built, and one thing found along the
+way weakens the stated NULL invariant above.** `Mug.cs` now reports the signed
+figure into `DamageReport`'s already-buffered row through a small public
+method (`ReportKnifeMoneyMoved`) rather than writing the table itself --
+`DamageReport` stays the only writer, per the ask. The ordering this rests on
+is the same guarantee ask 27 already established (module discovery sorts
+`DamageReport` before `Mug`), so the row exists by the time `Mug` reports into
+it.
+
+**The gap: `Mug.cs` detects a knife kill by checking whether the raw weapon
+name contains `"knife"`, and one real knife does not pass that check.**
+`DamageReport`'s own `NormalizeWeapon` needs a *separate* `.Contains("bayonet")`
+branch precisely because the bayonet's raw event weapon is `weapon_bayonet` --
+it does not start with `knife`, and does not contain it either. `Mug`'s
+condition is that same substring check, unmodified, so a bayonet kill never
+enters `Mug`'s logic at all: no mugging, no punishment, nothing moved, for a
+skin that is neither rare nor obscure. The row `DamageReport` still writes
+(weapon classifies as `knife` there) ends up with `money_moved = NULL` --
+not because the mechanic doesn't apply to knives, but because `Mug` silently
+never saw the kill. **This is the same shape of bug ask 25 already catalogued
+once: a plausible-looking condition that is wrong for one real case, found by
+reading the source rather than assumed.** Left unfixed for now -- whether
+bayonets *should* be muggable is a gameplay call for the owner, not something
+implicit in a reporting ask, so nothing in `Mug.cs`'s detection changed. Until
+it's decided, "NULL means taser" is not quite true; it means taser *or*
+bayonet, and the site should not build a "was this a taser kill" inference on
+that column alone -- the `weapon` column already says so directly and should
+be read instead.
+
 ### Priority between these asks
 
 Not all of them are equally urgent, even though all of them are aggregates:
@@ -926,7 +1610,9 @@ than `player_hit_stat`.
   (ask 6) and `dominated`/`revenge` (ask 7); also the running per-player kill
   tally for multi-kills, and the alive-count that tells you a clutch has begun
 - `EventBombPlanted` / `EventBombDefused` / `EventBombBeginDefuse` → the bomb
-  counters (ask 8)
+  counters (ask 8); the plant also opens round state holding the planter, which
+  `EventBombExploded` / `EventBombDefused` then resolve into `plants_exploded` /
+  `plants_defused` (ask 26)
 - round end → the rounds counter, the multi-kill row for each player's final
   tally (ask 10), and the resolution of any clutch attempt opened during the
   round (ask 9)
@@ -992,8 +1678,19 @@ Everything above is keyed to a SteamID, which makes it personal data. OSWeb's
 clear — **any new table here has to be added to that list**, or it leaks past an
 erasure. It needs `DELETE` granted to the OSWeb DB user on the OSBase database.
 
-**Both lists now name the same twelve** (checked against OSBase's DDL
-2026-07-21): `elo_rating`, `elo_points`, `elo_kill_event`, `player_hit_stat`,
+**`skill_log` was missing from this list until 2026-07-22**, and it is the
+oldest OSBase table of the lot — GameStats' per-map skill history, keyed on
+`steamid` (not `steamid64` like the rest). Nobody decided against it: the list
+was assembled while building the träffkarta, and `skill_log` predates all of
+that, so nothing about the work pointed at it. Exactly how `player_weapon_shots`
+came to leak, and a second demonstration that a list assembled from whatever is
+being built at the time will miss whatever was already there.
+
+Worth stating because unloading GameStats will not fix it — the table stops
+growing and stays, holding years of it.
+
+**Both lists now name the same thirteen** (checked against OSBase's DDL
+2026-07-21): `skill_log`, `elo_rating`, `elo_points`, `elo_kill_event`, `player_hit_stat`,
 `player_weapon_shots`, `player_round_stat`, `player_duel_stat`,
 `player_clutch_stat`, `player_multikill_stat`, `player_teambet_stat`,
 `player_daily_stat`, `player_duel_total`. `elo_kill_event` and

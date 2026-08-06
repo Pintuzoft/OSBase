@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -24,8 +25,9 @@ namespace OSBase.Modules;
 //   player_hit_stat       (steamid64, weapon, hitgroup, direction, side, season) -> hits, damage
 //   player_weapon_shots   (steamid64, weapon, side, season) -> shots
 //   player_round_stat     (steamid64, side, season) -> rounds, bomb_plants, bomb_defuses,
-//                         defuse_fails; rounds is damage/round's denominator (damage / rounds
-//                         -- NOT industry "ADR", damage is uncapped, see STATS-MODULE.md)
+//                         defuse_fails, plants_exploded, plants_defused; rounds is
+//                         damage/round's denominator (damage / rounds -- NOT industry "ADR",
+//                         damage is uncapped, see STATS-MODULE.md)
 //   player_duel_stat      (attackerid64, victimid64, attacker_side, victim_side, weapon, season)
 //                         -> kills, headshots, noscopes, wallbangs, blind_kills, smoke_kills,
 //                         dominations, revenges; nemesis lists ("who kills me / who I kill")
@@ -139,6 +141,15 @@ public class DamageReport : ModuleBase {
     // round start as a safety net.
     private readonly HashSet<int> roundDefuseBegan = new();          // userId -> began a defuse, no matching EventBombDefused yet
     private readonly Dictionary<int, int> roundKillCount = new();    // userId -> kills this round (team kills excluded)
+
+    // Ask 26: who planted the live bomb, so EventBombExploded/EventBombDefused can credit
+    // the planter's plants_exploded/plants_defused instead of whoever's standing there at
+    // resolution. Only one bomb can be live at a time, so a single slot (not a collection)
+    // is enough. Set on a counted EventBombPlanted, cleared on resolution and as a safety
+    // net at round start -- an unresolved plant (round ends while it's still ticking)
+    // deliberately leaves both counters untouched.
+    private ulong? plantedBySteamId64;
+    private int plantedBySide = SideUnknown;
     private readonly HashSet<ulong> clutchFlaggedThisRound = new();  // steamid64 already recorded as clutching this round
     private readonly List<(ulong SteamId64, int Side, int Opponents)> roundClutchCandidates = new();
 
@@ -162,6 +173,8 @@ public class DamageReport : ModuleBase {
         public int BombPlants;
         public int BombDefuses;
         public int DefuseFails;
+        public int PlantsExploded;
+        public int PlantsDefused;
     }
 
     private sealed class PendingDailyCounter {
@@ -222,6 +235,13 @@ public class DamageReport : ModuleBase {
         public required string Mapname;
         public int? MatchId;
         public required DateTime Stamp;
+        // Ask 27: wallets, not loot -- see the table comment above CreateTables' DDL for why.
+        public required int KillerMoney;
+        public required int VictimMoney;
+        // Ask 28: null until Mug reports back what it actually moved (or never, for a
+        // taser kill -- see ReportKnifeMoneyMoved). Mutable, unlike the fields above: this
+        // is the one column on this row that isn't known at the moment the row is built.
+        public int? MoneyMoved;
     }
 
     protected override void OnLoad() {
@@ -321,6 +341,7 @@ public class DamageReport : ModuleBase {
         osbase?.SubscribeToEvent<EventWeaponFire>(OnWeaponFire);
         osbase?.SubscribeToEvent<EventBombPlanted>(OnBombPlanted);
         osbase?.SubscribeToEvent<EventBombDefused>(OnBombDefused);
+        osbase?.SubscribeToEvent<EventBombExploded>(OnBombExploded);
         osbase?.SubscribeToEvent<EventBombBegindefuse>(OnBombBeginDefuse);
         osbase?.SubscribeToEvent<EventRoundStart>(OnRoundStart);
         osbase?.SubscribeToEvent<EventRoundEnd>(OnRoundEnd);
@@ -336,6 +357,7 @@ public class DamageReport : ModuleBase {
         osbase?.UnsubscribeFromEvent<EventWeaponFire>(OnWeaponFire);
         osbase?.UnsubscribeFromEvent<EventBombPlanted>(OnBombPlanted);
         osbase?.UnsubscribeFromEvent<EventBombDefused>(OnBombDefused);
+        osbase?.UnsubscribeFromEvent<EventBombExploded>(OnBombExploded);
         osbase?.UnsubscribeFromEvent<EventBombBegindefuse>(OnBombBeginDefuse);
         osbase?.UnsubscribeFromEvent<EventRoundStart>(OnRoundStart);
         osbase?.UnsubscribeFromEvent<EventRoundEnd>(OnRoundEnd);
@@ -414,6 +436,13 @@ public class DamageReport : ModuleBase {
         // expensive one (weapon x hitgroup x direction x side x season), and multiplying it by
         // a map rotation would be the one genuinely costly change in this whole document.
         // Rounds are cheap: one row per (side, season, map) per player.
+        // plants_exploded/plants_defused (ask 26): the outcome of the bombs THIS player
+        // planted, not bomb_plants minus something -- a round can end with the bomb still
+        // ticking (mp_restartgame, map change, match end, everyone leaving), so neither
+        // counter derives from the other. Credited to the planter via round state
+        // (plantedBySteamId64 below), not EventBombExploded's Userid -- that field is
+        // whoever's near the bomb when it goes off, not who planted it, and it goes stale
+        // the moment the planter disconnects before the timer runs out.
         string roundStatTable = $"""
         TABLE IF NOT EXISTS {RoundStatTable} (
             steamid64    VARCHAR(32) NOT NULL,
@@ -425,6 +454,8 @@ public class DamageReport : ModuleBase {
             bomb_plants  INT NOT NULL DEFAULT 0,
             bomb_defuses INT NOT NULL DEFAULT 0,
             defuse_fails INT NOT NULL DEFAULT 0,
+            plants_exploded INT NOT NULL DEFAULT 0,
+            plants_defused  INT NOT NULL DEFAULT 0,
             first_seen   DATETIME NOT NULL,
             updated_at   DATETIME NOT NULL,
             PRIMARY KEY (steamid64, side, season, map)
@@ -592,6 +623,27 @@ public class DamageReport : ModuleBase {
         // a "best with a knife" leaderboard almost certainly doesn't. No index beyond the PK:
         // the site never ranks victims (deliberately, per the contract doc) and reads this by
         // killer or by time, both fine as a scan at this table's size.
+        // victim_money/killer_money (ask 27): wallets, not "stolen" -- named that way on
+        // purpose, see the ask. Confirmed from source, not inferred: Mug.cs IS a real transfer
+        // (cross-team knife kill -> full victim balance moves to the killer; same-team knife
+        // kill -> the reverse, a punishment transfer attacker-to-victim), not the game's own
+        // knife-kill bonus being misremembered as one. Mug.cs also subscribes to
+        // EventPlayerDeath, and module discovery orders subscriptions alphabetically by type
+        // name (DiscoverModules in OSBase.cs) -- "DamageReport" sorts before "Mug", so this
+        // module's handler dispatches first and the read below is guaranteed pre-transfer,
+        // deterministically, not by timing luck. That guarantee breaks if a future module
+        // renamed to sort before "DamageReport" also moves money on a knife kill.
+        // Still open, and NOT resolved by reading source (CS2's own economy is engine-internal):
+        // whether the game's own kill-money award, if any, has already posted to killer_money
+        // by the time EventPlayerDeath reaches plugins. Only observable on a live server --
+        // knife someone with a known balance and read the row.
+        // money_moved (ask 28): signed, from the KILLER's side (>0 taken from the victim, <0
+        // paid to a knifed team-mate as Mug's penalty, =0 the transfer ran and moved nothing).
+        // NULL and 0 mean different things on purpose -- same call as player_daily_stat.rating
+        // -- NULL is a taser kill (the mechanic never touched it), 0 is a knife kill that Mug
+        // touched and moved nothing (e.g. a broke victim). DamageReport stays the table's only
+        // writer; Mug reports the figure through ReportKnifeMoneyMoved rather than writing here
+        // itself, same two-writers-on-one-table guardrail as everywhere else in this module.
         string knifeTaserKillTable = $"""
         TABLE IF NOT EXISTS {KnifeTaserKillTable} (
             id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -603,6 +655,9 @@ public class DamageReport : ModuleBase {
             mapname          VARCHAR(64) NOT NULL,
             match_id         INT NULL,
             stamp            DATETIME NOT NULL,
+            killer_money     INT NOT NULL DEFAULT 0,
+            victim_money     INT NOT NULL DEFAULT 0,
+            money_moved      INT NULL,
             PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
@@ -618,9 +673,51 @@ public class DamageReport : ModuleBase {
             db.create(duelTotalTable);
             db.create(serverStatSeasonTable);
             db.create(knifeTaserKillTable);
+
+            // Migration for pre-existing installs (ask 26, 2026-08-06): CREATE TABLE IF NOT
+            // EXISTS above is a no-op against the already-deployed player_round_stat. Default
+            // 0, no backfill -- an outcome played before this column existed can never be
+            // recovered.
+            EnsureColumn(RoundStatTable, "plants_exploded", "INT NOT NULL DEFAULT 0");
+            EnsureColumn(RoundStatTable, "plants_defused", "INT NOT NULL DEFAULT 0");
+
+            // Ask 27, same day: knife_taser_kill_event is also already live.
+            EnsureColumn(KnifeTaserKillTable, "killer_money", "INT NOT NULL DEFAULT 0");
+            EnsureColumn(KnifeTaserKillTable, "victim_money", "INT NOT NULL DEFAULT 0");
+
+            // Ask 28, same day: NULL by default on migration -- correct for every
+            // pre-existing row regardless of weapon, since the figure genuinely wasn't
+            // captured for any of them (not "definitely zero").
+            EnsureColumn(KnifeTaserKillTable, "money_moved", "INT NULL");
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] tables ensured.");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating tables: {e.Message}");
+        }
+    }
+
+    // Same pattern as ServerInfo.cs/TeamBets.cs -- adds a column to an existing table if
+    // it's missing, so CREATE TABLE IF NOT EXISTS's no-op against already-deployed tables
+    // doesn't leave the schema behind.
+    private void EnsureColumn(string table, string column, string definition) {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            DataTable existing = db.select(
+                "column_name FROM information_schema.columns " +
+                "WHERE table_schema = DATABASE() AND table_name = @table AND column_name = @column",
+                new MySqlParameter("@table", table),
+                new MySqlParameter("@column", column)
+            );
+
+            if (existing.Rows.Count == 0) {
+                db.alter($"TABLE {table} ADD COLUMN {column} {definition}");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Added missing column {table}.{column}.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error ensuring column {table}.{column}: {e.Message}");
         }
     }
 
@@ -698,6 +795,22 @@ public class DamageReport : ModuleBase {
         }
 
         GetOrCreateRoundCounter(steamId64, side, season, map).DefuseFails += 1;
+    }
+
+    private void AddPlantExploded(ulong steamId64, int side, string season, string map) {
+        if (steamId64 == 0) {
+            return;
+        }
+
+        GetOrCreateRoundCounter(steamId64, side, season, map).PlantsExploded += 1;
+    }
+
+    private void AddPlantDefused(ulong steamId64, int side, string season, string map) {
+        if (steamId64 == 0) {
+            return;
+        }
+
+        GetOrCreateRoundCounter(steamId64, side, season, map).PlantsDefused += 1;
     }
 
     private void AddDailyStat(ulong steamId64, int hits, int damage, int headshots, int kills, int shots, int rounds, int seconds, int? rating = null, int? points = null) {
@@ -835,7 +948,7 @@ public class DamageReport : ModuleBase {
         pendingMultikillCounters[key] = pendingMultikillCounters.GetValueOrDefault(key, 0) + 1;
     }
 
-    private void AddKnifeTaserKill(ulong killerSteamId64, ulong victimSteamId64, int killerSide, int victimSide, string weapon, string mapname, int? matchId) {
+    private void AddKnifeTaserKill(ulong killerSteamId64, ulong victimSteamId64, int killerSide, int victimSide, string weapon, string mapname, int? matchId, int killerMoney, int victimMoney) {
         // Same side contract as AddDuel (which this always runs alongside) -- killer_side/
         // victim_side are documented as the same scale as player_duel_stat's, so they get the
         // same guarantee: never SideUnknown.
@@ -852,7 +965,31 @@ public class DamageReport : ModuleBase {
             Mapname = mapname,
             MatchId = matchId,
             Stamp = DateTime.UtcNow,
+            KillerMoney = killerMoney,
+            VictimMoney = victimMoney,
         });
+    }
+
+    // Ask 28: Mug's report of what it actually moved, called from Mug's own EventPlayerDeath
+    // handler which runs second (see the money_moved comment on knifeTaserKillTable's DDL for
+    // why that order is guaranteed). DamageReport stays this table's only writer -- Mug never
+    // touches pendingKnifeTaserKills directly, it hands the figure over and this module patches
+    // its own row. Searched from the end and matched on an unset MoneyMoved: within one
+    // EventPlayerDeath dispatch only one row can be waiting for this exact (killer, victim)
+    // pair, but the same pair can knife each other more than once in a round before the next
+    // flush, and an earlier kill's row must not be overwritten.
+    public void ReportKnifeMoneyMoved(ulong killerSteamId64, ulong victimSteamId64, int moneyMoved) {
+        if (!isActive) {
+            return;
+        }
+
+        for (int i = pendingKnifeTaserKills.Count - 1; i >= 0; i--) {
+            var row = pendingKnifeTaserKills[i];
+            if (row.MoneyMoved == null && row.KillerSteamId64 == killerSteamId64 && row.VictimSteamId64 == victimSteamId64) {
+                row.MoneyMoved = moneyMoved;
+                return;
+            }
+        }
     }
 
     private static int MapSide(CCSPlayerController? player) {
@@ -1024,8 +1161,8 @@ public class DamageReport : ModuleBase {
             var writes = new List<(string query, MySqlParameter[] parameters)>();
 
             foreach (var row in knifeTaserBatch) {
-                writes.Add(($"INTO {KnifeTaserKillTable} (killer_steamid64, victim_steamid64, killer_side, victim_side, weapon, mapname, match_id, stamp) " +
-                    "VALUES (@killer, @victim, @killer_side, @victim_side, @weapon, @mapname, @match_id, @stamp)",
+                writes.Add(($"INTO {KnifeTaserKillTable} (killer_steamid64, victim_steamid64, killer_side, victim_side, weapon, mapname, match_id, stamp, killer_money, victim_money, money_moved) " +
+                    "VALUES (@killer, @victim, @killer_side, @victim_side, @weapon, @mapname, @match_id, @stamp, @killer_money, @victim_money, @money_moved)",
                     new MySqlParameter[] {
                         new("@killer", row.KillerSteamId64.ToString()),
                         new("@victim", row.VictimSteamId64.ToString()),
@@ -1034,7 +1171,10 @@ public class DamageReport : ModuleBase {
                         new("@weapon", row.Weapon),
                         new("@mapname", row.Mapname),
                         new("@match_id", (object?)row.MatchId ?? DBNull.Value),
-                        new("@stamp", row.Stamp)
+                        new("@stamp", row.Stamp),
+                        new("@killer_money", row.KillerMoney),
+                        new("@victim_money", row.VictimMoney),
+                        new("@money_moved", (object?)row.MoneyMoved ?? DBNull.Value)
                     }));
             }
 
@@ -1076,10 +1216,11 @@ public class DamageReport : ModuleBase {
                 var (steamId64, side, season, map) = kv.Key;
                 var counter = kv.Value;
 
-                writes.Add(($"INTO {RoundStatTable} (steamid64, side, season, map, rounds, rounds_won, bomb_plants, bomb_defuses, defuse_fails, first_seen, updated_at) " +
-                    "VALUES (@steamid64, @side, @season, @map, @rounds, @rounds_won, @plants, @defuses, @fails, NOW(), NOW()) " +
+                writes.Add(($"INTO {RoundStatTable} (steamid64, side, season, map, rounds, rounds_won, bomb_plants, bomb_defuses, defuse_fails, plants_exploded, plants_defused, first_seen, updated_at) " +
+                    "VALUES (@steamid64, @side, @season, @map, @rounds, @rounds_won, @plants, @defuses, @fails, @plants_exploded, @plants_defused, NOW(), NOW()) " +
                     "ON DUPLICATE KEY UPDATE rounds=rounds+@rounds, rounds_won=rounds_won+@rounds_won, " +
-                    "bomb_plants=bomb_plants+@plants, bomb_defuses=bomb_defuses+@defuses, defuse_fails=defuse_fails+@fails, updated_at=NOW()",
+                    "bomb_plants=bomb_plants+@plants, bomb_defuses=bomb_defuses+@defuses, defuse_fails=defuse_fails+@fails, " +
+                    "plants_exploded=plants_exploded+@plants_exploded, plants_defused=plants_defused+@plants_defused, updated_at=NOW()",
                     new MySqlParameter[] {
                         new("@steamid64", steamId64.ToString()),
                         new("@side", side),
@@ -1089,7 +1230,9 @@ public class DamageReport : ModuleBase {
                         new("@rounds_won", counter.RoundsWon),
                         new("@plants", counter.BombPlants),
                         new("@defuses", counter.BombDefuses),
-                        new("@fails", counter.DefuseFails)
+                        new("@fails", counter.DefuseFails),
+                        new("@plants_exploded", counter.PlantsExploded),
+                        new("@plants_defused", counter.PlantsDefused)
                     }));
             }
 
@@ -1277,6 +1420,8 @@ public class DamageReport : ModuleBase {
                         existing.BombPlants += kv.Value.BombPlants;
                         existing.BombDefuses += kv.Value.BombDefuses;
                         existing.DefuseFails += kv.Value.DefuseFails;
+                        existing.PlantsExploded += kv.Value.PlantsExploded;
+                        existing.PlantsDefused += kv.Value.PlantsDefused;
                     }
                 }
 
@@ -1590,6 +1735,11 @@ public class DamageReport : ModuleBase {
                     // see the field comment on pendingKnifeTaserKills for why (a raw event
                     // record, not an achievement counter).
                     if (weaponClass == "knife" || weaponClass == "taser") {
+                        // Ask 27: read here, before Mug.cs's own EventPlayerDeath handler can
+                        // move any money -- see the killer_money/victim_money comment on
+                        // knifeTaserKillTable's DDL for why that ordering is guaranteed, not
+                        // assumed. 0 if InGameMoneyServices isn't available (shouldn't happen
+                        // for a real, valid, connected player, but it's nullable on the API).
                         AddKnifeTaserKill(
                             e.Attacker.SteamID,
                             e.Userid.SteamID,
@@ -1597,7 +1747,9 @@ public class DamageReport : ModuleBase {
                             MapSide(e.Userid),
                             RawWeaponName(e.Weapon),
                             CurrentMap(),
-                            eloRating?.CurrentMatchId
+                            eloRating?.CurrentMatchId,
+                            e.Attacker.InGameMoneyServices?.Account ?? 0,
+                            e.Userid.InGameMoneyServices?.Account ?? 0
                         );
                     }
 
@@ -1689,6 +1841,11 @@ public class DamageReport : ModuleBase {
         try {
             if (statsGateOpen && IsRealHuman(e.Userid)) {
                 AddBombPlant(e.Userid!.SteamID, MapSide(e.Userid), CurrentSeason(), CurrentMap());
+
+                // Ask 26: remember who planted, so the eventual explosion/defuse can credit
+                // them regardless of who's standing there when it resolves.
+                plantedBySteamId64 = e.Userid!.SteamID;
+                plantedBySide = MapSide(e.Userid);
             }
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in OnBombPlanted: {ex}");
@@ -1710,8 +1867,40 @@ public class DamageReport : ModuleBase {
             if (statsGateOpen && IsRealHuman(e.Userid)) {
                 AddBombDefuse(e.Userid!.SteamID, MapSide(e.Userid), CurrentSeason(), CurrentMap());
             }
+
+            // Ask 26: this is the planter's outcome, not the defuser's -- crediting whoever
+            // defused is AddBombDefuse above, already keyed off e.Userid correctly.
+            if (statsGateOpen && plantedBySteamId64.HasValue) {
+                AddPlantDefused(plantedBySteamId64.Value, plantedBySide, CurrentSeason(), CurrentMap());
+            }
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in OnBombDefused: {ex}");
+        } finally {
+            plantedBySteamId64 = null;
+            plantedBySide = SideUnknown;
+        }
+
+        return HookResult.Continue;
+    }
+
+    private HookResult OnBombExploded(EventBombExploded e) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        try {
+            // Ask 26: deliberately not e.Userid -- that's whoever's near the bomb when it
+            // detonates, not who planted it (see the roundStatTable comment above). The
+            // planter is tracked separately from EventBombPlanted and survives them
+            // disconnecting before the timer runs out.
+            if (statsGateOpen && plantedBySteamId64.HasValue) {
+                AddPlantExploded(plantedBySteamId64.Value, plantedBySide, CurrentSeason(), CurrentMap());
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] Exception in OnBombExploded: {ex}");
+        } finally {
+            plantedBySteamId64 = null;
+            plantedBySide = SideUnknown;
         }
 
         return HookResult.Continue;
@@ -1749,6 +1938,8 @@ public class DamageReport : ModuleBase {
         roundKillCount.Clear();
         clutchFlaggedThisRound.Clear();
         roundClutchCandidates.Clear();
+        plantedBySteamId64 = null;
+        plantedBySide = SideUnknown;
 
         // osbase-stat-contracts.md section 5's third requirement: flush on the way out, so a
         // fast round can never let more than one round's worth of writes queue up behind the
