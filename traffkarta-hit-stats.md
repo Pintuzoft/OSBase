@@ -1982,18 +1982,24 @@ So: capture everything the events carry — the unflattering half is
 non-retroactive exactly like the rest, and a column withheld out of tact is a
 column nobody can add back. Decide what gets *sorted* separately, and later.
 
-**Only one of these two columns is CT-only, and saying "these" was the same
-mistake as ask 30's first draft, one ask later** (owner, 2026-08-06): a rule
-true of the case in front of you, stated as if it covered the rest. "Hostages
-are a CT thing" is true of the *objective* — a Terrorist cannot rescue, so
-`hostages_rescued` really is zero on every T row, a fact rather than a gap,
-and a chart that lines the two sides up beside each other for it will look
-broken for exactly the reason the "wins by time" one would.
+**One of the two is CT-only. The other is not, and the first draft of this
+paragraph said both were** — corrected 2026-08-06 while reading OSBase's
+implementation. `hostages_rescued` is CT-only: a Terrorist cannot rescue, so a
+zero on the T row is a fact rather than a gap, the same asymmetry ask 30 had
+just finished correcting. **`hostages_killed` is two-sided.** A Terrorist can
+shoot a hostage and regularly does, mostly by accident in a firefight, and a
+CT doing it is a different story from a T doing it. `side` is in the key, so
+the two are already separated without asking for anything.
 
-`hostages_killed` is not that column. Nothing stops a Terrorist from shooting
-a hostage, and the event credits whoever pulled the trigger — `Userid` on
-`EventHostageKilled` — not CTs specifically. It can carry either side, and
-`side` is in the key precisely so the two columns are never forced to agree.
+Worth recording as its own small instance of the pattern this document keeps
+catching: "hostages are a CT thing" is true of the *objective* and got applied
+to *both columns* without checking whether it held for each. The same shape as
+"the clock always favours CT" one ask earlier — a rule that is true of the case
+you picture first, stated as though it covered the rest.
+
+The display warning still holds for the rescue column: a chart that lines the
+two sides up beside each other will look broken for exactly the reason the
+"wins by time" one would.
 
 **And they are zero on every `de_` map**, which `map` in the key (ask 17)
 makes readable rather than mysterious. A player with no hostage numbers has
@@ -2009,6 +2015,15 @@ for is the two counts, not a particular handler.
 With this, the objective picture is complete: what you did with the bomb
 (ask 8), what became of it (ask 26), what you did with the hostages (here), and
 how the round actually ended (ask 30).
+
+**Built (OSBase, 2026-08-06), same evening it was written.** Both columns ride
+the `end_reason`-keyed staging path the bomb counters already use, added to the
+live table through an `EnsureColumn` migration. `EventHostageRescued` and
+`EventHostageKilled` were **confirmed by decompiling the installed
+CounterStrikeSharp API (1.0.371)** rather than assumed — the rule this ask
+asked for by name, applied without being reminded — and both carry `Userid` as
+the credited player. Counting hostages rather than rounds, as the distinction
+above required.
 
 ### Priority between these asks
 
