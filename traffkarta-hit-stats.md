@@ -1822,6 +1822,49 @@ and get folded into the real, `end_reason`-keyed counters only once
 `EventRoundEnd` fires and the reason is known — one extra step, not a change to
 what any of the four mean.
 
+**One thing the staging layer opens, and it is a question rather than a
+finding:** the round-scoped buffer holds the bomb counters until
+`EventRoundEnd` names the reason. So what happens to a round that never
+produces one — a map change mid-round, `mp_restartgame`, a crash, the server
+emptying? If the staged counters are simply dropped, a plant that genuinely
+happened stops being counted, where under the pre-`end_reason` shape it was
+written the moment it occurred. That is a real behaviour change hiding inside
+a schema change, and it would show up only as bomb totals being quietly a
+little lower than before.
+
+The fix, if that is what happens, needs no new concept: **flush the staged
+counters under `RoundEndReason.Unknown` (0)** — the value already confirmed to
+exist, and already what pre-migration rows carry. An unresolved round then
+becomes a visible bucket instead of a silent subtraction, which is the same
+rule as `attempts` beside `wins` and as a plant with no outcome in ask 26.
+
+**If that is done, `0` carries two distinct meanings and the document should
+say so once**: "this row predates `end_reason`" and "this round never
+resolved". They are different facts, and one value holding both is the exact
+shape that made the old `side` encoding unreadable. Here they stay separable,
+but only because of something already built — ask 13's `first_seen` is on this
+table, so a pre-migration row is the one whose `first_seen` precedes the
+deploy. Worth writing down, because that is not obvious to anyone reading the
+column alone.
+
+**Confirmed and fixed (OSBase side, 2026-08-06): that is exactly what would
+have happened, and it is fixed the way this section already worked out.** The
+`OnRoundStart` safety net was clearing the staging buffer outright, on the same
+line as the genuinely-in-progress state it sits beside (`roundDefuseBegan`,
+`roundClutchCandidates`, …) — those are correct to drop, since their outcome
+never happened without a round end. The bomb counters are not the same shape:
+pre-`end_reason` they wrote unconditionally, so dropping them here was the
+regression this section predicted, hiding inside a schema change exactly as
+described.
+
+Now drains under `RoundEndReasonUnknown` (a named constant, `= 0`) instead of
+clearing, with the two-meanings-of-0 point written directly on it in code —
+`first_seen` against the migration's deploy date is how a reader tells a
+pre-migration row from a round that genuinely never resolved. Nothing else in
+this table changed shape: `rounds`/`rounds_won`/`defuse_fails` were already
+only ever written from inside `OnRoundEnd` itself, before or after this ask, so
+they were never at risk the way the bomb counters were.
+
 ### Priority between these asks
 
 Not all of them are equally urgent, even though all of them are aggregates:

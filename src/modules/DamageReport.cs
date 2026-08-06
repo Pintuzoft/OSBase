@@ -70,6 +70,14 @@ public class DamageReport : ModuleBase {
     private const int SideCT = (int)CsTeam.CounterTerrorist;
     private const int SideUnknown = (int)CsTeam.None;
 
+    // Ask 30: CounterStrikeSharp.API.Modules.Entities.Constants.RoundEndReason.Unknown --
+    // confirmed 0 by decompiling the installed API, not assumed. Two distinct rows can
+    // legitimately carry this value and are told apart only by first_seen (ask 13) against
+    // this migration's deploy date: a pre-migration row (first_seen before deploy) and a
+    // round that genuinely never resolved (first_seen at/after deploy, drained here rather
+    // than in OnRoundEnd -- see the OnRoundStart safety net).
+    private const int RoundEndReasonUnknown = 0;
+
     // 0..10 (klassiska). Allt annat -> Uxx(xx)
     private readonly string[] hitboxName = {
         "Body", "Head", "Chest", "Stomach", "L-Arm", "R-Arm", "L-Leg", "R-Leg", "Neck", "U9", "Gear"
@@ -868,11 +876,13 @@ public class DamageReport : ModuleBase {
     // ordering the side-encoding fix needed, but guaranteed by the module lifecycle instead
     // of a manual step.
     //
-    // DEFAULT 0 for pre-existing rows is RoundEndReason.Unknown (confirmed against
-    // CounterStrikeSharp.API.Modules.Entities.Constants.RoundEndReason: Unknown = 0u), CS2's
-    // own "we don't know" value -- not an invented sentinel, same precedent as
+    // DEFAULT 0 for pre-existing rows is RoundEndReasonUnknown (see that constant's comment),
+    // CS2's own "we don't know" value -- not an invented sentinel, same precedent as
     // SideUnknown/CsTeam.None elsewhere on this exact table. No backfill: every round played
-    // before this migration genuinely never had its reason recorded.
+    // before this migration genuinely never had its reason recorded. Rows genuinely
+    // unresolved live (see OnRoundStart's safety net) also land on end_reason=0 -- the two
+    // are told apart by first_seen against this migration's deploy date, not by anything in
+    // end_reason itself.
     private void EnsureEndReasonInPrimaryKey() {
         if (db == null) {
             return;
@@ -2192,9 +2202,20 @@ public class DamageReport : ModuleBase {
         roundKillCount.Clear();
         clutchFlaggedThisRound.Clear();
         roundClutchCandidates.Clear();
-        roundStagingCounters.Clear();
         plantedBySteamId64 = null;
         plantedBySide = SideUnknown;
+
+        // roundStagingCounters is NOT simply cleared like its siblings above. Those hold
+        // in-progress attempts whose outcome genuinely never happened without a round end
+        // (no defuse fail completed, no clutch resolved) -- dropping them is correct.
+        // roundStagingCounters holds things that ALREADY happened (a bomb WAS planted) and,
+        // pre-ask-30, wrote straight into pendingRoundCounters with no dependency on
+        // EventRoundEnd at all. Dropping it here would silently undercount bomb_plants/
+        // bomb_defuses/plants_exploded/plants_defused for every round that never resolves
+        // (map change mid-round, mp_restartgame, crash, server empties) -- a behavior
+        // regression hidden inside a schema change. Drained under RoundEndReasonUnknown
+        // instead, so the round becomes a visible bucket rather than a silent subtraction.
+        DrainRoundStagingCounters(RoundEndReasonUnknown);
 
         // osbase-stat-contracts.md section 5's third requirement: flush on the way out, so a
         // fast round can never let more than one round's worth of writes queue up behind the
