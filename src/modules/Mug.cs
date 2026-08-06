@@ -57,8 +57,13 @@ public class Mug : ModuleBase {
             return HookResult.Continue;
         }
 
-        string weapon = eventInfo.Weapon ?? string.Empty;
-        if (!weapon.Contains("knife", StringComparison.OrdinalIgnoreCase)) {
+        // Fixed 2026-08-06: used to be this module's own `.Contains("knife")` check on the
+        // raw weapon string, which never matched a bayonet kill (raw name "weapon_bayonet",
+        // no "knife" substring) -- silently exempting one whole skin family from both the
+        // mugging and the teamkill penalty since the day this module existed. Ask the same
+        // classifier DamageReport already uses instead of keeping a second, divergent
+        // knife-detection list here.
+        if (DamageReport.NormalizeWeapon(eventInfo.Weapon) != "knife") {
             return HookResult.Continue;
         }
 

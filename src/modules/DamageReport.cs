@@ -1537,7 +1537,15 @@ public class DamageReport : ModuleBase {
     // 2026-08-04 (agent-chat #18): this used to say the goal was matching OSWeb's
     // ServerKillTracker::normaliseWeapon/player_kill_stat, but neither was ever built. Purely
     // internal consistency now, not a cross-repo join.
-    private static string NormalizeWeapon(string? weapon) {
+    // Public (2026-08-06): this is now also the single place that answers "is this a knife?"
+    // for the whole plugin, not just this module. Mug.cs used to run its own copy of that
+    // question (a bare `.Contains("knife")` on the raw weapon string) and got it wrong for
+    // the bayonet, which this method already special-cases -- see the DDL comment on
+    // knifeTaserKillTable for the incident. Fixed by deleting Mug's copy, not by teaching it
+    // about "bayonet" too: a second hand-maintained knife list is what caused the gap, and
+    // the next knife skin that isn't named knife_* would have hit it again. One definition,
+    // asked twice, not two definitions kept in sync by hand.
+    public static string NormalizeWeapon(string? weapon) {
         string normalized = (weapon ?? string.Empty).Trim().ToLowerInvariant();
 
         if (normalized.StartsWith("weapon_", StringComparison.Ordinal)) {

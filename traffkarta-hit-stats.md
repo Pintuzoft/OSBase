@@ -1552,13 +1552,27 @@ skin that is neither rare nor obscure. The row `DamageReport` still writes
 not because the mechanic doesn't apply to knives, but because `Mug` silently
 never saw the kill. **This is the same shape of bug ask 25 already catalogued
 once: a plausible-looking condition that is wrong for one real case, found by
-reading the source rather than assumed.** Left unfixed for now -- whether
-bayonets *should* be muggable is a gameplay call for the owner, not something
-implicit in a reporting ask, so nothing in `Mug.cs`'s detection changed. Until
-it's decided, "NULL means taser" is not quite true; it means taser *or*
-bayonet, and the site should not build a "was this a taser kill" inference on
-that column alone -- the `weapon` column already says so directly and should
-be read instead.
+reading the source rather than assumed.**
+
+**Owner's call (2026-08-06): fixed, and reframed on the way in.** Not a
+balance decision nobody had made -- a bug nobody had chosen. A bayonet is a
+knife to everyone holding one; nobody on the server knew that one skin made
+them immune to the teamkill penalty and untouched by the mugging, silently,
+for as long as `Mug` has existed. So: yes, bayonets are muggable, and the fix
+is not "teach `Mug` about bayonets too" -- that repeats the exact mistake,
+a second hand-maintained knife list that can drift from the first again on
+the next skin that isn't `knife_*`. `Mug`'s own `.Contains("knife")` check is
+deleted; it now asks `DamageReport.NormalizeWeapon` (made `public` for this)
+the same question `DamageReport` already answers correctly. One definition,
+asked from two modules, not two definitions kept in sync by hand. `NULL`
+means taser again, exactly as first written -- the bayonet no longer produces
+a `knife`-classified row with an unreported mug.
+
+Shipping with 26/27/28, but as its own commit and its own line in the release
+notes: the three stat asks change nothing anyone on the server notices, this
+changes how the game behaves mid-session. Its own verification once live:
+`money_moved` should stop being `NULL` on bayonet rows -- that was the bug's
+signature, and it going away is the confirmation the fix landed.
 
 ### Priority between these asks
 
