@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
 using CounterStrikeSharp.API;
@@ -72,6 +73,9 @@ public class TeamBets : ModuleBase {
     // One row per resolved bet -- browsable log, never aggregated in memory like the
     // counter above. "outcome" is one of "won"/"lost"/"void"; payout is always a concrete
     // number, 0 on a loss or void, never NULL (osbase-stat-contracts.md section 3).
+    // own/enemy: same alive-count pair as PendingTeamBetMatchupCounter's key, computed
+    // once per bet and carried here too (agent-chat ask 15, 2026-08-06) -- lets the web
+    // side attach the matchup to a single bet, which the aggregate counter can't do.
     private sealed class PendingTeamBetLogRow {
         public required ulong SteamId64;
         public required DateTime Stamp;
@@ -82,6 +86,8 @@ public class TeamBets : ModuleBase {
         public required int Stake;
         public required int Payout;
         public required string Outcome;
+        public required int Own;
+        public required int Enemy;
     }
 
     // userid -> bet
@@ -311,6 +317,8 @@ public class TeamBets : ModuleBase {
             stake      INT NOT NULL,
             payout     INT NOT NULL DEFAULT 0,
             outcome    VARCHAR(8) NOT NULL,
+            own        TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            enemy      TINYINT UNSIGNED NOT NULL DEFAULT 0,
             PRIMARY KEY (id),
             KEY idx_steamid_stamp (steamid64, stamp)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -340,9 +348,42 @@ public class TeamBets : ModuleBase {
             db.create(teamBetStatTable);
             db.create(teamBetLogTable);
             db.create(teamBetMatchupStatTable);
+
+            // Migration for pre-existing installs (agent-chat ask 15, 2026-08-06): CREATE
+            // TABLE IF NOT EXISTS above is a no-op against the already-deployed table.
+            // Default 0/0, no backfill -- matches the ask, the web side reads that pair as
+            // "unknown" for rows written before this.
+            EnsureColumn(TeamBetLogTable, "own", "TINYINT UNSIGNED NOT NULL DEFAULT 0");
+            EnsureColumn(TeamBetLogTable, "enemy", "TINYINT UNSIGNED NOT NULL DEFAULT 0");
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] table ensured.");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating table: {e.Message}");
+        }
+    }
+
+    // Same pattern as ServerInfo.cs's EnsureColumn -- adds a column to an existing table
+    // if it's missing, so CREATE TABLE IF NOT EXISTS's no-op against already-deployed
+    // tables doesn't leave the schema behind.
+    private void EnsureColumn(string table, string column, string definition) {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            DataTable existing = db.select(
+                "column_name FROM information_schema.columns " +
+                "WHERE table_schema = DATABASE() AND table_name = @table AND column_name = @column",
+                new MySqlParameter("@table", table),
+                new MySqlParameter("@column", column)
+            );
+
+            if (existing.Rows.Count == 0) {
+                db.alter($"TABLE {table} ADD COLUMN {column} {definition}");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Added missing column {table}.{column}.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error ensuring column {table}.{column}: {e.Message}");
         }
     }
 
@@ -399,7 +440,11 @@ public class TeamBets : ModuleBase {
     // outcome is "won"/"lost"/"void" (osbase-stat-contracts.md section 3's exact enum).
     // Called once per bet per resolution, independent of the counter above -- a log row
     // is never merged with another, so there's nothing to look up/accumulate here.
-    private void LogTeamBet(Bet bet, string outcome, int payout) {
+    // own/enemy: alive count on the picked side vs. the other side at placement -- callers
+    // pass the exact same pair given to AddTeamBetMatchupResult where that's also called,
+    // rather than each recomputing it, so the two tables can't drift apart (agent-chat
+    // ask 15, 2026-08-06).
+    private void LogTeamBet(Bet bet, string outcome, int payout, int own, int enemy) {
         if (bet.SteamId64 == 0) {
             return;
         }
@@ -414,6 +459,8 @@ public class TeamBets : ModuleBase {
             Stake = bet.Amount,
             Payout = payout,
             Outcome = outcome,
+            Own = own,
+            Enemy = enemy,
         });
     }
 
@@ -446,8 +493,8 @@ public class TeamBets : ModuleBase {
             var writes = new List<(string query, MySqlParameter[] parameters)>();
 
             foreach (var row in logBatch) {
-                writes.Add(($"INTO {TeamBetLogTable} (steamid64, stamp, match_id, mapname, round, pick, stake, payout, outcome) " +
-                    "VALUES (@steamid64, @stamp, @match_id, @mapname, @round, @pick, @stake, @payout, @outcome)",
+                writes.Add(($"INTO {TeamBetLogTable} (steamid64, stamp, match_id, mapname, round, pick, stake, payout, outcome, own, enemy) " +
+                    "VALUES (@steamid64, @stamp, @match_id, @mapname, @round, @pick, @stake, @payout, @outcome, @own, @enemy)",
                     new MySqlParameter[] {
                         new("@steamid64", row.SteamId64.ToString()),
                         new("@stamp", row.Stamp),
@@ -457,7 +504,9 @@ public class TeamBets : ModuleBase {
                         new("@pick", row.Pick),
                         new("@stake", row.Stake),
                         new("@payout", row.Payout),
-                        new("@outcome", row.Outcome)
+                        new("@outcome", row.Outcome),
+                        new("@own", row.Own),
+                        new("@enemy", row.Enemy)
                     }));
             }
 
@@ -806,10 +855,10 @@ public class TeamBets : ModuleBase {
 
                 if (statsGateOpen) {
                     AddTeamBetResult(bet.SteamId64, season, won: true, staked: bet.Amount, returned: actualPaid);
-                    LogTeamBet(bet, outcome: "won", payout: actualPaid);
 
                     int own = bet.Team == TeamT ? bet.AliveT : bet.AliveCt;
                     int enemy = bet.Team == TeamT ? bet.AliveCt : bet.AliveT;
+                    LogTeamBet(bet, outcome: "won", payout: actualPaid, own, enemy);
                     AddTeamBetMatchupResult(bet.SteamId64, season, own, enemy, won: true, staked: bet.Amount, returned: actualPaid);
                 }
 
@@ -832,10 +881,10 @@ public class TeamBets : ModuleBase {
 
                 if (statsGateOpen) {
                     AddTeamBetResult(bet.SteamId64, season, won: false, staked: bet.Amount, returned: 0);
-                    LogTeamBet(bet, outcome: "lost", payout: 0);
 
                     int own = bet.Team == TeamT ? bet.AliveT : bet.AliveCt;
                     int enemy = bet.Team == TeamT ? bet.AliveCt : bet.AliveT;
+                    LogTeamBet(bet, outcome: "lost", payout: 0, own, enemy);
                     AddTeamBetMatchupResult(bet.SteamId64, season, own, enemy, won: false, staked: bet.Amount, returned: 0);
                 }
 
@@ -961,8 +1010,11 @@ public class TeamBets : ModuleBase {
                 // case osbase-stat-contracts.md section 3 asks to be consistent about.
                 // payout=0 here for the same reason a disconnected win pays 0: nothing
                 // actually came back to them.
+                // own/enemy stay 0/0 here: void bets never reach AddTeamBetMatchupResult
+                // either (no stake was actually at risk), so there's no matchup-counter
+                // value to mirror -- same "unknown" convention as pre-migration rows.
                 if (statsGateOpen) {
-                    LogTeamBet(bet, outcome: "void", payout: 0);
+                    LogTeamBet(bet, outcome: "void", payout: 0, own: 0, enemy: 0);
                 }
                 continue;
             }
@@ -971,7 +1023,7 @@ public class TeamBets : ModuleBase {
             BroadcastToChat($"[TeamBets]: {bet.PlayerName} was refunded ${bet.Amount}.");
 
             if (statsGateOpen) {
-                LogTeamBet(bet, outcome: "void", payout: bet.Amount);
+                LogTeamBet(bet, outcome: "void", payout: bet.Amount, own: 0, enemy: 0);
             }
         }
     }
