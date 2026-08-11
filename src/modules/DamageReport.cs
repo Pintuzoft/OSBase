@@ -1870,6 +1870,34 @@ public class DamageReport : ModuleBase {
         return normalized;
     }
 
+    // osbase-m4a1-silencer.md: CS2's player_hurt event collapses M4A1-S into "m4a1" (and,
+    // by the same slot-mate mechanism, USP-S into "hkp2000") -- weapon_fire does not have
+    // this problem, it reports the fired entity's real classname, which is why
+    // player_weapon_shots already tells the two apart. Disambiguate by reading the
+    // attacker's actually-equipped weapon off the pawn, but only for these two known
+    // ambiguous base names; every other weapon already comes through e.Weapon correctly
+    // and must not be touched.
+    private static readonly HashSet<string> AmbiguousSlotmateWeapons = new() { "m4a1", "hkp2000" };
+
+    private static string ResolveHitWeapon(string normalizedWeapon, CCSPlayerController? attacker) {
+        if (!AmbiguousSlotmateWeapons.Contains(normalizedWeapon)) {
+            return normalizedWeapon;
+        }
+
+        var pawn = attacker?.PlayerPawn.Value;
+        if (pawn == null || !pawn.IsValid || pawn.WeaponServices == null) {
+            return normalizedWeapon;
+        }
+
+        var active = pawn.WeaponServices.ActiveWeapon.Value;
+        if (active == null || !active.IsValid) {
+            return normalizedWeapon;
+        }
+
+        string actual = NormalizeWeapon(active.DesignerName);
+        return actual.StartsWith(normalizedWeapon, StringComparison.Ordinal) ? actual : normalizedWeapon;
+    }
+
     // Unlike NormalizeWeapon above, deliberately does NOT collapse every knife into "knife" --
     // osbase-stat-contracts.md section 4 wants "which knife" preserved (e.g. "knife_karambit",
     // "bayonet"), only the classification check (IsKnifeOrTaser) needs the collapsed form.
@@ -1948,7 +1976,7 @@ public class DamageReport : ModuleBase {
             // statsGateOpen (ask 11): warmup and empty-server farming must never reach these
             // tables, decided once at round start.
             if (statsGateOpen) {
-                string weaponKey = NormalizeWeapon(e.Weapon);
+                string weaponKey = ResolveHitWeapon(NormalizeWeapon(e.Weapon), e.Attacker);
                 string season = CurrentSeason();
                 if (attacker != ENVIRONMENT && IsRealHuman(e.Attacker)) {
                     AddHitCounter(e.Attacker!.SteamID, weaponKey, hitgroup, DirectionDealt, MapSide(e.Attacker), season, damage);
