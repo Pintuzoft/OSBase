@@ -112,14 +112,32 @@ public class EloRating : ModuleBase {
     private int suicidePointsPenalty = -5;
 
     // Points formula -- classic HLstatsX ratio scaling: points = pointsPerKill * clamp(
-    // victimRating / attackerRating, pointsRatioMin, pointsRatioMax). Beating a stronger
-    // opponent multiplies up, beating a weaker one multiplies down, bounded so neither an
-    // extreme mismatch nor a near-zero rating produces an absurd swing.
+    // victimRating / attackerRating, pointsRatioMin, pointsRatioMax) * weaponWeight. Beating a
+    // stronger opponent multiplies up, beating a weaker one multiplies down, bounded so neither
+    // an extreme mismatch nor a near-zero rating produces an absurd swing. weaponWeight
+    // multiplies in AFTER the clamp, never inside it -- the clamp bounds what the opponent is
+    // worth, it has nothing to say about the weapon (osbase-elo-contract.md, "the weapon
+    // weights are not being applied"): weighting inside the clamp would let a knife kill
+    // against a much stronger opponent hit the 2.0 ceiling and stop the weapon from mattering
+    // at all, so the curiosity-class 5.00 multiplier would never once pay out at 5.00.
     private int pointsPerKill = 10;
     private double pointsRatioMin = 0.5;
     private double pointsRatioMax = 2.0;
     private double pointsAssistFraction = 0.3;
     private int pointsPerRoundWin = 2;
+
+    // Site-owned (OSWeb's weapon_point_weight, migration 0243) -- OSWeb and OSBase are
+    // separate database schemas, not one shared database, so this must be schema-qualified in
+    // config (e.g. "oldswedes.weapon_point_weight") and the qualifier differs between dev and
+    // prod. Empty disables weighting entirely: ResolveWeaponWeight then returns 1.00 for every
+    // kill and no query is ever attempted, which is both the safe default before the prod grant
+    // is confirmed and the exact behavior this module already had. Refreshed on a timer, not
+    // read once at load, because the site owns the values specifically so a HeadAdmin can
+    // retune them without touching this plugin or restarting the server.
+    private string weaponWeightTable = "";
+    private int weaponWeightRefreshSeconds = 60;
+    private List<WeaponWeightRule> weaponWeightRules = new();
+    private Timer? weaponWeightTimer;
 
     private Timer? matchWindowTimer;
     private int? currentMatchId;
@@ -247,6 +265,14 @@ public class EloRating : ModuleBase {
         public decimal Points { get; set; }
     }
 
+    // One row from weapon_point_weight. MatchType is "exact", "prefix", or "suffix" --
+    // resolution order, not row order; see ResolveWeaponWeight.
+    private sealed class WeaponWeightRule {
+        public required string Pattern;
+        public required string MatchType;
+        public required double Multiplier;
+    }
+
     protected override void OnLoad() {
         gameStats = osbase?.GetGameStats();
 
@@ -256,16 +282,19 @@ public class EloRating : ModuleBase {
         db = new Database(osbase!, config!);
         CreateTables();
         StartMatchWindowTimer();
+        StartWeaponWeightTimer();
     }
 
     protected override void OnUnload() {
         StopMatchWindowTimer();
+        StopWeaponWeightTimer();
         pendingFlushTimer?.Kill();
         pendingFlushTimer = null;
         FlushPendingWrites("Unload");
 
         liveRating.Clear();
         liveMatches.Clear();
+        weaponWeightRules.Clear();
         currentMatchId = null;
         db?.Shutdown();
         db = null;
@@ -277,6 +306,10 @@ public class EloRating : ModuleBase {
         CreateCustomConfigs();
         LoadConfig();
         CreateTables();
+        // weaponWeightTable/weaponWeightRefreshSeconds are config-driven, unlike the match
+        // window's fixed interval -- restart so a changed table name or TTL takes effect
+        // without a full plugin reload.
+        StartWeaponWeightTimer();
     }
 
     protected override void RegisterHandlers() {
@@ -439,6 +472,13 @@ public class EloRating : ModuleBase {
             "points_ratio_max 2.0\n" +
             "points_assist_fraction 0.3\n" +
             "points_per_round_win 2\n" +
+            "// Weapon weight multiplier on kill POINTS only (never rating), applied after the\n" +
+            "// ratio clamp above. Site-owned (OSWeb's weapon_point_weight) -- OSWeb and OSBase\n" +
+            "// are separate database schemas, so this must be schema-qualified (e.g.\n" +
+            "// \"oldswedes.weapon_point_weight\"; dev/prod schema names differ). Empty disables\n" +
+            "// weighting -- every kill prices exactly as before this existed.\n" +
+            "weapon_weight_table \"\"\n" +
+            "weapon_weight_refresh_seconds 60\n" +
             "admin_permission \"@css/generic\"\n"
         );
     }
@@ -464,6 +504,8 @@ public class EloRating : ModuleBase {
         pointsRatioMax = 2.0;
         pointsAssistFraction = 0.3;
         pointsPerRoundWin = 2;
+        weaponWeightTable = "";
+        weaponWeightRefreshSeconds = 60;
         adminPermission = "@css/generic";
 
         List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
@@ -544,6 +586,12 @@ public class EloRating : ModuleBase {
                 case "points_per_round_win":
                     pointsPerRoundWin = ParseInt(value, 2, 0, 10000);
                     break;
+                case "weapon_weight_table":
+                    weaponWeightTable = value;
+                    break;
+                case "weapon_weight_refresh_seconds":
+                    weaponWeightRefreshSeconds = ParseInt(value, 60, 5, 3600);
+                    break;
                 case "admin_permission":
                     adminPermission = string.IsNullOrWhiteSpace(value) ? "@css/generic" : value;
                     break;
@@ -601,9 +649,10 @@ public class EloRating : ModuleBase {
         // needs the fix more urgently" -- backwards. Points is the MORE visible failure, not
         // the less: a player who kills someone and sees the number not move notices in the
         // same second, where a stalled rating is invisible from one duel. It's also easier to
-        // hit -- the ratio clamp's floor (points_ratio_min, default 0.5, dropping to 0.05 once
-        // weapon-weighting lands per the HLstatsX backlog) times points_per_kill can land well
-        // under 1 point long before rating's much larger skill gap requirement does. Same
+        // hit -- the ratio clamp's floor (points_ratio_min, default 0.5, further shrunk by a
+        // low weapon weight once weapon_weight_table is configured -- see ResolveWeaponWeight)
+        // times points_per_kill can land well under 1 point long before rating's much larger
+        // skill gap requirement does. Same
         // fix, same shape: store exact, round only at display (TryGetPoints, css_elo_points_top,
         // !elorank/!elotop, ShowRankCommand).
         string pointsTable = $"""
@@ -804,6 +853,111 @@ public class EloRating : ModuleBase {
         currentMatchId = matchId;
     }
 
+    // ----- weapon weights: site-owned weapon_point_weight -> points multiplier, timer-refreshed -----
+
+    private void StartWeaponWeightTimer() {
+        if (!isActive || osbase == null) {
+            return;
+        }
+
+        StopWeaponWeightTimer();
+
+        if (string.IsNullOrWhiteSpace(weaponWeightTable)) {
+            // Disabled by config -- ResolveWeaponWeight already returns 1.00 with an empty rule
+            // list, so no query is ever attempted against a table that might not exist yet or
+            // lack a grant on this schema.
+            return;
+        }
+
+        RefreshWeaponWeights("Load");
+        weaponWeightTimer = osbase.AddTimer(weaponWeightRefreshSeconds, () => RefreshWeaponWeights("Timer"), TimerFlags.REPEAT);
+    }
+
+    private void StopWeaponWeightTimer() {
+        weaponWeightTimer?.Kill();
+        weaponWeightTimer = null;
+    }
+
+    // weaponWeightTable must be schema-qualified in config -- OSWeb and OSBase are separate
+    // database schemas (confirmed against config/osbase.php and .env, 2026-08-16), not one
+    // shared database, so an unqualified table name resolves against OSBase's own schema and
+    // finds nothing there. A failed refresh (missing grant, wrong name, table not created yet)
+    // logs loudly and keeps the last known-good cache -- ResolveWeaponWeight only ever falls
+    // back to 1.00 if a successful refresh has never landed, not as a silent failure mode.
+    private void RefreshWeaponWeights(string source) {
+        var database = db;
+        if (!isActive || database == null || string.IsNullOrWhiteSpace(weaponWeightTable)) {
+            return;
+        }
+
+        Task.Run(() => {
+            bool ok = database.trySelect($"pattern, match_type, multiplier FROM {weaponWeightTable}", out DataTable table);
+
+            List<WeaponWeightRule>? rules = null;
+            if (ok) {
+                rules = new List<WeaponWeightRule>(table.Rows.Count);
+                foreach (DataRow row in table.Rows) {
+                    string pattern = row["pattern"]?.ToString()?.Trim().ToLowerInvariant() ?? "";
+                    string matchType = row["match_type"]?.ToString()?.Trim().ToLowerInvariant() ?? "";
+
+                    if (pattern.Length == 0 || (matchType != "exact" && matchType != "prefix" && matchType != "suffix")) {
+                        Console.WriteLine($"[WARN] OSBase[{ModuleName}] skipped unusable weapon_weight row (pattern='{pattern}', match_type='{matchType}').");
+                        continue;
+                    }
+
+                    rules.Add(new WeaponWeightRule {
+                        Pattern = pattern,
+                        MatchType = matchType,
+                        Multiplier = Convert.ToDouble(row["multiplier"])
+                    });
+                }
+            }
+
+            Server.NextFrame(() => {
+                if (!ok || rules == null) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] weapon weight refresh failed ({source}) against '{weaponWeightTable}'; keeping {weaponWeightRules.Count} previously-loaded rule(s).");
+                    return;
+                }
+
+                if (rules.Count == 0) {
+                    Console.WriteLine($"[WARN] OSBase[{ModuleName}] weapon weight refresh ({source}) returned 0 usable rows from '{weaponWeightTable}' -- every kill prices at the 1.00 default until this has real rows.");
+                }
+
+                weaponWeightRules = rules;
+            });
+        });
+    }
+
+    // exact -> prefix -> suffix, first hit wins within each pass, default 1.00. The order is
+    // load-bearing, not a convenience: an exact "knife" row and a prefix "knife_" row must both
+    // be checked in that order so a future exact "knife_t" row (a different value than the
+    // "knife_" prefix) is still reachable instead of being shadowed by the broader prefix match.
+    private double ResolveWeaponWeight(string weapon) {
+        if (weaponWeightRules.Count == 0 || string.IsNullOrEmpty(weapon)) {
+            return 1.0;
+        }
+
+        foreach (var rule in weaponWeightRules) {
+            if (rule.MatchType == "exact" && weapon == rule.Pattern) {
+                return rule.Multiplier;
+            }
+        }
+
+        foreach (var rule in weaponWeightRules) {
+            if (rule.MatchType == "prefix" && weapon.StartsWith(rule.Pattern, StringComparison.Ordinal)) {
+                return rule.Multiplier;
+            }
+        }
+
+        foreach (var rule in weaponWeightRules) {
+            if (rule.MatchType == "suffix" && weapon.EndsWith(rule.Pattern, StringComparison.Ordinal)) {
+                return rule.Multiplier;
+            }
+        }
+
+        return 1.0;
+    }
+
     // ----- rating seed: synchronous, once per player, only on the kill path that needs it -----
 
     private void SeedRating(ulong steamId64) {
@@ -968,10 +1122,17 @@ public class EloRating : ModuleBase {
             ? Math.Clamp((double)victimRating / (double)attackerRating, pointsRatioMin, pointsRatioMax)
             : pointsRatioMax;
         // Found 2026-08-04, agent-chat #63: same rounding-to-zero risk as the rating deltas,
-        // and easier to hit -- the ratio clamp's floor (0.5 today, dropping to 0.05 once
-        // weapon-weighting lands) times points_per_kill can land under 1 point well before
-        // rating's much larger skill-gap requirement does. Rounded to 2 decimals, not 0.
-        decimal killPoints = Math.Round((decimal)(pointsPerKill * ratio), 2, MidpointRounding.AwayFromZero);
+        // and easier to hit -- the ratio clamp's floor (0.5 today, dropping lower once the
+        // weapon weight below can shrink it further) times points_per_kill can land under 1
+        // point well before rating's much larger skill-gap requirement does. Rounded to 2
+        // decimals, not 0.
+        string normalizedWeapon = NormalizeWeapon(eventInfo.Weapon);
+        // Weapon weight multiplies in AFTER the clamp -- see the pointsPerKill field comment
+        // for why (a knife kill against a much stronger opponent must not lose the weapon's
+        // multiplier to the ratio's 2.0 ceiling). 1.00 for every weapon until weaponWeightTable
+        // is configured and a refresh has landed -- see ResolveWeaponWeight.
+        double weaponWeight = ResolveWeaponWeight(normalizedWeapon);
+        decimal killPoints = Math.Round((decimal)(pointsPerKill * ratio * weaponWeight), 2, MidpointRounding.AwayFromZero);
         AddPoints(attackerSteamId64, attackerName, season, killPoints);
 
         string mapName = osbase?.currentMap ?? Server.MapName ?? "";
@@ -1023,7 +1184,7 @@ public class EloRating : ModuleBase {
             VictimSteamId64 = victimSteamId64,
             VictimRatingBefore = victimRating,
             VictimDelta = victimDelta,
-            Weapon = NormalizeWeapon(eventInfo.Weapon),
+            Weapon = normalizedWeapon,
             Headshot = eventInfo.Headshot,
             VictimActiveWeapon = lastEquippedWeapon.GetValueOrDefault(victimSteamId64),
             VictimBestWeapon = bestWeaponThisRound.TryGetValue(victimSteamId64, out var best) ? best.Weapon : null

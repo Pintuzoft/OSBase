@@ -64,7 +64,7 @@ may be a DNS name or an IP, with or without a port.
 OSWeb already solved this: `ServerCredentials::canonicalHost` plus the cached
 `HostResolver` collapse a DNS name and its IP to one key. **Match on the
 canonical form, not on the string.** A match assigned to `cs.oldswedes.se` and
-a server reporting `10.0.9.20` are the same machine, and a literal comparison
+a server reporting its resolved IP are the same machine, and a literal comparison
 would rate neither.
 
 ## Do not write to `player_kill_stat`
@@ -80,7 +80,8 @@ exactly like a good evening.
 
 ## SteamID format — verified, not assumed
 
-`VARCHAR(32)` holding **raw base-10 digits**: `"76561197960287930"`.
+`VARCHAR(32)` holding **raw base-10 digits** — seventeen of them, e.g.
+`"7656119XXXXXXXXXX"` written out in full, with no separators and no prefix.
 
 Every write in OSBase goes through `ulong.ToString()` on the player's SteamID,
 checked against a non-invariant culture as well so no thousands separator can
@@ -256,3 +257,198 @@ Shape to persist — counters, not raw events (millions of rows a year otherwise
 steamid64 × weapon × hitgroup × direction(dealt|received) -> hits, damage
 ```
 
+
+## The weapon weights are not being applied — measured, not suspected
+
+*Written 2026-08-16 from the live ledger, after the owner asked whether the Elo
+data looked right. This is the one thing in it that is measurably broken.*
+
+Migration 0243 created `weapon_point_weight` in the **OSWeb** database and
+settled who owns what: the site owns the values so a HeadAdmin can retune them
+without touching the plugin or restarting a server, and **OSBase multiplies the
+weight into the points at the moment of the kill** — because the number is
+already in the right place there, and recomputing it afterwards would be
+throwing away a correct value to rebuild it from notes.
+
+The table holds 47 rules. The plugin behaves as if it held none.
+
+### What the ledger says
+
+Measured over `elo_kill_event` for 2026-08-07 11:57 → 2026-08-15 21:48 — 7 969
+kills, every one of them, no sampling. Mean `attacker_points_delta` per weapon,
+against the multiplier the site would have handed out:
+
+| Weapon | Kills | Mean points | Site weight | Expected |
+|---|---|---|---|---|
+| `ak47` | 2 064 | 9.74 | 1.00 | 9.88 |
+| `awp` | 135 | 9.59 | 1.00 | 9.88 |
+| `deagle` | 599 | 9.71 | 1.20 | 11.86 |
+| `hegrenade` | 75 | 10.23 | 1.80 | 17.78 |
+| `taser` | 27 | 9.68 | 1.80 | 17.78 |
+| `knife` | 16 | 10.73 | 2.00 | 19.76 |
+| `knife_t` | 12 | 10.60 | 2.00 | 19.76 |
+| `smokegrenade` | 1 | 10.29 | 5.00 | 49.40 |
+
+Every weapon in the game pays the same. A knife kill is worth an AK kill, a
+Zeus is worth an AK, and the one smoke-grenade kill of the season — the row the
+curiosity class exists for — paid 10.29 instead of 49.40.
+
+### Why this cannot be "applied, but not logged"
+
+The obvious defence is that the weight goes into the in-memory accumulator while
+the ledger records the raw value. It does not, and the ledger proves it from the
+other end: **`SUM(attacker_points_delta)` plus the bonus rows equals
+`elo_points` exactly for all 87 players**, to the öre, and
+`1000 + SUM(deltas)` equals `elo_rating` to four decimals for all 87. The
+accumulator *is* the sum of the ledger. There is nowhere else for a multiplier
+to have been applied.
+
+That property is worth keeping deliberately, by the way — it is what makes the
+rebuild-from-ledger path in the section above real rather than aspirational, and
+it is how this bug was found in an afternoon. **When the weight lands, it must
+land in `attacker_points_delta` too**, not only in the accumulator.
+
+### The two formulas, confirmed from the data
+
+Nothing here needs changing — recorded because they were derived rather than
+documented, and the weight has to slot into the first one:
+
+```
+points = 10 · clamp(victim_rating / attacker_rating, 0.5, 2.0) · weapon_weight
+rating = K · (1 − expected) · (headshot ? 1.2 : 1),  K = 50 provisional, else 32
+```
+
+**The weight multiplies the clamped ratio; it does not go inside the clamp.**
+Written out because the two readings differ exactly where the weights matter
+most: fold the weight in and a knife kill against a much stronger opponent hits
+the 2.0 ceiling and the weapon stops counting at all — the curiosity class at
+5.00 would never once pay 5.00. The clamp bounds how much *the opponent* can be
+worth. It has nothing to say about the weapon.
+
+The points formula fits all 7 969 kills with a mean error of 0.000. The weapon
+weight is the only factor missing from it. **Rating must stay unweighted** — the
+weights are for the seasonal points, and a rating that moved by weapon would
+stop answering "how good is this player".
+
+### Matching rules, which are load-bearing
+
+Read `weapon_point_weight (pattern, match_type, multiplier)` and resolve in this
+order, first hit wins, default `1.00`:
+
+1. `exact` — `weapon = pattern`
+2. `prefix` — `weapon` starts with `pattern`
+3. `suffix` — `weapon` ends with `pattern`
+
+**The order is not a convenience.** `knife` has an exact row and `knife_` a
+prefix row; read prefix-first and every knife skin still resolves, but a future
+row saying `knife_t` is worth something other than 2.00 silently stops applying.
+`WeaponWeightRepository::ruleFor()` is the reference implementation, and the
+admin page runs the same lookup so a weapon name can be tested against the rules
+before anyone plays a round on them.
+
+### What it costs today
+
+Applying the table to the season as played would have moved the kill points from
+78 738 to 89 836 — **+14.1 %**, distributed towards exactly the play the weights
+exist to reward. Not evenly: knife and Zeus rounds, the grenade kills, the
+curiosities.
+
+Two questions went back to OSBase, and both came back the same day.
+
+**1. Never implemented, rather than implemented and failing.** `EloRating.cs` carries
+comments at lines 604-605, 636-639 and 970-972 saying "once weapon-weighting
+lands" and pointing at the HLstatsX backlog. There is no lookup to fix; there is
+a feature to write. The schema was already prepared for it — `victim_active_weapon`
+and `victim_best_weapon` were added 2026-08-04 — and the weapon name is already
+normalised and on the row (`EloRating.cs:1026`), so the multiplier has a place to
+go. Their side of the formula, confirmed verbatim:
+
+```
+ratio      = clamp(victimRating / attackerRating, 0.5, 2.0)   // pointsRatioMin/Max
+killPoints = round(pointsPerKill * ratio, 2)                  // pointsPerKill = 10
+```
+
+Note the **clamp**, which the measurement could not see because no duel in the
+season came near it: a 2 500 against a 1 000 pays 5.0 rather than 4.0, and the
+reverse pays 20 rather than 25. Ours to know about, not to change.
+
+**2. Yes, into `attacker_points_delta`** — the value written to the ledger is the
+value added, and it must stay that way.
+
+### And a correction back the other way
+
+The section above said `weapon_point_weight` lives "in the **OSWeb** database" in
+a way that reads as a second server to cross to. OSBase answered that it is one
+shared schema and no RPC is needed. Half right, and the half that is wrong
+matters at the keyboard:
+
+**Same MySQL server, two separate schemas.** OSWeb's is `oldswedes`
+(`newswedes` in dev); OSBase's is `osbase` (`osbase_dev` in dev) — which is why
+OSWeb keeps a second connection for it at all (`config/osbase.php`,
+`OsbaseDatabase`), and why the prompt over the ledger dumps reads
+`MariaDB [osbase]>`. An unqualified `SELECT … FROM weapon_point_weight` from the
+`osbase` schema finds nothing.
+
+So the operational conclusion is right — no RPC, one connection is enough — but
+it needs a **schema-qualified name and a `SELECT` grant**, and the schema name
+must come from config rather than a literal, because dev and prod do not agree on
+it.
+
+**The same question applies to `tournament_match`, and nobody has answered it.**
+That table is OSWeb-owned and read the same way. Across all 7 969 kills,
+`match_id` is NULL every single time. That is fully explained without a bug —
+the lookup only matches a *started* match, and none appears in the window, which
+is what nine days of pub play looks like — so it is not evidence of anything
+broken. But it does mean **the cross-schema read has never once been observed to
+succeed.** It will be exercised for the first time on a tournament night, which
+is the worst possible moment to find out a grant is missing. Worth proving
+deliberately before then, with one started match and one kill.
+
+### One more requirement, which the ownership split implies
+
+The point of the site owning the values is that a HeadAdmin retunes them "without
+touching the plugin or restarting a server" (migration 0243). A weight read once
+at plugin load breaks that promise quietly: the admin page saves, the table
+changes, and the servers keep paying the old rate until someone happens to
+restart them. **Re-read on a timer** — a cached read with a short TTL is plenty;
+this is a 47-row table.
+
+### How the site will check that it landed
+
+Written down before the work starts, so the target is not a matter of opinion
+afterwards. It is the same measurement that found the problem, run again against
+a day of real play — no test server needed, and no cooperation required beyond
+the ledger already being written.
+
+1. **A knife kill pays about twice a rifle kill at the same rating ratio.** The
+   ratio has to be held roughly equal for the comparison to mean anything, since
+   it moves the points by ±2× on its own. Grouped by weapon over a day's kills,
+   the means should land near `10 · ratio · weight` — knife and bayonet at 2.00,
+   Zeus and grenades at 1.80, the curiosity class at 5.00, everything else at
+   1.00.
+2. **`SUM(attacker_points_delta)` plus the bonus rows still equals `elo_points`
+   exactly.** This is the one that matters most, and it is not about weapons at
+   all: if it stops holding, the weight went into the accumulator but not the
+   ledger, and the rebuild-from-ledger path quietly stopped being real. Four
+   decimals, all players, no tolerance.
+3. **`attacker_delta` is unchanged in character** — no weapon term anywhere in
+   the rating. The implied `K · (1 − expected)` should still come out at exactly
+   32, or 50 inside the provisional window, for every weapon in the game. That
+   is how the current data reads, and it is how it should still read.
+
+A fourth, cheaper than all of them: change one multiplier on `/admin/vapenvikter`
+and watch the next kill with that weapon pay the new rate, without anybody
+restarting a server. That is the whole reason the values live on the site, and it
+is the one property a code review cannot confirm.
+
+### When to land it
+
+Nothing needs recomputing for the current season: the points are internally
+consistent, merely unweighted, and since every raw event is on the ledger the
+season *could* be replayed with weights if the owner wants it.
+
+But the cheap moment is now, and for the same reason the backfill section above
+argues for "before launch": the ladder is not public until 1 October. Landing the
+weights before then changes numbers nobody has seen. Landing them after moves
+every member's season total by an average of 14 % under their feet, in a table
+they have started to care about.
