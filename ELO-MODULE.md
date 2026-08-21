@@ -381,8 +381,10 @@ wins* still only ever adds — the exception is scoped to these two penalty
 kinds specifically, not a general reopening of "can points go down now."
 
 ```
-ratio       = clamp(rating_victim / rating_attacker, points_ratio_min, points_ratio_max)
-kill_points = round2(points_per_kill * ratio)          // beating a stronger opponent scales up
+expected_attacker = 1 / (1 + 10 ^ ((rating_victim - rating_attacker) / 400))   // same value rating uses
+surprise_factor   = (1 - expected_attacker) ^ points_exponent
+weapon_weight     = ResolveWeaponWeight(weapon)         // site-owned, see below
+kill_points       = round2(points_base * surprise_factor * weapon_weight)
 
 points_attacker += kill_points
 if assister exists:
@@ -392,12 +394,38 @@ if assister exists:
 points_winner += points_per_round_win
 ```
 
-- `points_per_kill` default 10, `points_ratio_min`/`points_ratio_max`
-  default 0.5/2.0, `points_assist_fraction` default 0.3,
-  `points_per_round_win` default 2 — all configurable, all calibration
-  guesses, same reason as the rating constants above.
+- `points_base` default 20.0, `points_exponent` default 1.0,
+  `points_assist_fraction` default 0.3, `points_per_round_win` default 2 —
+  all configurable, all calibration guesses, same reason as the rating
+  constants above.
 - Same exclusions as rating (no bots, no team kills feeding kill-points,
   ask 11's gates apply to the whole round before any points are awarded).
+- **Replaced 2026-08-20** (`osbase-elo-contract.md`, "the clamped ratio is
+  the wrong shape for points"): points used to scale by
+  `clamp(rating_victim/rating_attacker, points_ratio_min, points_ratio_max)`
+  — measured live on prod, that clamp only ever produced a 1.8x spread
+  between the best and worst matchup, because a mostly-even server almost
+  never reaches its 4x ceiling, while rating's own spread over the same
+  data was 11x. Replaced with `expected_attacker`, the exact Elo
+  win-probability rating already computes for the same kill — reused, not
+  recomputed — raised to `points_exponent` (1.0 baseline; higher rewards
+  top-vs-top kills more steeply). `points_base` (20.0) is derived, not
+  measured: with `points_exponent=1`, the average `surprise_factor` across
+  a roughly-even population is 0.5, so `points_base * 0.5 ≈` today's
+  average kill value. **Not yet recalibrated against a live day of
+  play with this formula active** — same disclosed-uncertainty pattern as
+  everything else in this module; see `osbase-elo-contract.md`'s "How the
+  site will check that it landed" section for the exact re-measurement to
+  run once this is deployed.
+- **`weapon_weight` — built 2026-08-16, not documented here until now.**
+  Site-owned (`weapon_point_weight`, OSWeb migration 0243, resolved
+  exact→prefix→suffix, default 1.00), polled on a timer
+  (`weapon_weight_refresh_seconds`, default 60s) rather than read once at
+  load. Multiplies in *after* the surprise factor, never inside it — it
+  bounds what the weapon is worth, which has nothing to do with how
+  surprising the kill was. Config `weapon_weight_table` must be a
+  schema-qualified name (OSWeb and OSBase are separate database schemas);
+  empty disables weighting, identical to the behavior before this existed.
 - **Fixed 2026-08-04 (agent-chat #63), same rounding-to-zero bug as
   rating, and initially left as backlog for the wrong reason.** The
   earlier writeup here (and the still-open `elo_points` `DECIMAL(12,2)`

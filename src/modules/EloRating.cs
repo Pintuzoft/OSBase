@@ -34,8 +34,9 @@ namespace OSBase.Modules;
 // starting a new season string -- no archiving step, same reason every other table in this
 // system uses season-in-the-key instead of cs2rank's table-rename approach: a reset that
 // requires a step is a reset that one day skips the step, and this community's rule is
-// nothing gets deleted). Classic HLstatsX-style: opponent-ratio-scaled points for kills,
-// assists, and round wins. Earned only by doing things, never by being connected.
+// nothing gets deleted). Points for kills scale by the same Elo surprise factor rating
+// itself uses (osbase-elo-contract.md, 2026-08-20), plus flat points for assists and round
+// wins. Earned only by doing things, never by being connected.
 //
 // Rating math runs live and synchronously on the game thread (Elo is order-dependent,
 // unlike EventWeekend's commutative point tally, so it can't be queued and applied out of
@@ -111,18 +112,18 @@ public class EloRating : ModuleBase {
     private int teamkillPointsPenalty = -10;
     private int suicidePointsPenalty = -5;
 
-    // Points formula -- classic HLstatsX ratio scaling: points = pointsPerKill * clamp(
-    // victimRating / attackerRating, pointsRatioMin, pointsRatioMax) * weaponWeight. Beating a
-    // stronger opponent multiplies up, beating a weaker one multiplies down, bounded so neither
-    // an extreme mismatch nor a near-zero rating produces an absurd swing. weaponWeight
-    // multiplies in AFTER the clamp, never inside it -- the clamp bounds what the opponent is
-    // worth, it has nothing to say about the weapon (osbase-elo-contract.md, "the weapon
-    // weights are not being applied"): weighting inside the clamp would let a knife kill
-    // against a much stronger opponent hit the 2.0 ceiling and stop the weapon from mattering
-    // at all, so the curiosity-class 5.00 multiplier would never once pay out at 5.00.
-    private int pointsPerKill = 10;
-    private double pointsRatioMin = 0.5;
-    private double pointsRatioMax = 2.0;
+    // Points formula (osbase-elo-contract.md, "the clamped ratio is the wrong shape for
+    // points", ask received 2026-08-20): points = pointsBase * (1 - expectedAttacker)^
+    // pointsExponent * weaponWeight. expectedAttacker is rating's own Elo win-probability --
+    // reused rather than recomputed, since it's already sitting there when a kill is scored.
+    // Replaces the old clamp(victimRating/attackerRating, 0.5, 2.0) shape: measured live, that
+    // clamp only ever produced a 1.8x spread between best/worst matchup because a mostly-even
+    // server almost never reaches its 4x ceiling, while rating's own spread on the same data
+    // was 11x. This formula mirrors rating's spread instead of inventing a second one.
+    // weaponWeight still multiplies in last, unchanged reasoning from before: it bounds what
+    // the WEAPON is worth, which has nothing to do with how surprising the kill was.
+    private double pointsBase = 20.0;
+    private double pointsExponent = 1.0;
     private double pointsAssistFraction = 0.3;
     private int pointsPerRoundWin = 2;
 
@@ -464,12 +465,12 @@ public class EloRating : ModuleBase {
             "// penalty into a reward.\n" +
             "teamkill_points_penalty -10\n" +
             "suicide_points_penalty -5\n" +
-            "// Points formula (elo_points, resets every season) -- classic HLstatsX-style\n" +
-            "// opponent-ratio scaling: points = points_per_kill * clamp(victimRating /\n" +
-            "// attackerRating, points_ratio_min, points_ratio_max).\n" +
-            "points_per_kill 10\n" +
-            "points_ratio_min 0.5\n" +
-            "points_ratio_max 2.0\n" +
+            "// Points formula (elo_points, resets every season) -- points = points_base *\n" +
+            "// (1 - expectedAttacker)^points_exponent, the same Elo surprise factor rating\n" +
+            "// itself uses. points_exponent 1.0 is the baseline curve; higher rewards\n" +
+            "// top-vs-top kills more steeply.\n" +
+            "points_base 20.0\n" +
+            "points_exponent 1.0\n" +
             "points_assist_fraction 0.3\n" +
             "points_per_round_win 2\n" +
             "// Weapon weight multiplier on kill POINTS only (never rating), applied after the\n" +
@@ -499,9 +500,8 @@ public class EloRating : ModuleBase {
         assistReward = 5;
         teamkillPointsPenalty = -10;
         suicidePointsPenalty = -5;
-        pointsPerKill = 10;
-        pointsRatioMin = 0.5;
-        pointsRatioMax = 2.0;
+        pointsBase = 20.0;
+        pointsExponent = 1.0;
         pointsAssistFraction = 0.3;
         pointsPerRoundWin = 2;
         weaponWeightTable = "";
@@ -571,15 +571,16 @@ public class EloRating : ModuleBase {
                 case "suicide_points_penalty":
                     suicidePointsPenalty = ParseInt(value, -5, -1000, 0);
                     break;
-                case "points_per_kill":
-                    pointsPerKill = ParseInt(value, 10, 0, 10000);
+                case "points_base":
+                    pointsBase = ParseDouble(value, 20.0, 0.0, 10000.0);
                     break;
-                case "points_ratio_min":
-                    pointsRatioMin = ParseDouble(value, 0.5, 0.0, 10.0);
+                case "points_exponent":
+                    pointsExponent = ParseDouble(value, 1.0, 0.0, 10.0);
                     break;
-                case "points_ratio_max":
-                    pointsRatioMax = ParseDouble(value, 2.0, 0.0, 10.0);
-                    break;
+                // Deprecated 2026-08-20 (replaced by points_base/points_exponent above) --
+                // deliberately not a case here so an already-deployed elorating.cfg with these
+                // lines falls into the "unknown config key" warning below and gets noticed,
+                // rather than being silently accepted and ignored.
                 case "points_assist_fraction":
                     pointsAssistFraction = ParseDouble(value, 0.3, 0.0, 5.0);
                     break;
@@ -649,12 +650,11 @@ public class EloRating : ModuleBase {
         // needs the fix more urgently" -- backwards. Points is the MORE visible failure, not
         // the less: a player who kills someone and sees the number not move notices in the
         // same second, where a stalled rating is invisible from one duel. It's also easier to
-        // hit -- the ratio clamp's floor (points_ratio_min, default 0.5, further shrunk by a
-        // low weapon weight once weapon_weight_table is configured -- see ResolveWeaponWeight)
-        // times points_per_kill can land well under 1 point long before rating's much larger
-        // skill gap requirement does. Same
-        // fix, same shape: store exact, round only at display (TryGetPoints, css_elo_points_top,
-        // !elorank/!elotop, ShowRankCommand).
+        // hit -- a lopsided kill's (1 - expectedAttacker) factor, further shrunk by a low
+        // weapon weight once weapon_weight_table is configured (see ResolveWeaponWeight), can
+        // land well under 1 point long before rating's much larger skill gap requirement does.
+        // Same fix, same shape: store exact, round only at display (TryGetPoints,
+        // css_elo_points_top, !elorank/!elotop, ShowRankCommand).
         string pointsTable = $"""
         TABLE IF NOT EXISTS {PointsTable} (
             steamid64  VARCHAR(32) NOT NULL,
@@ -1111,28 +1111,28 @@ public class EloRating : ModuleBase {
         string victimName = CleanName(victim.PlayerName);
         string season = CurrentSeason();
 
-        // Points: classic HLstatsX-style, scaled by how much stronger the victim was --
-        // beating a better player is worth more, beating a worse one worth less, clamped so
-        // neither an extreme rating gap nor a near-zero rating produces an absurd swing.
+        // Points (osbase-elo-contract.md, "the clamped ratio is the wrong shape for points",
+        // ask 2026-08-20): the same surprise factor already driving the rating delta above --
+        // expectedAttacker is the Elo win probability, computed once, reused here rather than
+        // a second opponent-ratio calculation. An upset (beating a much stronger opponent)
+        // pays close to pointsBase; a foregone conclusion pays close to 0 -- matching rating's
+        // own ~10x spread between best/worst matchup instead of the old clamp's ~4x ceiling,
+        // which a mostly-even server measurably almost never reached (1.8x in practice).
         // Unlike rating, points from normal play never go down -- earned only by doing
         // things, never lost by dying, matching "poängen ackumuleras genom att man gör
         // saker". ApplyPenalty (below) is the one deliberate, documented exception -- scoped
         // to teamkill/suicide specifically, not a general reopening of this rule.
-        double ratio = attackerRating > 0
-            ? Math.Clamp((double)victimRating / (double)attackerRating, pointsRatioMin, pointsRatioMax)
-            : pointsRatioMax;
+        double surpriseFactor = Math.Pow(1.0 - expectedAttacker, pointsExponent);
         // Found 2026-08-04, agent-chat #63: same rounding-to-zero risk as the rating deltas,
-        // and easier to hit -- the ratio clamp's floor (0.5 today, dropping lower once the
-        // weapon weight below can shrink it further) times points_per_kill can land under 1
-        // point well before rating's much larger skill-gap requirement does. Rounded to 2
-        // decimals, not 0.
+        // and easier to hit -- a lopsided kill's surprise factor, further shrunk by a low
+        // weapon weight below, can land under 1 point well before rating's much larger
+        // skill-gap requirement does. Rounded to 2 decimals, not 0.
         string normalizedWeapon = NormalizeWeapon(eventInfo.Weapon);
-        // Weapon weight multiplies in AFTER the clamp -- see the pointsPerKill field comment
-        // for why (a knife kill against a much stronger opponent must not lose the weapon's
-        // multiplier to the ratio's 2.0 ceiling). 1.00 for every weapon until weaponWeightTable
-        // is configured and a refresh has landed -- see ResolveWeaponWeight.
+        // Weapon weight multiplies in last -- it bounds what the WEAPON is worth, which has
+        // nothing to do with how surprising the kill was. 1.00 for every weapon until
+        // weaponWeightTable is configured and a refresh has landed -- see ResolveWeaponWeight.
         double weaponWeight = ResolveWeaponWeight(normalizedWeapon);
-        decimal killPoints = Math.Round((decimal)(pointsPerKill * ratio * weaponWeight), 2, MidpointRounding.AwayFromZero);
+        decimal killPoints = Math.Round((decimal)(pointsBase * surpriseFactor * weaponWeight), 2, MidpointRounding.AwayFromZero);
         AddPoints(attackerSteamId64, attackerName, season, killPoints);
 
         string mapName = osbase?.currentMap ?? Server.MapName ?? "";

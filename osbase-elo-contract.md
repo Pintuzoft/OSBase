@@ -210,6 +210,33 @@ reads Elo ratings as a live number during the backfill window. Today nothing
 does — the module is not deployed. If that changes before the backfill runs,
 this scoping is void and the expensive version is back.
 
+> **Uppdatering 2026-08-20: brasklappen ovan har slagit in.** Elo-modulen ÄR
+> utrullad på prod sedan 2026-08-07 och skriver `elo_rating`/`elo_points`;
+> profilerna visar redan talen. Alltså gäller inte längre "today nothing does",
+> och scopingen ovan står och faller med en enda fråga: läser sajten ratingen
+> som ett LEVANDE tal under backfill-fönstret, eller inte?
+>
+> Och svaret är: den gör det, på två ytor. Profilerna visar det aktuella talet,
+> och **Gårdagens Highlights läser rating PER DAG** — "störst lyft" och "störst
+> tapp" är skillnaden mellan i går och dagen före
+> (`DailyHighlightRepository::yesterday()`, som läser `player_daily_stat`).
+> Det är den enda ytan i dag där en medlems Elo ställs bredvid en annans.
+>
+> Vad sajten däremot inte har är en Elo-RANKNING — `RatingRepository`
+> (board/standing/seasons) finns färdig men är varken trådad i containern eller
+> kopplad till en rutt. Och rankningen ska ändå **nollställas i oktober**
+> (ägaren, 2026-08-20), vilket är den naturliga platsen för en backfill: allt
+> före nollställningen är ändå historik, och ingen ser sitt tal ändras under
+> sig om det sker i samma andetag som säsongsbytet.
+>
+> Slutsatsen är alltså inte "planen är död" utan "planen har ett datum och en
+> yta att stänga av": kör backfillen i samma fönster som oktobernollställningen,
+> med rank-sidan fortfarande osynlig — och håll koll på highlights-widgeten,
+> för den är den ena läsaren som faktiskt tittar på ratingen medan backfillen
+> går. Rör backfillen bara dagar långt bakåt märker widgeten ingenting (den
+> läser i går och dagen före); rör den i går, byter förstasidans "störst lyft"
+> värde mitt under körningen.
+
 **A second, separate gap found checking this scoping against the code —
 2026-08-05, OSBase side:** the demo-backfill brief's "one architectural
 requirement" is to feed the same event handlers from two sources. Read
@@ -272,7 +299,142 @@ throwing away a correct value to rebuild it from notes.
 
 The table holds 47 rules. The plugin behaves as if it held none.
 
-### What the ledger says
+### Ask: klämman på motståndarfaktorn, och vem som äger den (2026-08-20)
+
+**Mekanismen finns redan, den är bara strypt.** Formeln längre ned i det här
+dokumentet är härledd ur datan och stämmer på alla 7 969 kills:
+
+```
+points = 10 · clamp(victim_rating / attacker_rating, 0.5, 2.0) · weapon_weight
+```
+
+Poängen skalar alltså redan med motståndaren — men `clamp` tillåter som mest
+fyra gångers spann, och eftersom nästan alla möten är jämna blir det uppmätta
+utfallet 1,8. Ratingens egen formel har ingen sådan klämma.
+
+### Vad liggaren säger
+
+Mätt över hela `elo_kill_event` på prod 2026-08-20 — inte ett stickprov utan
+varje kill.
+
+Per kill, efter vem man dödade:
+
+| Läge | Kills | Poäng/kill | Rating/kill |
+|---|---|---|---|
+| offret 300+ under | 480 | 7,50 | +3,70 |
+| offret något under | 3 541 | 8,90 | +10,49 |
+| jämnt | 4 007 | 9,98 | +18,29 |
+| offret något över | 2 444 | 11,20 | +27,00 |
+| offret 300+ över | 264 | 13,49 | +41,25 |
+
+Per kill, efter var man själv står:
+
+| Egen rating | Kills | Poäng/kill | Rating/kill |
+|---|---|---|---|
+| 750 | 149 | 11,90 | +35,99 |
+| 1 000 | 2 364 | 10,52 | +23,66 |
+| 1 250 | 4 460 | 9,90 | +17,43 |
+| 1 500 | 3 661 | 9,38 | +13,42 |
+| 1 750 | 102 | 8,76 | +8,49 |
+
+**Ratingen skalar elva gånger mellan ytterlägena. Poängen 1,8.** I praktiken är
+en kill värd tio poäng oavsett vem den träffar: 12 000 poäng är 1 200 kills.
+
+### Varför det inte duger till det poängen ska bära
+
+Rankningen som nollställs i oktober bygger på poängen. Med dagens klämma blir
+den en närvarolista — den som spelar dubbelt så mycket får dubbelt så mycket,
+och en medelmåttig spelare som är inne varje kväll går om en vass spelare som
+kommer på fredagar. Ägarens formulering av vad den ska vara i stället:
+
+> "en riktigt bra spelare som är i toppengänget ska ju få mycket mindre poäng
+> per kill, beroende på vem han dödar förstås"
+
+**Rating mot rating, inte poäng mot poäng.** Frågan ställdes (ägaren,
+2026-08-20) och svaret hör hemma i kontraktet: poängsumman mäter hur mycket
+någon spelat, så en faktor byggd på den hade gjort en flitig spelare till ett
+värdefullt byte bara för att hen varit inne mycket. Ratingen är skattningen av
+skicklighet och är det enda av de två som betyder samma sak för alla.
+
+### Vad vi ber om
+
+**Byt den klämda kvoten mot samma överraskningsfaktor som ratingen redan
+använder:**
+
+```
+points = POINTS_BASE · (1 − expected_score(attacker, victim)) · weapon_weight
+```
+
+Talet finns redan i uträkningen i samma ögonblick — det är exakt vad
+`rating = K · (1 − expected) · …` bygger på. Ingen ny matematik, ingen ny
+tabell att slå upp: samma resonemang som vapenvikterna, ett värde som ligger
+rätt och kastas bort.
+
+`POINTS_BASE` sätts så att snittet per kill hamnar kvar där det ligger i dag
+(faktorn är i snitt 0,5, alltså `POINTS_BASE ≈ 20`). Då ändras fördelningen men
+inte storleksordningen, och befintliga summor är fortfarande jämförbara.
+
+**Och den ska gå att ställa in från sajten, precis som vapenvikterna.** Det är
+den delen ägaren saknar: `/admin/vapenvikter` finns, men kurvans branthet går
+inte att röra utan en ny plugin-version. Samma uppdelning som redan är avgjord i
+`docs/rank-and-points-design.md` — OSBase multiplicerar in värdet vid killen,
+sajten äger värdet:
+
+- `POINTS_BASE` (i dag hårdkodat 10)
+- kurvans branthet, alltså exponenten på faktorn: `(1 − expected)^EXP`, där
+  `EXP = 1` är förslaget ovan och ett högre tal gör toppmötena ännu mer värda.
+
+**Poängen ska fortfarande aldrig minska.** Ett dödsfall kostar rating men inte
+poäng: listan svarar på "vad har du samlat ihop", och en säsongssumma som kan gå
+bakåt är en annan sak än den vi bett om.
+
+### Acceptanskriterium, mätbart
+
+Kör om de två frågorna ovan efteråt. Poängkolumnen ska spreta ungefär som
+ratingkolumnen gör — cirka en faktor tio mellan "offret mycket sämre" och
+"offret mycket bättre", i stället för dagens 1,8. Och ändras `POINTS_BASE` på
+sajten ska nästa kill i liggaren visa det, annars är inställningen en tabell
+pluginet inte läser — vilket är precis det vapenvikterna visade sig vara.
+
+Kriteriet är en KVOT mellan lägena, inte absoluta tal, och det är med flit:
+vapenvalet hänger inte ihop med hur bra motståndaren är, så landar vapenvikterna
+samtidigt multipliceras varje rad med ungefär samma snittvikt och förhållandet
+mellan raderna står kvar. Snittet per kill flyttar sig däremot — använd alltså
+inte det som kontroll.
+
+### Ordningen mot vapenviktsfrågan, och vad POINTS_BASE egentligen är
+
+Två frågor i det här dokumentet ändrar samma formel, och båda är öppna: den här
+och vapenvikterna längre ned. Vilken som landar först spelar roll för ett enda
+tal, men det talet är lätt att ta fel på.
+
+**`POINTS_BASE` är ingen konstant vi ber om — det är svaret på en fråga.** Frågan
+är "vad håller snittet per kill där det ligger just nu", och svaret beror på vad
+resten av formeln gör i samma ögonblick. Siffran 20 i avsnittet ovan är uträknad
+mot prod som den såg ut 2026-08-20, alltså med `weapon_weight` i praktiken 1
+eftersom vikterna inte tillämpas. **Den siffran slutar gälla i samma stund något
+annat i formeln ändras.**
+
+Tre fall, och bara det första klarar sig utan en ny uträkning:
+
+- **Motståndarfaktorn ensam, vikterna fortfarande otillämpade.** `POINTS_BASE`
+  ≈ 20 stämmer. Ingen ytterligare uträkning.
+- **Vapenvikterna först, motståndarfaktorn senare.** Snittet per kill har då
+  flyttat sig (dokumentets egen mätning längre ned: ~14 % i genomsnitt).
+  `POINTS_BASE` måste räknas om mot det NYA snittet — hämta inte 20 härifrån.
+- **Båda i samma version.** Räkna fram `POINTS_BASE` ur en torrkörning över
+  liggaren med båda ändringarna på, i stället för att gissa. Talet är en
+  division, inte en avvägning.
+
+**Helst båda i samma version, och det är inte bekvämlighet.** Varje landning
+flyttar allas säsongssummor. Landar de var för sig gör den det två gånger, och
+den andra gången är svårare att förklara än den första — se "When to land it"
+längst ned, som gäller ordagrant även för den här frågan: stegen är osynlig till
+1 oktober, och det som ändras innan dess ändrar tal ingen sett.
+
+---
+
+## What the ledger says
 
 Measured over `elo_kill_event` for 2026-08-07 11:57 → 2026-08-15 21:48 — 7 969
 kills, every one of them, no sampling. Mean `attacker_points_delta` per weapon,
