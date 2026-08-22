@@ -19,6 +19,18 @@ public class Demos : ModuleBase {
     // is reissued into the same churn.
     private const float RestartDelaySeconds = 1.0f;
 
+    // v0.0.544 follow-up: tv_enable/tv_record themselves cause the recorder to briefly drop and
+    // reconnect (confirmed live -- removing the redundant tv_stoprecord call alone wasn't
+    // enough). mapEndHandled/recordingStartedForMap flip synchronously right after we issue
+    // those commands, so a disconnect landing a tick later -- from our OWN command, or from
+    // OnWarmupEnd/OnMatchStart both firing for the same transition and racing each other's
+    // connect -- no longer reads as self-inflicted and re-triggers ScheduleRestart forever.
+    // CommandCooldownSeconds ignores HLTV disconnects for a bit after we ourselves just told
+    // the recorder to (re)start, and RunWarmupEnd itself won't reissue a command while a prior
+    // one is still settling, so the belt-and-suspenders double call can't race anymore either.
+    private const float CommandCooldownSeconds = 2.0f;
+    private bool commandCooldownActive = false;
+
     private bool recordingStartedForMap = false;
     private bool mapEndHandled = false;
     private bool restartPending = false;
@@ -32,6 +44,7 @@ public class Demos : ModuleBase {
         recordingStartedForMap = false;
         mapEndHandled = false;
         restartPending = false;
+        commandCooldownActive = false;
         currentMap = string.Empty;
     }
 
@@ -81,6 +94,7 @@ public class Demos : ModuleBase {
         currentMap = mapName;
         recordingStartedForMap = false;
         mapEndHandled = false;
+        commandCooldownActive = false;
 
         Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] Map has started: {mapName}");
     }
@@ -169,9 +183,10 @@ public class Demos : ModuleBase {
             return HookResult.Continue;
         }
 
-        if (mapEndHandled || !recordingStartedForMap) {
-            // Expected (we asked for the stop) or nothing was recording for this map yet
-            // (e.g. still warmup) -- nothing to restart either way.
+        if (mapEndHandled || !recordingStartedForMap || commandCooldownActive) {
+            // Expected (we asked for the stop), nothing was recording for this map yet (e.g.
+            // still warmup), or we ourselves just issued a recording command a moment ago and
+            // this disconnect is plausibly a side effect of that -- nothing to restart either way.
             return HookResult.Continue;
         }
 
@@ -232,6 +247,16 @@ public class Demos : ModuleBase {
     }
 
     private void RunWarmupEnd(string source) {
+        if (commandCooldownActive) {
+            // OnWarmupEnd and OnMatchStart can both fire for the same transition (sometimes in
+            // the same tick) and the recorder's connect is async -- without this, the second
+            // call sees "not connected yet" purely from timing and reissues tv_enable/tv_record
+            // on top of the first, which is itself enough to cycle the connection and start the
+            // restart loop. Trust the in-flight command instead of racing a second one against it.
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] recording command still settling, skipping duplicate call ({source}).");
+            return;
+        }
+
         if (recordingStartedForMap) {
             // ban-highlights-contract.md §9b: this used to be a memory ("we already started
             // it") instead of a check. Confirming the recorder is actually there catches the
@@ -244,6 +269,18 @@ public class Demos : ModuleBase {
 
             Console.WriteLine($"[WARN] OSBase[{ModuleName}]: recording was marked started but SourceTV isn't connected -- restarting ({source}).");
         }
+
+        commandCooldownActive = true;
+        osbase?.AddTimer(CommandCooldownSeconds, () => {
+            commandCooldownActive = false;
+
+            // Safety net: if a genuine external kick happened during the cooldown window, it was
+            // deliberately ignored above -- check once now instead of leaving the recorder dark
+            // for the rest of the map.
+            if (isActive && !mapEndHandled && recordingStartedForMap && !IsRecorderConnected()) {
+                ScheduleRestart("cooldown_check");
+            }
+        }, TimerFlags.STOP_ON_MAPCHANGE);
 
         string date = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         string mapName = string.IsNullOrWhiteSpace(currentMap) ? (osbase?.currentMap ?? Server.MapName ?? "unknownmap") : currentMap;
