@@ -12,11 +12,11 @@ namespace OSBase.Modules;
 public class Demos : ModuleBase {
     public override string ModuleName => "demos";
 
-    // ban-highlights-contract.md §9b, 2026-08-21: SourceTV gets kicked mid-match by something
-    // outside this module (bot_quota rebalancing is the leading suspect, not yet confirmed --
-    // see the doc). Root-cause-agnostic fix: don't try to enumerate everything that could kill
-    // the recorder, just notice it's gone and start it again. RestartDelaySeconds gives
-    // whatever kicked it a moment to finish before tv_record is reissued into the same churn.
+    // ban-highlights-contract.md §9b, 2026-08-21: SourceTV can get kicked mid-match by things
+    // outside this module (e.g. bot_quota rebalancing). Root-cause-agnostic fix: don't try to
+    // enumerate everything that could kill the recorder, just notice it's gone and start it
+    // again. RestartDelaySeconds gives whatever kicked it a moment to finish before tv_record
+    // is reissued into the same churn.
     private const float RestartDelaySeconds = 1.0f;
 
     private bool recordingStartedForMap = false;
@@ -263,8 +263,6 @@ public class Demos : ModuleBase {
 
                 tName = tTeam.getTeamName();
                 ctName = ctTeam.getTeamName();
-
-                Server.ExecuteCommand("tv_stoprecord");
             }
         } catch (Exception ex) {
             Console.WriteLine($"[WARN] OSBase[{ModuleName}]: Failed to get teams, recording generic demo -> {ex.Message}");
