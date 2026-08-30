@@ -1878,17 +1878,27 @@ public class DamageReport : ModuleBase {
     // ambiguous base names; every other weapon already comes through e.Weapon correctly
     // and must not be touched.
     //
-    // osbase-usp-silencer-brief.md: listed pairs, not a StartsWith prefix check -- a prefix
-    // check holds for the rifles ("m4a1_silencer" starts with "m4a1") but is false for the
-    // pistols ("usp_silencer" shares no prefix with "hkp2000"), which silently dropped every
-    // USP-S hit onto hkp2000 from day one.
-    private static readonly Dictionary<string, HashSet<string>> AmbiguousSlotmates = new() {
-        ["m4a1"] = new() { "m4a1", "m4a1_silencer" },
-        ["hkp2000"] = new() { "hkp2000", "usp_silencer" },
+    // osbase-usp-silencer-brief.md (2026-08-30, OSWeb agent-chat): DesignerName is the WRONG
+    // signal here. In Source 2, M4A4/M4A1-S (and P2000/USP-S) are the SAME underlying entity
+    // class -- DesignerName comes back "weapon_m4a1"/"weapon_hkp2000" for BOTH variants of
+    // each pair. A string-based check against it can therefore never distinguish them; it
+    // always finds a valid slotmate (the base name itself) and silently resolves back to
+    // where it started -- a no-op that looks identical to a working read in logs that only
+    // flag an outright failure. What actually differs between the two is the game's own
+    // stable econ schema id, CEconItemView.ItemDefinitionIndex (M4A4=16, M4A1-S=60,
+    // P2000=32, USP-S=61) -- confirmed present via CEconEntity.AttributeManager.Item on the
+    // decompiled CounterStrikeSharp 1.0.373 API. weapon_fire (player_weapon_shots) and
+    // item_equip (EloRating.lastEquippedWeapon, EloRating.cs ~380) both already work
+    // correctly because those events carry the item-schema-resolved weapon name, not the raw
+    // entity classname -- same fix, reusing the mechanism already proven there instead of
+    // inventing a third one.
+    private static readonly Dictionary<string, Dictionary<ushort, string>> AmbiguousSlotmatesByItemIndex = new() {
+        ["m4a1"] = new() { [16] = "m4a1", [60] = "m4a1_silencer" },
+        ["hkp2000"] = new() { [32] = "hkp2000", [61] = "usp_silencer" },
     };
 
     private static string ResolveHitWeapon(string normalizedWeapon, CCSPlayerController? attacker) {
-        if (!AmbiguousSlotmates.TryGetValue(normalizedWeapon, out var slotmates)) {
+        if (!AmbiguousSlotmatesByItemIndex.TryGetValue(normalizedWeapon, out var byItemIndex)) {
             return normalizedWeapon;
         }
 
@@ -1904,20 +1914,18 @@ public class DamageReport : ModuleBase {
             return normalizedWeapon;
         }
 
-        string actual = NormalizeWeapon(active.DesignerName);
-        if (!slotmates.Contains(actual)) {
-            Console.WriteLine($"[WARN] OSBase[DamageReport] ResolveHitWeapon fallback for '{normalizedWeapon}': active weapon resolved to '{actual}', not a known slotmate.");
+        ushort itemIndex = active.AttributeManager.Item.ItemDefinitionIndex;
+        if (!byItemIndex.TryGetValue(itemIndex, out var resolved)) {
+            Console.WriteLine($"[WARN] OSBase[DamageReport] ResolveHitWeapon fallback for '{normalizedWeapon}': ItemDefinitionIndex {itemIndex} (DesignerName='{active.DesignerName}') not a known slotmate.");
             return normalizedWeapon;
         }
 
-        // Temporary: logs the outcome of every ambiguous-branch resolution, not just failures --
-        // a resolution that always lands on the base name (e.g. DesignerName never actually
-        // reporting the silencer variant for ActiveWeapon, unlike weapon_fire's entity name)
-        // would silently look identical to a working fallback in the WARN-only logging above.
-        // Remove once live logs confirm which case is happening.
-        Console.WriteLine($"[DEBUG] OSBase[DamageReport] ResolveHitWeapon resolved '{normalizedWeapon}' -> '{actual}' (DesignerName='{active.DesignerName}').");
+        // Temporary: logs every ambiguous-branch resolution, not just failures, until live
+        // logs confirm the ItemDefinitionIndex read actually distinguishes the pair. Remove
+        // once confirmed.
+        Console.WriteLine($"[DEBUG] OSBase[DamageReport] ResolveHitWeapon resolved '{normalizedWeapon}' -> '{resolved}' via ItemDefinitionIndex {itemIndex} (DesignerName='{active.DesignerName}').");
 
-        return actual;
+        return resolved;
     }
 
     // Unlike NormalizeWeapon above, deliberately does NOT collapse every knife into "knife" --
