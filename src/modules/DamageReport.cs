@@ -1910,6 +1910,13 @@ public class DamageReport : ModuleBase {
             return normalizedWeapon;
         }
 
+        // Temporary: logs the outcome of every ambiguous-branch resolution, not just failures --
+        // a resolution that always lands on the base name (e.g. DesignerName never actually
+        // reporting the silencer variant for ActiveWeapon, unlike weapon_fire's entity name)
+        // would silently look identical to a working fallback in the WARN-only logging above.
+        // Remove once live logs confirm which case is happening.
+        Console.WriteLine($"[DEBUG] OSBase[DamageReport] ResolveHitWeapon resolved '{normalizedWeapon}' -> '{actual}' (DesignerName='{active.DesignerName}').");
+
         return actual;
     }
 
