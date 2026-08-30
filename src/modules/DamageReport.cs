@@ -1894,16 +1894,23 @@ public class DamageReport : ModuleBase {
 
         var pawn = attacker?.PlayerPawn.Value;
         if (pawn == null || !pawn.IsValid || pawn.WeaponServices == null) {
+            Console.WriteLine($"[WARN] OSBase[DamageReport] ResolveHitWeapon fallback for '{normalizedWeapon}': pawn/WeaponServices unavailable.");
             return normalizedWeapon;
         }
 
         var active = pawn.WeaponServices.ActiveWeapon.Value;
         if (active == null || !active.IsValid) {
+            Console.WriteLine($"[WARN] OSBase[DamageReport] ResolveHitWeapon fallback for '{normalizedWeapon}': ActiveWeapon unavailable.");
             return normalizedWeapon;
         }
 
         string actual = NormalizeWeapon(active.DesignerName);
-        return slotmates.Contains(actual) ? actual : normalizedWeapon;
+        if (!slotmates.Contains(actual)) {
+            Console.WriteLine($"[WARN] OSBase[DamageReport] ResolveHitWeapon fallback for '{normalizedWeapon}': active weapon resolved to '{actual}', not a known slotmate.");
+            return normalizedWeapon;
+        }
+
+        return actual;
     }
 
     // Unlike NormalizeWeapon above, deliberately does NOT collapse every knife into "knife" --
