@@ -1877,10 +1877,18 @@ public class DamageReport : ModuleBase {
     // attacker's actually-equipped weapon off the pawn, but only for these two known
     // ambiguous base names; every other weapon already comes through e.Weapon correctly
     // and must not be touched.
-    private static readonly HashSet<string> AmbiguousSlotmateWeapons = new() { "m4a1", "hkp2000" };
+    //
+    // osbase-usp-silencer-brief.md: listed pairs, not a StartsWith prefix check -- a prefix
+    // check holds for the rifles ("m4a1_silencer" starts with "m4a1") but is false for the
+    // pistols ("usp_silencer" shares no prefix with "hkp2000"), which silently dropped every
+    // USP-S hit onto hkp2000 from day one.
+    private static readonly Dictionary<string, HashSet<string>> AmbiguousSlotmates = new() {
+        ["m4a1"] = new() { "m4a1", "m4a1_silencer" },
+        ["hkp2000"] = new() { "hkp2000", "usp_silencer" },
+    };
 
     private static string ResolveHitWeapon(string normalizedWeapon, CCSPlayerController? attacker) {
-        if (!AmbiguousSlotmateWeapons.Contains(normalizedWeapon)) {
+        if (!AmbiguousSlotmates.TryGetValue(normalizedWeapon, out var slotmates)) {
             return normalizedWeapon;
         }
 
@@ -1895,7 +1903,7 @@ public class DamageReport : ModuleBase {
         }
 
         string actual = NormalizeWeapon(active.DesignerName);
-        return actual.StartsWith(normalizedWeapon, StringComparison.Ordinal) ? actual : normalizedWeapon;
+        return slotmates.Contains(actual) ? actual : normalizedWeapon;
     }
 
     // Unlike NormalizeWeapon above, deliberately does NOT collapse every knife into "knife" --

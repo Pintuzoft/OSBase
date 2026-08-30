@@ -65,6 +65,9 @@ och statistiken ser rimlig ut hela vägen.
 
 ## Frågan som avgör var ni ska leta
 
+*Besvarad 2026-08-11, se «Roten» nedan. Frågan står kvar för att svaret ska gå
+att läsa mot vad som faktiskt frågades.*
+
 ```sql
 SELECT weapon, COUNT(*) FROM player_hit_stat
  WHERE weapon IN ('usp_silencer','hkp2000','m4a1','m4a1_silencer') GROUP BY weapon;
@@ -75,11 +78,47 @@ SELECT weapon, COUNT(*) FROM player_hit_stat
 - **Saknas `usp_silencer` också** tappas hela suffixfamiljen, och USP-S är
   drabbad likadant fast tystare.
 
-## Vad vi behöver
+## Roten, och rättningen (OSBase, 2026-08-11)
+
+**Det är spelet som slår ihop dem, inte koden.** CS2:s `player_hurt` rapporterar
+`m4a1` i `e.Weapon` även när skottet kom från M4A1-S — till skillnad från
+`weapon_fire`, som bär rätt klassnamn. Där ligger hela förklaringen till att de
+två tabellerna sa emot varandra: skottabellen matas av `weapon_fire` och var
+därför korrekt hela tiden, medan träffabellen matas av `player_hurt`.
+
+Ingen uppslagning på OSBase-sidan var alltså fel. Fältet de läste var det.
+
+**Rättat i `DamageReport.cs`:** för de två tvetydiga basnamnen läses angriparens
+faktiskt utrustade vapen av från pawnen (`WeaponServices.ActiveWeapon`) för att
+avgöra vilken pjäs det var. Alla andra vapen lämnas orörda — de kommer redan rätt
+via `e.Weapon`, och en disambiguering de inte behöver vore bara en väg till nya
+fel.
+
+Att avläsningen är säker just här beror på slotten: en spelare kan bära **en**
+primär, så den aktiva M4:an *är* den som sköt. Samma sak i pistolslotten för
+`hkp2000`/`usp_silencer`. Kulor i CS är dessutom hitscan — skottet och skadan
+sker i samma ögonblick, så det finns inget glapp där någon hinner byta vapen
+mellan avfyrning och träff.
+
+USP-S/P2000 fixades i samma svep, av samma skäl — ~~och därmed var saken
+utagerad.~~ **Det stämde inte:** pistolhalvan var död kod och skrev aldrig en enda
+rad. Se «Efterkontrollen» sist i dokumentet.
+
+Läget 2026-08-11: rättningen är byggd och committad på OSBase-sidan, **inte
+driftsatt**. Tills den är det gäller allt nedan om vad som förloras per kväll.
+
+## Vad vi behöver ~~(löst)~~
+
+*Det ursprungliga önskemålet, som det formulerades innan roten var känd:*
 
 Att `player_hit_stat.weapon` hämtas ur samma källa som
 `player_weapon_shots.weapon`. Skottskrivaren skriver redan rätt namn varje
 kväll; det är den enda skillnaden mellan de två.
+
+Lösningen blev bättre än beställningen: i stället för att flytta träffskrivaren
+till `weapon_fire` — vilket hade knutit ihop två händelser som beskriver olika
+saker — läses det utrustade vapnet av vid skadetillfället, och bara för de
+tvetydiga namnen.
 
 ## Vad som redan är förlorat, och varför det brådskar
 
@@ -103,6 +142,9 @@ De 438 mottagna läker bara framåt.
 
 ## Vad vi gör på vår sida — och vad vi inte gör
 
+**Utfört 2026-08-11:** 180 rader flyttade på prod. Kvar hos `m4a1` står 6 äkta
+M4A4, 221 odelbara och 438 mottagna. Ångerfilen ligger i `storage/`.
+
 `bin/fix-m4a1-silencer.php` flyttar tillbaka de 180 raderna. Regeln är
 faktabaserad och inte statistisk: har en spelare skott på `m4a1_silencer` men
 inga alls på `m4a1`, kan träffarna under `m4a1` bara ha kommit från den tystade.
@@ -125,3 +167,76 @@ SELECT weapon, COUNT(*), MAX(updated_at) FROM player_hit_stat
 `m4a1_silencer` ska ha rader med färskt `updated_at`. Fortsätter den stå på noll
 medan `player_weapon_shots` fylls på är det inte lagat, oavsett vad koden säger.
 
+Och samma fråga för det andra paret, som fixades i samma svep men aldrig
+mättes före rättningen:
+
+```sql
+SELECT weapon, COUNT(*), MAX(updated_at) FROM player_hit_stat
+ WHERE weapon IN ('usp_silencer','hkp2000') GROUP BY weapon;
+```
+
+Här finns ingen backfyllning att göra på vår sida. USP-S:ens träffar har hamnat
+under `hkp2000`, alltså på P2000 — ett vapen som faktiskt används — och samma
+regel som räddade de 180 M4-raderna går inte att tillämpa: pistolslotten byts
+under en runda på ett sätt primärvapnet inte gör, så «har aldrig avfyrat en
+P2000» säger mindre om enskilda ronder. Det paret läker framåt.
+
+## Efterkontrollen, 2026-08-30
+
+Ägaren såg att duellpanelen på hans profil stod tom för M4A4 medan vapenlistan
+gav samma vapen 23 %, och drog i tråden. Den ledde till två fel, inte ett.
+Panelerna var oense för att de läser olika tabeller: träffarna ur
+`player_hit_stat`, som skrivs fel, och duellerna ur `player_duel_stat`, som
+alltid burit rätt namn.
+
+Mätningen, kört mot `osbase` på prod:
+
+```
+weapon          rader  träffar  senast
+hkp2000           964     8824  2026-08-29 23:07:27
+m4a1             1903    36090  2026-08-29 23:24:11
+m4a1_silencer     180     1432  2026-08-10 21:46:43
+usp_silencer        –        –  –
+```
+
+**1. Rättningen var aldrig driftsatt.** `m4a1_silencer` står på exakt 180 rader
+med en tidsstämpel från kvällen `bin/fix-m4a1-silencer.php` kördes — det är
+alltså VÅRA rader, inte spelets. Sedan dess: ingenting. Under samma nitton nätter
+växte `m4a1` från 845 rader till 1903, alltså fortsatte varje M4A1-S-träff hamna
+under M4A4. Fixen landade 2026-08-11 och ingår i v0.0.545 (släppt 22 augusti),
+så servrarna kör en build som är äldre än så.
+
+**2. USP-halvan hade aldrig kunnat fungera.** `ResolveHitWeapon` accepterade det
+utrustade vapnets namn bara när det `StartsWith` händelsens namn — ett antagande
+om att det riktiga namnet är en förfining av det tvetydiga. Det är sant för
+gevären (`m4a1_silencer` börjar med `m4a1`) och falskt för pistolerna:
+`usp_silencer` delar inget prefix alls med `hkp2000`. Grenen var död kod från
+första dagen, vilket syns på att `usp_silencer` inte har en enda rad — CT:s
+standardpistol, i ett halvår. Ingen märkte det, för ett felaktigt namn som
+existerar ser ut som data.
+
+Rättat genom att skriva ut paren i stället för att härleda dem:
+
+```csharp
+private static readonly Dictionary<string, HashSet<string>> AmbiguousSlotmates = new() {
+    ["m4a1"] = new() { "m4a1", "m4a1_silencer" },
+    ["hkp2000"] = new() { "hkp2000", "usp_silencer" },
+};
+```
+
+### Ordningen som gäller
+
+1. Rätta `ResolveHitWeapon` — annars rullas en halv fix ut och USP-S fortsätter
+   tyst hamna på P2000.
+2. Bygg och driftsätt på servrarna. Kontrollera versionen; allt under 0.0.545
+   saknar även M4-halvan.
+3. Kvällen efter ska både `m4a1_silencer` och `usp_silencer` ha färskt
+   `updated_at`. Gör de inte det är det inte lagat, oavsett vad koden säger.
+4. **Först därefter** `bin/fix-m4a1-silencer.php`. Körs det före driftsättningen
+   blandar nästa kväll tillbaka det som just rättats, och de rader som då fått
+   ett enda M4A4-skott blir omöjliga att rädda i stället för lätta.
+
+USP-S går inte att backfylla. Träffarna ligger under `hkp2000`, ett vapen som
+faktiskt används, och regeln som räddade de 180 M4-raderna biter inte i
+pistolslotten — den byts under en rond på ett sätt primärvapnet inte gör. Det
+paret läker bara framåt.
