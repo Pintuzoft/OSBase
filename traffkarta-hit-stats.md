@@ -2125,6 +2125,69 @@ asked for by name, applied without being reminded — and both carry `Userid` as
 the credited player. Counting hostages rather than rounds, as the distinction
 above required.
 
+### 32. `007` — agent and double agent, the one number people say out loud
+
+Handed over as its own document, `osbase-agent-doubleagent.md`, because the
+agent channel is gone and it has to be copied across by hand. Summarised here so
+the ask log stays complete.
+
+A player who ends a round on **0 kills / 7 deaths** is an *agent* (007); one who
+reaches **0-14** is a *double agent*; 0-21 is a triple agent, and the ladder has
+no top — the rule is one level per seventh death with no kill, so
+`level = deaths / 7` and nothing is capped (ask 10's "exact N, no cap at five",
+applied again). Nothing in this schema carries a player's
+**running scoreline at round end** — `player_round_stat` is counters,
+`player_duel_total` is a whole season, `player_map_result` (ask 29) is only the
+line the map ended on, and misses anyone who sat at 0-7 mid-match and then got a
+kill.
+
+`elo_kill_event` can be walked for it site-side, and deliberately isn't: the
+kill ledger only holds deaths **with an attacker**, while the scoreboard counts
+falls, drowning, the bomb and your own grenade. The joke is about what the board
+said, so the number has to be the board's — ask 29's `score` rule, applied
+again.
+
+Asked for: `player_agent_stat (steamid64, level, season) -> count`, ticked in
+`DamageReport.cs`'s existing `EventRoundEnd` loop off
+`MatchStats.Kills`/`.Deaths`, behind ask 11's gates like everything else. Three
+traps live in the handover doc, and the middle one decides whether the count is
+right: **`Kills <= 0`, never `== 0`**, because `TeamDamage.cs` decrements that
+very field for a teamkill or a suicide, so a genuinely awful evening reads `-2`
+on the board.
+
+**Built (OSBase, 2026-09-02), all three traps honoured, and `first_seen` added
+without being asked — ask 13's convention applying itself.** One thing beyond
+the ask: the per-player baseline advances even while ask 11's gate is shut, so
+deaths behind a closed gate cannot pile up and release as a clump of levels the
+moment it opens. Two consequences of that are recorded in the handover doc
+rather than here, because they read as bugs from the table alone: levels can be
+non-contiguous, and a recorded level can rest partly on ungated deaths.
+
+**Their open question — when CS2 resets `MatchStats` — is answered by not
+needing an answer.** The hazard is clearing the baseline on a lifecycle
+boundary: clear it where the board does *not* reset and the next round
+re-credits levels already counted; fail to clear it where the board *does* reset
+mid-map (`mp_restartgame`, a reconnect) and the counter goes silent for the rest
+of the map. Deriving the baseline from the scoreboard instead — plain assignment
+every round end, seed-only on first sight of a player — makes the boundary
+irrelevant in both directions. Same shape as ask 27's load-order guarantee: the
+version that cannot break quietly beats the version that happens to be right.
+
+**Fixed the same day (OSBase, 2026-09-02), and half the question was a real
+bug.** The baseline update was already a plain assignment; the *first*
+observation of a player was not — it read the baseline with
+`GetValueOrDefault(…, 0)`, so a player first seen while already carrying a high
+death count (a fresh connect, a module reload mid-match) would have had every
+level from zero written at once. The clump the baseline exists to prevent,
+produced by the baseline's own default. Now `TryGetValue`: first sight seeds and
+writes nothing, and `agentLastLevel` is never cleared anywhere, so the map
+boundary is no longer an assumption in the code.
+
+The shape is the one this document keeps recording: a default that is right
+while zero means "starting over" and wrong the moment zero can also mean "we do
+not know yet" — ask 22's NULL-versus-0 and ask 30's two meanings of
+`end_reason = 0`, a third time.
+
 ### Priority between these asks
 
 Not all of them are equally urgent, even though all of them are aggregates:
