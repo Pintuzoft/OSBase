@@ -194,14 +194,20 @@ public class DamageReport : ModuleBase {
     private readonly Dictionary<ulong, int> mapStartSide = new();
 
     // Ask 32: level = deaths/7 as of the last round-end check, updated UNCONDITIONALLY every
-    // round end (regardless of Kills) -- that's what makes the passage detection in
-    // AddAgentLevel's call site correct: a level crossed while Kills was still positive is
-    // never retroactively credited once Kills later drops to <=0 (trap 3 in the handover
-    // doc), because the boundary it "passed" already moved on without a write. Cleared
-    // alongside mapStartSide -- same map-start reset point, on the working assumption that
-    // CS2 resets ActionTrackingServices.MatchStats at map change same as it resets the visible
-    // scoreboard (unverified from source, same caveat OnMapEnd already carries for this exact
-    // field -- needs live confirmation, not assumed here).
+    // round end (regardless of Kills) via plain assignment, never Math.Max and never cleared
+    // on any schedule (not at map start, not anywhere) -- deliberately, per OSWeb's read
+    // 2026-09-02, which makes the "when does CS2 reset MatchStats" question moot instead of
+    // needing an answer: a plain assignment self-heals against ANY drop in Deaths, whether
+    // that's a real per-map reset, a mid-map mp_restartgame, or a reconnecting player getting
+    // a fresh ActionTrackingServices -- the new, lower value simply becomes the new baseline,
+    // no write fires (currentLevel can't exceed a baseline it just dropped below), and normal
+    // detection resumes from there. Two things must both hold for that to be safe, and both
+    // do: the assignment at the bottom of this call site is unconditional (see OnRoundEnd),
+    // and the FIRST time a given steamid64 is seen (TryGetValue misses -- fresh connect or a
+    // plugin reload mid-match with deaths already nonzero) plants the baseline only, without
+    // writing -- so whatever level a player was already sitting at before this dict started
+    // watching them is never retroactively credited (same non-retroactive spirit as ask 13's
+    // history note), regardless of which side of a reset that moment happened to land on.
     private readonly Dictionary<ulong, int> agentLastLevel = new();
 
     // Ask 18 "seconds" (player_daily_stat): sampled at round end against a per-player last
@@ -2449,7 +2455,9 @@ public class DamageReport : ModuleBase {
         if (captureMapStartSideNext) {
             captureMapStartSideNext = false;
             mapStartSide.Clear();
-            agentLastLevel.Clear();
+            // agentLastLevel is deliberately NOT cleared here -- see that field's comment for
+            // why persisting it across the map boundary (rather than guessing when CS2 resets
+            // MatchStats) is what makes this correct regardless of the reset behavior.
             foreach (var p in Utilities.GetPlayers()) {
                 if (IsRealHuman(p)) {
                     mapStartSide[p.SteamID] = MapSide(p);
@@ -2508,15 +2516,23 @@ public class DamageReport : ModuleBase {
             // while Kills was still positive (or the gate was shut) is never backfilled once
             // Kills later drops to <=0 or the gate reopens (trap 3): agentLastLevel already
             // moved past it without a row, on purpose.
+            //
+            // hadBaseline (TryGetValue, not GetValueOrDefault) gates the write on top of all
+            // of that: the FIRST time a steamid64 shows up in this dict, only the baseline is
+            // planted, nothing is written, no matter how high currentAgentLevel already is --
+            // otherwise a fresh connect or a plugin reload mid-match would read whatever level
+            // the player already silently carried as a burst of brand-new rows. See
+            // agentLastLevel's field comment for why this, combined with never clearing the
+            // dict, removes the need to know exactly when CS2 resets MatchStats at all.
             if (IsRealHuman(p)) {
                 var tracking = p.ActionTrackingServices;
                 if (tracking != null) {
                     int deaths = tracking.MatchStats.Deaths;
                     int kills = tracking.MatchStats.Kills;
                     int currentAgentLevel = deaths / 7;
-                    int previousAgentLevel = agentLastLevel.GetValueOrDefault(p.SteamID, 0);
+                    bool hadBaseline = agentLastLevel.TryGetValue(p.SteamID, out int previousAgentLevel);
 
-                    if (statsGateOpen && kills <= 0 && currentAgentLevel > previousAgentLevel) {
+                    if (hadBaseline && statsGateOpen && kills <= 0 && currentAgentLevel > previousAgentLevel) {
                         for (int lvl = previousAgentLevel + 1; lvl <= currentAgentLevel; lvl++) {
                             AddAgentLevel(p.SteamID, lvl, season);
                         }
