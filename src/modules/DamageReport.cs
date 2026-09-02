@@ -34,6 +34,8 @@ namespace OSBase.Modules;
 //                         dominations, revenges; nemesis lists ("who kills me / who I kill")
 //   player_clutch_stat    (steamid64, side, season, opponents) -> attempts, wins
 //   player_multikill_stat (steamid64, side, season, kills) -> rounds (exact-N, no cap)
+//   player_agent_stat     (steamid64, level, season) -> count (007/dubbelagent/...,
+//                         level = deaths/7, exact-N passage, no cap; ask 32)
 // player_duel_stat/clutch/multikill run off every round on every server (not gated to
 // tournament matches -- that gate belongs to EloRating's own scoring decision, not to whether
 // a duel/clutch/round gets counted here). Counters, not raw events; writes buffered in
@@ -50,6 +52,7 @@ public class DamageReport : ModuleBase {
     private const string DuelStatTable = "player_duel_stat";
     private const string ClutchStatTable = "player_clutch_stat";
     private const string MultikillStatTable = "player_multikill_stat";
+    private const string AgentStatTable = "player_agent_stat";
     private const string DailyStatTable = "player_daily_stat";
     private const string DuelTotalTable = "player_duel_total";
     private const string ServerStatSeasonTable = "server_stat_season";
@@ -141,6 +144,7 @@ public class DamageReport : ModuleBase {
     private readonly Dictionary<(ulong AttackerId64, ulong VictimId64, int AttackerSide, int VictimSide, string Weapon, string Season), PendingDuelCounter> pendingDuelCounters = new();
     private readonly Dictionary<(ulong SteamId64, int Side, string Season, int Opponents), PendingClutchCounter> pendingClutchCounters = new();
     private readonly Dictionary<(ulong SteamId64, int Side, string Season, int Kills), int> pendingMultikillCounters = new();
+    private readonly Dictionary<(ulong SteamId64, int Level, string Season), int> pendingAgentCounters = new();
 
     // Ask 15/16: a daily form summary (no weapon/hitgroup/side -- deliberately narrow, see
     // STATS-MODULE.md) and two roll-ups so expensive aggregate questions ("your kills vs
@@ -188,6 +192,17 @@ public class DamageReport : ModuleBase {
     private int roundsThisMap;
     private bool captureMapStartSideNext;
     private readonly Dictionary<ulong, int> mapStartSide = new();
+
+    // Ask 32: level = deaths/7 as of the last round-end check, updated UNCONDITIONALLY every
+    // round end (regardless of Kills) -- that's what makes the passage detection in
+    // AddAgentLevel's call site correct: a level crossed while Kills was still positive is
+    // never retroactively credited once Kills later drops to <=0 (trap 3 in the handover
+    // doc), because the boundary it "passed" already moved on without a write. Cleared
+    // alongside mapStartSide -- same map-start reset point, on the working assumption that
+    // CS2 resets ActionTrackingServices.MatchStats at map change same as it resets the visible
+    // scoreboard (unverified from source, same caveat OnMapEnd already carries for this exact
+    // field -- needs live confirmation, not assumed here).
+    private readonly Dictionary<ulong, int> agentLastLevel = new();
 
     // Ask 18 "seconds" (player_daily_stat): sampled at round end against a per-player last
     // credited timestamp, not derived from connect/disconnect deltas -- a crash or ungraceful
@@ -649,6 +664,28 @@ public class DamageReport : ModuleBase {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
+        // Ask 32 (osbase-agent-doubleagent.md): 007/dubbelagent/... -- level = deaths/7, no
+        // cap (same "exact N, no cap at 5" call as player_multikill_stat above). Written from
+        // OnRoundEnd off ActionTrackingServices.MatchStats.Kills/.Deaths (the board's own
+        // numbers, not elo_kill_event's attacker-only ledger -- see the doc's "must be the
+        // board's number" rule, same as ask 29's score). level is TINYINT UNSIGNED, same
+        // headroom reasoning as multikill's kills column. No side column: the handover doc
+        // doesn't ask for one and the joke isn't side-specific. GDPR: describes one person
+        // only (no counterparty column, unlike duel/knife-taser tables) -- DELETE on erasure,
+        // not anonymize, same treatment as elo_rating/elo_points. That list lives in OSWeb's
+        // OsbaseStatsRepository, not here -- flagged for them, not enforced on this side.
+        string agentStatTable = $"""
+        TABLE IF NOT EXISTS {AgentStatTable} (
+            steamid64  VARCHAR(32) NOT NULL,
+            level      TINYINT UNSIGNED NOT NULL,
+            season     VARCHAR(8) NOT NULL,
+            count      INT NOT NULL DEFAULT 0,
+            first_seen DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (steamid64, level, season)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        """;
+
         // Ask 15: daily form summary, extended by ask 18 for "yesterday's highlights" (most
         // kills, most online). Deliberately narrow -- no weapon, hitgroup or side, or
         // multiplying by 365 days/year would be the reckless version of this table. A season
@@ -820,6 +857,7 @@ public class DamageReport : ModuleBase {
             db.create(duelStatTable);
             db.create(clutchStatTable);
             db.create(multikillStatTable);
+            db.create(agentStatTable);
             db.create(dailyStatTable);
             db.create(duelTotalTable);
             db.create(serverStatSeasonTable);
@@ -1201,6 +1239,18 @@ public class DamageReport : ModuleBase {
         pendingMultikillCounters[key] = pendingMultikillCounters.GetValueOrDefault(key, 0) + 1;
     }
 
+    // Ask 32: one row per level PASSED (not per round spent at that level -- see the
+    // handover doc's trap 1). Called once per level in a span when deaths jump more than one
+    // multiple of 7 in a single round; in normal play that span is always exactly one level.
+    private void AddAgentLevel(ulong steamId64, int level, string season) {
+        if (steamId64 == 0 || level <= 0) {
+            return;
+        }
+
+        var key = (steamId64, level, season);
+        pendingAgentCounters[key] = pendingAgentCounters.GetValueOrDefault(key, 0) + 1;
+    }
+
     private void AddKnifeTaserKill(ulong killerSteamId64, ulong victimSteamId64, int killerSide, int victimSide, string weapon, string mapname, int? matchId, int killerMoney, int victimMoney) {
         // Same side contract as AddDuel (which this always runs alongside) -- killer_side/
         // victim_side are documented as the same scale as player_duel_stat's, so they get the
@@ -1382,6 +1432,7 @@ public class DamageReport : ModuleBase {
         if (pendingHitCounters.Count == 0 && pendingShotCounters.Count == 0
             && pendingRoundCounters.Count == 0 && pendingDuelCounters.Count == 0
             && pendingClutchCounters.Count == 0 && pendingMultikillCounters.Count == 0
+            && pendingAgentCounters.Count == 0
             && pendingDailyCounters.Count == 0 && pendingDuelTotalCounters.Count == 0
             && pendingServerStatCounters.Count == 0 && pendingKnifeTaserKills.Count == 0
             && pendingMapResults.Count == 0) {
@@ -1405,6 +1456,9 @@ public class DamageReport : ModuleBase {
 
         var multikillBatch = pendingMultikillCounters.ToList();
         pendingMultikillCounters.Clear();
+
+        var agentBatch = pendingAgentCounters.ToList();
+        pendingAgentCounters.Clear();
 
         var dailyBatch = pendingDailyCounters.ToList();
         pendingDailyCounters.Clear();
@@ -1592,6 +1646,20 @@ public class DamageReport : ModuleBase {
                     }));
             }
 
+            foreach (var kv in agentBatch) {
+                var (steamId64, level, season) = kv.Key;
+
+                writes.Add(($"INTO {AgentStatTable} (steamid64, level, season, count, first_seen, updated_at) " +
+                    "VALUES (@steamid64, @level, @season, @count, NOW(), NOW()) " +
+                    "ON DUPLICATE KEY UPDATE count=count+@count, updated_at=NOW()",
+                    new MySqlParameter[] {
+                        new("@steamid64", steamId64.ToString()),
+                        new("@level", level),
+                        new("@season", season),
+                        new("@count", kv.Value)
+                    }));
+            }
+
             foreach (var kv in dailyBatch) {
                 var (steamId64, day) = kv.Key;
                 var counter = kv.Value;
@@ -1685,6 +1753,7 @@ public class DamageReport : ModuleBase {
             var unwrittenDuels = ok ? new() : duelBatch;
             var unwrittenClutches = ok ? new() : clutchBatch;
             var unwrittenMultikills = ok ? new() : multikillBatch;
+            var unwrittenAgents = ok ? new() : agentBatch;
             var unwrittenDaily = ok ? new() : dailyBatch;
             var unwrittenDuelTotals = ok ? new() : duelTotalBatch;
             var unwrittenServerStats = ok ? new() : serverStatBatch;
@@ -1751,6 +1820,10 @@ public class DamageReport : ModuleBase {
                     pendingMultikillCounters[kv.Key] = pendingMultikillCounters.GetValueOrDefault(kv.Key, 0) + kv.Value;
                 }
 
+                foreach (var kv in unwrittenAgents) {
+                    pendingAgentCounters[kv.Key] = pendingAgentCounters.GetValueOrDefault(kv.Key, 0) + kv.Value;
+                }
+
                 foreach (var kv in unwrittenDaily) {
                     if (!pendingDailyCounters.TryGetValue(kv.Key, out var existing)) {
                         pendingDailyCounters[kv.Key] = kv.Value;
@@ -1806,6 +1879,7 @@ public class DamageReport : ModuleBase {
 
                 int unwritten = unwrittenHits.Count + unwrittenShots.Count + unwrittenRounds.Count
                     + unwrittenDuels.Count + unwrittenClutches.Count + unwrittenMultikills.Count
+                    + unwrittenAgents.Count
                     + unwrittenDaily.Count + unwrittenDuelTotals.Count + unwrittenServerStats.Count
                     + unwrittenKnifeTaserKills.Count + unwrittenMapResults.Count;
                 if (unwritten > 0) {
@@ -1815,6 +1889,7 @@ public class DamageReport : ModuleBase {
                         $"[DEBUG] OSBase[{ModuleName}] flushed pending stat writes ({source}): " +
                         $"hitRows={hitBatch.Count}, shotRows={shotBatch.Count}, roundRows={roundBatch.Count}, " +
                         $"duelRows={duelBatch.Count}, clutchRows={clutchBatch.Count}, multikillRows={multikillBatch.Count}, " +
+                        $"agentRows={agentBatch.Count}, " +
                         $"dailyRows={dailyBatch.Count}, duelTotalRows={duelTotalBatch.Count}, serverStatRows={serverStatBatch.Count}, " +
                         $"knifeTaserRows={knifeTaserBatch.Count}, mapResultRows={mapResultBatch.Count}"
                     );
@@ -2374,6 +2449,7 @@ public class DamageReport : ModuleBase {
         if (captureMapStartSideNext) {
             captureMapStartSideNext = false;
             mapStartSide.Clear();
+            agentLastLevel.Clear();
             foreach (var p in Utilities.GetPlayers()) {
                 if (IsRealHuman(p)) {
                     mapStartSide[p.SteamID] = MapSide(p);
@@ -2406,6 +2482,49 @@ public class DamageReport : ModuleBase {
             }
 
             ScheduleDamageReport(p.UserId.Value);
+
+            // Ask 32: 007/dubbelagent/... off the board's own Kills/Deaths -- deliberately
+            // not elo_kill_event, which only holds deaths with an attacker (falls, the bomb,
+            // your own grenade all count on the scoreboard but not there). Kills <= 0, never
+            // == 0: TeamDamage.cs decrements this same field for a teamkill or suicide, so a
+            // genuinely awful evening reads negative, not zero.
+            //
+            // Tracked every round end regardless of statsGateOpen (unlike the block below),
+            // while the WRITE stays gated -- otherwise deaths accrued during a closed-gate
+            // stretch (warmup tail, server dipping under min_players) would sit invisible in
+            // agentLastLevel and then fire as one burst of levels the moment the gate reopens
+            // and a real death finally moves the counter again. Updating the baseline every
+            // round, gate or no gate, means a closed-gate crossing is simply absorbed and
+            // never credited -- consistent with ask 11 rather than a loophole in it.
+            //
+            // Passage, not state (trap 1 in the handover doc): compare against the level
+            // implied by deaths as of the LAST round-end check, not a flat "are they
+            // currently at 0-7k" test -- otherwise someone stuck at 0-9 would earn a row every
+            // single round for the rest of the match. Writing every level in the
+            // (previousLevel, currentLevel] span (not just the top one) covers a round with
+            // more than one death without under-counting; ordinary play only ever has one
+            // death a round, so the span is 0 or 1 level almost always. Only levels reached
+            // while Kills <= 0 AND the gate is open get written -- a level passed earlier
+            // while Kills was still positive (or the gate was shut) is never backfilled once
+            // Kills later drops to <=0 or the gate reopens (trap 3): agentLastLevel already
+            // moved past it without a row, on purpose.
+            if (IsRealHuman(p)) {
+                var tracking = p.ActionTrackingServices;
+                if (tracking != null) {
+                    int deaths = tracking.MatchStats.Deaths;
+                    int kills = tracking.MatchStats.Kills;
+                    int currentAgentLevel = deaths / 7;
+                    int previousAgentLevel = agentLastLevel.GetValueOrDefault(p.SteamID, 0);
+
+                    if (statsGateOpen && kills <= 0 && currentAgentLevel > previousAgentLevel) {
+                        for (int lvl = previousAgentLevel + 1; lvl <= currentAgentLevel; lvl++) {
+                            AddAgentLevel(p.SteamID, lvl, season);
+                        }
+                    }
+
+                    agentLastLevel[p.SteamID] = currentAgentLevel;
+                }
+            }
 
             // For damage/round: one round played, for whichever side they were actually on.
             // Spectators/unassigned (MapSide -> unknown) still get a row -- excluding them
