@@ -205,7 +205,7 @@ public class Idle : ModuleBase {
         }
 
         Server.NextFrame(() => {
-            if (!isActive) {
+            if (!isActive || !roundActive) {
                 return;
             }
 
@@ -375,11 +375,9 @@ public class Idle : ModuleBase {
         var teamAlive = AliveHumansOnTeam(p.TeamNum);
 
         if (teamAlive <= 1) {
-            var pawn = p.PlayerPawn?.Value;
-            if (pawn != null && pawn.LifeState == (byte)LifeState_t.LIFE_ALIVE) {
-                pawn.CommitSuicide(false, true);
-            }
-
+            // ChangeTeam slays the pawn as part of the team switch, ending the round as one
+            // engine operation. A separate CommitSuicide() beforehand raced that teardown and
+            // could crash the server; don't reintroduce it.
             p.ChangeTeam(CsTeam.Spectator);
             Server.PrintToChatAll($"{ChatColors.Grey}[AFK]{ChatColors.Yellow} {name}{ChatColors.Default} was last alive, {ChatColors.Red}slain{ChatColors.Default} and moved to spectators for being idle.");
         } else {
