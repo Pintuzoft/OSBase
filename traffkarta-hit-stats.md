@@ -2188,6 +2188,11 @@ while zero means "starting over" and wrong the moment zero can also mean "we do
 not know yet" — ask 22's NULL-versus-0 and ask 30's two meanings of
 `end_reason = 0`, a third time.
 
+**Released (OSBase, v0.0.550).** `player_agent_stat` is live on prod as of this
+version — the table exists, the round-end write path is active, and rows are
+accumulating under the schema and gates described above. Safe to build the
+visualisation against now.
+
 ### Priority between these asks
 
 Not all of them are equally urgent, even though all of them are aggregates:
