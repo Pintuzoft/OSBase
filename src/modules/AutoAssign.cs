@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Events;
@@ -19,6 +20,14 @@ public class AutoAssign : ModuleBase {
 
     private readonly HashSet<ulong> pendingAssignments = new();
 
+    // Steam IDs awaiting a post-spawn position check (see OnPlayerSpawn). ChangeTeam's own
+    // join/spawn ceremony can drop a brand-new connect under the map during warmup -- known
+    // CS2/CounterStrikeSharp issue (MatchZy hit the same thing and just removed auto-join).
+    // We keep ChangeTeam (it's the one that reliably sticks the player on the team -- the old
+    // SwitchTeam-based version needed a whole guard system to fight the engine bouncing
+    // players back to spectator) and instead correct the landing spot on first spawn.
+    private readonly HashSet<ulong> pendingSpawnFix = new();
+
     // Lets TeamBalancer skip freshly auto-assigned players if it wants to.
     private readonly Dictionary<ulong, DateTime> recentAutoAssign = new();
 
@@ -33,6 +42,7 @@ public class AutoAssign : ModuleBase {
     protected override void RegisterHandlers() {
         // Use new EventBus system
         osbase?.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase?.SubscribeToEvent<EventPlayerSpawn>(OnPlayerSpawn);
         osbase?.SubscribeToEvent<EventMapTransition>(OnMapTransition);
         osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
     }
@@ -40,6 +50,7 @@ public class AutoAssign : ModuleBase {
     protected override void UnregisterHandlers() {
         // Use new EventBus system
         osbase?.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
+        osbase?.UnsubscribeFromEvent<EventPlayerSpawn>(OnPlayerSpawn);
         osbase?.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
         osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
     }
@@ -121,12 +132,71 @@ public class AutoAssign : ModuleBase {
             // Release before moving so AutoAssign cannot fight any later module logic.
             pendingAssignments.Remove(steamId);
             recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
+            pendingSpawnFix.Add(steamId);
 
             safePlayer.ChangeTeam(intendedTeam);
         } catch (Exception ex) {
             pendingAssignments.Remove(steamId);
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] TryAssignConnectedPlayer failed for {steamId}: {ex.Message}");
         }
+    }
+
+    private HookResult OnPlayerSpawn(EventPlayerSpawn ev) {
+        if (!isActive || osbase == null) {
+            return HookResult.Continue;
+        }
+
+        var player = ev.Userid;
+        if (!IsEligiblePlayer(player)) {
+            return HookResult.Continue;
+        }
+
+        ulong steamId = player!.SteamID;
+        if (!pendingSpawnFix.Remove(steamId)) {
+            return HookResult.Continue;
+        }
+
+        try {
+            if (!IsPlayable(player.TeamNum)) {
+                return HookResult.Continue;
+            }
+
+            var pawn = player.PlayerPawn.Value;
+            if (pawn == null || !pawn.IsValid) {
+                return HookResult.Continue;
+            }
+
+            var spawnPoint = PickSpawnPointForTeam((CsTeam)player.TeamNum);
+            if (spawnPoint == null) {
+                return HookResult.Continue;
+            }
+
+            pawn.Teleport(spawnPoint.AbsOrigin, spawnPoint.AbsRotation, new Vector(0f, 0f, 0f));
+            Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] corrected spawn position for steamid={steamId}.");
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] spawn fix failed for {steamId}: {ex.Message}");
+        }
+
+        return HookResult.Continue;
+    }
+
+    // ChangeTeam's own join ceremony can land a brand-new connect off any real spawn point
+    // during warmup (see pendingSpawnFix comment). Correct it onto one of the map's actual
+    // spawn entities instead of guessing a "too low" threshold, which wouldn't generalize
+    // across maps.
+    private SpawnPoint? PickSpawnPointForTeam(CsTeam team) {
+        var gameRules = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault()?.GameRules;
+        if (gameRules == null) {
+            return null;
+        }
+
+        var handles = team == CsTeam.CounterTerrorist ? gameRules.CTSpawnPoints : gameRules.TerroristSpawnPoints;
+        var points = handles.Where(h => h.IsValid).Select(h => h.Value).Where(sp => sp != null && sp.IsValid).ToList();
+        if (points.Count == 0) {
+            return null;
+        }
+
+        return points[Random.Shared.Next(points.Count)];
     }
 
     public bool WasRecentlyAutoAssigned(ulong steamId) {
@@ -191,6 +261,7 @@ public class AutoAssign : ModuleBase {
     private void ResetState() {
         stateGeneration++;
         pendingAssignments.Clear();
+        pendingSpawnFix.Clear();
         recentAutoAssign.Clear();
     }
 

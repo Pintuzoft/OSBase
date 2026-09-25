@@ -130,6 +130,7 @@ public class EventBusHandler {
         plugin.RegisterEventHandler<EventRoundFreezeEnd>(OnRoundFreezeEndGlobal);
         plugin.RegisterEventHandler<EventMapTransition>(OnMapTransitionGlobal);
         plugin.RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFullGlobal);
+        plugin.RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawnGlobal);
         plugin.RegisterEventHandler<EventBombBeginplant>(OnBombBeginplantGlobal);
         plugin.RegisterEventHandler<EventBombAbortplant>(OnBombAbortplantGlobal);
         plugin.RegisterEventHandler<EventBombPlanted>(OnBombPlantedGlobal);
@@ -207,6 +208,11 @@ public class EventBusHandler {
     }
 
     private HookResult OnPlayerConnectFullGlobal(EventPlayerConnectFull e, GameEventInfo _) {
+        DispatchToEventBus(e);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerSpawnGlobal(EventPlayerSpawn e, GameEventInfo _) {
         DispatchToEventBus(e);
         return HookResult.Continue;
     }
