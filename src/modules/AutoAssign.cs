@@ -13,14 +13,11 @@ public class AutoAssign : ModuleBase {
     protected override string DefaultEnabled => "0";
 
     private const float AssignDelay = 1.00f;
-    private const float WarmupRespawnDelay = 0.20f;
     private const float GuardSeconds = 2.50f;
 
     private int stateGeneration = 0;
-    private bool warmupActive = false;
 
     private readonly HashSet<ulong> pendingAssignments = new();
-    private readonly HashSet<ulong> pendingWarmupRespawns = new();
 
     // Lets TeamBalancer skip freshly auto-assigned players if it wants to.
     private readonly Dictionary<ulong, DateTime> recentAutoAssign = new();
@@ -36,8 +33,6 @@ public class AutoAssign : ModuleBase {
     protected override void RegisterHandlers() {
         // Use new EventBus system
         osbase?.SubscribeToEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
-        osbase?.SubscribeToEvent<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
-        osbase?.SubscribeToEvent<EventWarmupEnd>(OnWarmupEnd);
         osbase?.SubscribeToEvent<EventMapTransition>(OnMapTransition);
         osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
     }
@@ -45,8 +40,6 @@ public class AutoAssign : ModuleBase {
     protected override void UnregisterHandlers() {
         // Use new EventBus system
         osbase?.UnsubscribeFromEvent<EventPlayerConnectFull>(OnPlayerConnectFull);
-        osbase?.UnsubscribeFromEvent<EventRoundAnnounceWarmup>(OnRoundAnnounceWarmup);
-        osbase?.UnsubscribeFromEvent<EventWarmupEnd>(OnWarmupEnd);
         osbase?.UnsubscribeFromEvent<EventMapTransition>(OnMapTransition);
         osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
     }
@@ -57,20 +50,6 @@ public class AutoAssign : ModuleBase {
 
     private HookResult OnMapTransition(EventMapTransition ev) {
         ResetState();
-        return HookResult.Continue;
-    }
-
-    private HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup ev) {
-        warmupActive = true;
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup started.");
-        return HookResult.Continue;
-    }
-
-    private HookResult OnWarmupEnd(EventWarmupEnd ev) {
-        warmupActive = false;
-        pendingWarmupRespawns.Clear();
-
-        Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] warmup ended.");
         return HookResult.Continue;
     }
 
@@ -123,11 +102,6 @@ public class AutoAssign : ModuleBase {
             // Already on a real team. AutoAssign is done and must not fight TeamBalancer.
             if (IsPlayable(safePlayer.TeamNum)) {
                 pendingAssignments.Remove(steamId);
-
-                if (warmupActive && !safePlayer.PawnIsAlive) {
-                    ScheduleWarmupRespawn(steamId, generation);
-                }
-
                 return;
             }
 
@@ -149,51 +123,10 @@ public class AutoAssign : ModuleBase {
             recentAutoAssign[steamId] = DateTime.UtcNow.AddSeconds(GuardSeconds);
 
             safePlayer.ChangeTeam(intendedTeam);
-
-            if (warmupActive) {
-                ScheduleWarmupRespawn(steamId, generation);
-            }
         } catch (Exception ex) {
             pendingAssignments.Remove(steamId);
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] TryAssignConnectedPlayer failed for {steamId}: {ex.Message}");
         }
-    }
-
-    private void ScheduleWarmupRespawn(ulong steamId, int generation, float delay = WarmupRespawnDelay) {
-        if (!isActive || osbase == null || !warmupActive) {
-            return;
-        }
-
-        if (!pendingWarmupRespawns.Add(steamId)) {
-            return;
-        }
-
-        osbase.AddTimer(delay, () => {
-            try {
-                if (!isActive || osbase == null || generation != stateGeneration || !warmupActive) {
-                    return;
-                }
-
-                var player = FindHumanBySteamId(steamId);
-                if (!IsEligiblePlayer(player)) {
-                    return;
-                }
-
-                var safePlayer = player!;
-                if (!IsPlayable(safePlayer.TeamNum)) {
-                    return;
-                }
-
-                if (!safePlayer.PawnIsAlive) {
-                    safePlayer.Respawn();
-                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] respawned {steamId} after autoassign.");
-                }
-            } catch (Exception ex) {
-                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] warmup respawn failed for {steamId}: {ex.Message}");
-            } finally {
-                pendingWarmupRespawns.Remove(steamId);
-            }
-        }, TimerFlags.STOP_ON_MAPCHANGE);
     }
 
     public bool WasRecentlyAutoAssigned(ulong steamId) {
@@ -257,9 +190,7 @@ public class AutoAssign : ModuleBase {
 
     private void ResetState() {
         stateGeneration++;
-        warmupActive = false;
         pendingAssignments.Clear();
-        pendingWarmupRespawns.Clear();
         recentAutoAssign.Clear();
     }
 
