@@ -22,6 +22,11 @@ public class AutoAssign : ModuleBase {
     private const float BounceRestoreDelay = 0.05f;
     private const float GuardSeconds = 1.0f;
 
+    // SwitchTeam doesn't spawn the player; during warmup we poll Respawn() until a pawn shows
+    // up (v0.0.400-0.0.479 behaviour). Outside warmup they spawn with the next round as usual.
+    private const int ForceSpawnTries = 8;
+    private const float ForceSpawnStep = 0.20f;
+
     private int stateGeneration = 0;
     private bool warmupActive = true;
 
@@ -141,6 +146,7 @@ public class AutoAssign : ModuleBase {
             if (IsPlayable(safePlayer.TeamNum)) {
                 pendingAssignments.Remove(steamId);
                 teamGuards[steamId] = ((CsTeam)safePlayer.TeamNum, DateTime.UtcNow.AddSeconds(GuardSeconds));
+                TryForceSpawn(steamId, generation);
                 return;
             }
 
@@ -167,6 +173,7 @@ public class AutoAssign : ModuleBase {
             teamGuards[steamId] = (intendedTeam, DateTime.UtcNow.AddSeconds(GuardSeconds));
 
             ScheduleCorrection(steamId, generation);
+            TryForceSpawn(steamId, generation);
         } catch (Exception ex) {
             pendingAssignments.Remove(steamId);
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] TryAssignConnectedPlayer failed for {steamId}: {ex.Message}");
@@ -207,6 +214,7 @@ public class AutoAssign : ModuleBase {
 
                 safePlayer.PrintToChat($" \x04[AutoAssign]\x01 You were assigned to the {color}{finalTeam}\x01 team.");
                 teamGuards[steamId] = (finalTeam, DateTime.UtcNow.AddSeconds(GuardSeconds));
+                TryForceSpawn(steamId, generation);
             } catch (Exception ex) {
                 Console.WriteLine($"[ERROR] OSBase[{ModuleName}] correction failed for {steamId}: {ex.Message}");
             } finally {
@@ -263,6 +271,7 @@ public class AutoAssign : ModuleBase {
 
                     Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] bounce restore: steamid={steamId} team={p.TeamNum} -> {guard.team}.");
                     p.SwitchTeam(guard.team);
+                    TryForceSpawn(steamId, generation);
                 } catch (Exception ex) {
                     Console.WriteLine($"[ERROR] OSBase[{ModuleName}] bounce restore failed for {steamId}: {ex.Message}");
                 }
@@ -272,6 +281,32 @@ public class AutoAssign : ModuleBase {
         }
 
         return HookResult.Continue;
+    }
+
+    private void TryForceSpawn(ulong steamId, int generation) {
+        if (!isActive || osbase == null || !warmupActive) {
+            return;
+        }
+
+        for (int i = 1; i <= ForceSpawnTries; i++) {
+            osbase.AddTimer(i * ForceSpawnStep, () => {
+                if (!isActive || !warmupActive || generation != stateGeneration) {
+                    return;
+                }
+
+                try {
+                    var player = FindHumanBySteamId(steamId);
+                    if (!IsEligiblePlayer(player) || !IsPlayable(player!.TeamNum) || player.PawnIsAlive) {
+                        return;
+                    }
+
+                    player.Respawn();
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] force spawn: steamid={steamId} team={player.TeamNum}.");
+                } catch (Exception ex) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] force spawn failed for {steamId}: {ex.Message}");
+                }
+            }, TimerFlags.STOP_ON_MAPCHANGE);
+        }
     }
 
     public bool WasRecentlyAutoAssigned(ulong steamId) {
