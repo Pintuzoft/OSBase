@@ -178,7 +178,10 @@ namespace OSBase.Helpers {
                 return rosterMedian;
             }
 
-            if (!elo.TryGetRating(steamId64, out int rating, out int matches) || matches < minRatedMatches) {
+            // TryGetBalancingRating, not TryGetRating: after the quarterly reset everyone
+            // stands at 1000 with 0 matches, so this reads last season's final until the
+            // player has cleared EloRating's provisional gate this season (order section 13).
+            if (!elo.TryGetBalancingRating(steamId64, out int rating, out int matches, out _) || matches < minRatedMatches) {
                 return rosterMedian;
             }
 
@@ -200,7 +203,7 @@ namespace OSBase.Helpers {
                         continue;
                     }
 
-                    if (elo.TryGetRating(player.SteamID, out int rating, out int matches) && matches >= minRatedMatches) {
+                    if (elo.TryGetBalancingRating(player.SteamID, out int rating, out int matches, out _) && matches >= minRatedMatches) {
                         ratings.Add(rating);
                     }
                 }
@@ -230,7 +233,7 @@ namespace OSBase.Helpers {
                         continue;
                     }
 
-                    if (elo.TryGetRating(player.SteamID, out int rating, out int matches) && matches >= minRatedMatches) {
+                    if (elo.TryGetBalancingRating(player.SteamID, out int rating, out int matches, out _) && matches >= minRatedMatches) {
                         ratings.Add(rating);
                     }
                 }

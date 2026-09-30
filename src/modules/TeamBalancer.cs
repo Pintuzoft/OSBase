@@ -35,6 +35,26 @@ namespace OSBase.Modules {
         // real rating data exists, and changing it shouldn't need a rebuild.
         private int minRatedMatches = 10;
 
+        // Elo-mode decision model (osbase-order-2026Q4.md section 13, replaces the threshold/
+        // spread heuristics below for balancer_skill_source elo):
+        //   strength = R + min(rounds / R0, CAP) * (P - R)
+        //   P        = opponents' average rating + 400 * log10((kills + 0.5) / (deaths + 0.5))
+        //   win%     = 1 / (1 + 10^(-(A - B) / 400)) for the stronger team's average
+        // Balance only when the stronger side's win chance exceeds balance_trigger_pct, and
+        // only with a swap that brings it under balance_target_pct -- a swap that merely
+        // flips which team is too strong is not made. At most one swap per
+        // min_rounds_between_moves rounds, never the same player twice on a map. All config
+        // so the owner can retune after a week without a rebuild.
+        private double balanceTriggerPct = 60.0;
+        private double balanceTargetPct = 55.0;
+        private int mapWeightRounds = 20;
+        private double mapWeightCap = 0.3;
+        private int minRoundsBetweenMoves = 3;
+
+        // userIds moved by any balance action on this map (swap or size-fix) -- order section
+        // 13: "Samma spelare flyttas aldrig två gånger på samma mapp."
+        private readonly HashSet<int> movedThisMap = new();
+
         // balancer_skill_source: gamestats (default) | elo | shadow. Elo doesn't replace
         // GameStats' skill signal the moment this code ships -- GameStats.calcSkill()/
         // skill_log keeps writing regardless (SaveIfEligible is self-contained, triggered by
@@ -202,13 +222,28 @@ namespace OSBase.Modules {
                 "// trust for balancing -- treated as the roster median instead (see\n" +
                 "// SkillResolver.GetEffectiveSkill). Nobody knows the right number until real\n" +
                 "// rating data exists.\n" +
-                "min_rated_matches 10\n"
+                "min_rated_matches 10\n" +
+                "// Elo-mode balancing (osbase-order-2026Q4.md section 13). Start values.\n" +
+                "// Balance only when the stronger team's win chance exceeds trigger, and only\n" +
+                "// with a swap that brings it under target.\n" +
+                "balance_trigger_pct 60\n" +
+                "balance_target_pct 55\n" +
+                "// The current map's kills/deaths weigh in by min(rounds / map_weight_rounds,\n" +
+                "// map_weight_cap): ~8% after 5 rounds, never more than 30%.\n" +
+                "map_weight_rounds 20\n" +
+                "map_weight_cap 0.3\n" +
+                "min_rounds_between_moves 3\n"
             );
         }
 
         private void LoadConfig() {
             minRatedMatches = 10;
             balancerSkillSource = "gamestats";
+            balanceTriggerPct = 60.0;
+            balanceTargetPct = 55.0;
+            mapWeightRounds = 20;
+            mapWeightCap = 0.3;
+            minRoundsBetweenMoves = 3;
 
             List<string> cfg = config?.FetchCustomConfig($"{ModuleName}.cfg") ?? new List<string>();
 
@@ -231,6 +266,31 @@ namespace OSBase.Modules {
                     case "min_rated_matches":
                         if (int.TryParse(value, out int parsed)) {
                             minRatedMatches = Math.Clamp(parsed, 0, 10000);
+                        }
+                        break;
+                    case "balance_trigger_pct":
+                        if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double trig)) {
+                            balanceTriggerPct = Math.Clamp(trig, 50.0, 100.0);
+                        }
+                        break;
+                    case "balance_target_pct":
+                        if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double tgt)) {
+                            balanceTargetPct = Math.Clamp(tgt, 50.0, 100.0);
+                        }
+                        break;
+                    case "map_weight_rounds":
+                        if (int.TryParse(value, out int r0)) {
+                            mapWeightRounds = Math.Clamp(r0, 1, 1000);
+                        }
+                        break;
+                    case "map_weight_cap":
+                        if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double cap)) {
+                            mapWeightCap = Math.Clamp(cap, 0.0, 1.0);
+                        }
+                        break;
+                    case "min_rounds_between_moves":
+                        if (int.TryParse(value, out int mrb)) {
+                            minRoundsBetweenMoves = Math.Clamp(mrb, 0, 100);
                         }
                         break;
                     case "balancer_skill_source":
@@ -387,6 +447,7 @@ namespace OSBase.Modules {
             lastSwapRound = -999;
 
             playerSwapRound.Clear();
+            movedThisMap.Clear();
 
             warmupBalanceTimer?.Kill();
             warmupBalanceTimer = null;
@@ -654,6 +715,13 @@ namespace OSBase.Modules {
 
             LogShadowSkillComparison(tStats, cStats, TeamWarmupAverage90d(gs, tStats), TeamWarmupAverage90d(gs, cStats), "warmup_final");
 
+            if (balancerSkillSource == "elo") {
+                int eloSwaps = EloBalanceSwaps(gs, "warmup_final", WARMUP_FINAL_MAX_SWAPS, enforceHysteresis: false);
+                EnsureBestIsSoloIf2v1(gs);
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] WarmupFinalBalance DONE swaps={eloSwaps} (elo)");
+                return;
+            }
+
             int swapsDone = 0;
             while (swapsDone < WARMUP_FINAL_MAX_SWAPS) {
                 float tAvg = TeamWarmupAverage90d(gs, tStats);
@@ -745,6 +813,12 @@ namespace OSBase.Modules {
                 return;
             }
 
+            if (balancerSkillSource == "elo") {
+                EloBalanceSwaps(gs, "roundend_live", 1, enforceHysteresis: true);
+                EnsureBestIsSoloIf2v1(gs);
+                return;
+            }
+
             float tAvg = TeamSignalAverage(gs, tStats);
             float cAvg = TeamSignalAverage(gs, cStats);
             float gap = MathF.Abs(tAvg - cAvg);
@@ -793,6 +867,147 @@ namespace OSBase.Modules {
             }
 
             EnsureBestIsSoloIf2v1(gs);
+        }
+
+        // ----- Elo-mode balancing (order section 13) -----
+
+        // Per-player strength for this pass. R comes from SkillResolver (this season once past
+        // the provisional gate, else last season's final, else the roster median); the
+        // current map's performance rating P is blended in by rounds played here, capped.
+        private double StrengthOf(int userId, PlayerStats ps, double opponentsAverageRating) {
+            double r = SkillResolver.GetEffectiveSkill(eloRating, userId, currentRosterMedian, minRatedMatches);
+            int rounds = ps.rounds;
+            if (rounds <= 0 || mapWeightRounds <= 0 || mapWeightCap <= 0) {
+                return r;
+            }
+
+            double performance = opponentsAverageRating + 400.0 * Math.Log10((ps.kills + 0.5) / (ps.deaths + 0.5));
+            double w = Math.Min(rounds / (double)mapWeightRounds, mapWeightCap);
+            return r + w * (performance - r);
+        }
+
+        private static double WinChance(double strongerAverage, double weakerAverage) {
+            return 1.0 / (1.0 + Math.Pow(10.0, -(strongerAverage - weakerAverage) / 400.0));
+        }
+
+        private List<(int uid, double strength, bool isT, bool alive)> EloRoster(GameStats gs, TeamStats tStats, TeamStats cStats) {
+            double tRating = 0, cRating = 0;
+            foreach (var kv in tStats.playerList) tRating += SkillResolver.GetEffectiveSkill(eloRating, kv.Key, currentRosterMedian, minRatedMatches);
+            foreach (var kv in cStats.playerList) cRating += SkillResolver.GetEffectiveSkill(eloRating, kv.Key, currentRosterMedian, minRatedMatches);
+            double tAvgRating = tStats.numPlayers() > 0 ? tRating / tStats.numPlayers() : currentRosterMedian;
+            double cAvgRating = cStats.numPlayers() > 0 ? cRating / cStats.numPlayers() : currentRosterMedian;
+
+            var all = new List<(int uid, double strength, bool isT, bool alive)>();
+            foreach (var kv in tStats.playerList) {
+                var p = Utilities.GetPlayerFromUserid(kv.Key);
+                all.Add((kv.Key, StrengthOf(kv.Key, kv.Value, cAvgRating), true, p?.PawnIsAlive ?? false));
+            }
+            foreach (var kv in cStats.playerList) {
+                var p = Utilities.GetPlayerFromUserid(kv.Key);
+                all.Add((kv.Key, StrengthOf(kv.Key, kv.Value, tAvgRating), false, p?.PawnIsAlive ?? false));
+            }
+            return all;
+        }
+
+        // Stronger side's win chance for a roster, optionally with two players' sides flipped.
+        private static (double chance, double tAvg, double cAvg) Evaluate(List<(int uid, double strength, bool isT, bool alive)> all, int flipA = -1, int flipB = -1) {
+            double tSum = 0, cSum = 0;
+            int tn = 0, cn = 0;
+            foreach (var x in all) {
+                bool isT = x.isT;
+                if (x.uid == flipA || x.uid == flipB) isT = !isT;
+                if (isT) { tSum += x.strength; tn++; } else { cSum += x.strength; cn++; }
+            }
+            double tAvg = tn > 0 ? tSum / tn : 0;
+            double cAvg = cn > 0 ? cSum / cn : 0;
+            return (WinChance(Math.Max(tAvg, cAvg), Math.Min(tAvg, cAvg)), tAvg, cAvg);
+        }
+
+        // Runs up to maxSwaps swap rounds. With hysteresis on (live play): only when the
+        // stronger side's chance is over the trigger, only a swap that lands under the target,
+        // only after min_rounds_between_moves, never a player already moved this map.
+        // Returns the number of swaps made.
+        private int EloBalanceSwaps(GameStats gs, string source, int maxSwaps, bool enforceHysteresis) {
+            int swaps = 0;
+            double trigger = balanceTriggerPct / 100.0;
+            double target = balanceTargetPct / 100.0;
+
+            while (swaps < maxSwaps) {
+                var tStats = gs.getTeam(TEAM_T);
+                var cStats = gs.getTeam(TEAM_CT);
+                if (tStats.numPlayers() == 0 || cStats.numPlayers() == 0) {
+                    break;
+                }
+
+                var all = EloRoster(gs, tStats, cStats);
+                var (chance, tAvg, cAvg) = Evaluate(all);
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] elo balance ({source}): round={gs.roundNumber} T={tAvg:0} CT={cAvg:0} stronger_win={chance * 100:0.0}% trigger={balanceTriggerPct:0}% target={balanceTargetPct:0}%");
+
+                if (chance <= trigger) {
+                    break;
+                }
+
+                if (enforceHysteresis && gs.roundNumber - lastSwapRound < minRoundsBetweenMoves) {
+                    Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] elo balance ({source}): holding, last swap round {lastSwapRound}.");
+                    break;
+                }
+
+                int bestA = -1, bestB = -1;
+                double bestChance = double.MaxValue;
+                int bestAlive = int.MaxValue;
+
+                foreach (var a in all) {
+                    if (enforceHysteresis && movedThisMap.Contains(a.uid)) continue;
+                    foreach (var b in all) {
+                        if (a.isT == b.isT) continue;
+                        if (enforceHysteresis && movedThisMap.Contains(b.uid)) continue;
+
+                        var (newChance, _, _) = Evaluate(all, a.uid, b.uid);
+                        int alive = (a.alive ? 1 : 0) + (b.alive ? 1 : 0);
+                        // Lower chance wins; among equals, prefer moving players who are dead.
+                        if (newChance < bestChance - 1e-9 || (Math.Abs(newChance - bestChance) <= 1e-9 && alive < bestAlive)) {
+                            bestChance = newChance;
+                            bestAlive = alive;
+                            bestA = a.uid;
+                            bestB = b.uid;
+                        }
+                    }
+                }
+
+                if (bestA == -1 || bestChance >= target) {
+                    Console.WriteLine($"[INFO] OSBase[{ModuleName}] elo balance ({source}): no swap reaches target (best={(bestA == -1 ? "none" : (bestChance * 100).ToString("0.0") + "%")}).");
+                    break;
+                }
+
+                var pA = Utilities.GetPlayerFromUserid(bestA);
+                var pB = Utilities.GetPlayerFromUserid(bestB);
+                if (pA == null || pB == null || !pA.UserId.HasValue || !pB.UserId.HasValue) {
+                    break;
+                }
+
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] elo swap ({source}): {pA.PlayerName}({bestA})[{TeamName(pA.TeamNum)}] <-> {pB.PlayerName}({bestB})[{TeamName(pB.TeamNum)}] {chance * 100:0.0}% -> {bestChance * 100:0.0}%");
+
+                if (IsWarmup(gs)) {
+                    RawMove(gs, pA, (pA.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T, announce: false, reason: "elo_" + source);
+                    RawMove(gs, pB, (pB.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T, announce: false, reason: "elo_" + source);
+                } else {
+                    MoveWithImmunity(gs, pA, (pA.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T, announce: false, reason: "elo_" + source);
+                    MoveWithImmunity(gs, pB, (pB.TeamNum == TEAM_T) ? TEAM_CT : TEAM_T, announce: false, reason: "elo_" + source);
+                }
+                AnnounceSwap(pA, pB);
+
+                swaps++;
+                lastSwapRound = gs.roundNumber;
+                swapsThisMap++;
+                playerSwapRound[bestA] = gs.roundNumber;
+                playerSwapRound[bestB] = gs.roundNumber;
+                if (!IsWarmup(gs)) {
+                    movedThisMap.Add(bestA);
+                    movedThisMap.Add(bestB);
+                }
+            }
+
+            return swaps;
         }
 
         private bool ShouldSwapThisRound(GameStats gs, float gap) {
@@ -1040,6 +1255,7 @@ namespace OSBase.Modules {
                 Console.WriteLine($"[INFO] OSBase[{ModuleName}] Live size-move plan ({reason}): {player.PlayerName}({bestUser}) {TeamName(player.TeamNum)} -> {TeamName(toTeam)}");
                 MoveWithImmunity(gs, player, toTeam, announce: true, reason: reason);
                 playerSwapRound[player.UserId.Value] = gs.roundNumber;
+                movedThisMap.Add(player.UserId.Value);
 
                 tStats = gs.getTeam(TEAM_T);
                 cStats = gs.getTeam(TEAM_CT);

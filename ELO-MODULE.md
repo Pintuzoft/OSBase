@@ -6,6 +6,42 @@ plan) — this one is OSBase-side: a ladder à la old HLStats, but Elo instead o
 HLStats' proprietary formula, so killing the #1 player is worth more than
 killing #100.
 
+## 2026Q4 (v0.0.558, 2026-09-30) — season on rating, zero-sum rating, the placement formula
+
+Built from `osbase-order-2026Q4.md` (OSWeb's order, the owner's decisions;
+the reply with what was actually built is appended at the end of that file).
+The short version, where this doc's older sections say otherwise:
+
+- **`elo_rating` is keyed by `(steamid64, season)` now.** Rating resets to
+  `start_rating` every quarter, last quarter's rows stay. The "never reset"
+  paragraphs below are history. `EnsureRatingSeason()` migrated the live
+  table in place, tagging every pre-existing row `2026Q3`.
+- **Rating is zero-sum.** The headshot multiplier and the flat assist rating
+  reward are gone; only the duel formula moves rating. Bonus rows always
+  carry `rating_delta = 0`.
+- **Points run on `helpers/PointsFormula.cs`**, a port of OSWeb's
+  `PointsFormula.php`, with values from the site-owned `points_formula`
+  table (`points_formula_table` in `elorating.cfg`, re-read every round
+  start). Placement on the season's points board at map start, the first
+  `WARMUP_KILLS` kills pay flat `EVEN`, a death costs `DEATH_SHARE` of the
+  attacker's placement base clipped to the balance. Everyone starts at
+  `START_POINTS`. `points_base`/`points_exponent`/`points_per_round_win`/
+  `points_assist_fraction`/`headshot_bonus_pct`/`assist_reward` are retired.
+- **Bonuses:** `assist`, `round_win`, `bomb_plant`, `bomb_defuse`,
+  `bomb_pickup`, `bomb_drop` (negative), all from `points_formula`.
+  Teamkill/suicide penalties default to 0 (config kept).
+- **`elo_kill_event`** gained `victim_points_delta`, `attacker_place`,
+  `victim_place`, `board_size`, `round_no`, `attacker_in_air`,
+  `attacker_in_water`; `elo_bonus_event` gained `round_no`.
+- **`ScoreKill(KillInput)`** is the duel arithmetic over plain data, the
+  first step toward the demo backfill (order section 11, not built).
+- **DamageReport** prints the round's points per line and a bonus block
+  (order section 8).
+- **TeamBalancer** in `elo` mode uses the win-chance model from order section
+  13 (`EloBalanceSwaps`), reading last season's final rating through
+  `EloRating.TryGetBalancingRating` until a player clears the provisional
+  gate this season.
+
 ## What it is, and what it deliberately is not
 
 **Reversed 2026-07-21 (second time this doc has said this, see below): Elo

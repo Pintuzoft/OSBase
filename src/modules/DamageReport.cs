@@ -88,6 +88,10 @@ public class DamageReport : ModuleBase {
     };
 
     private readonly Dictionary<int, HashSet<int>> killedPlayer = new();
+    // userId -> steamid64 for everyone who appears in a kill this round, so the report can
+    // ask EloRating what the kill was worth (order section 8) even for a player who has
+    // since disconnected. Cleared with the rest of the round data.
+    private readonly Dictionary<int, ulong> steamIdByUserId = new();
     private readonly Dictionary<int, Dictionary<int, int>> damageGiven = new();
     private readonly Dictionary<int, Dictionary<int, int>> damageTaken = new();
     private readonly Dictionary<int, Dictionary<int, int>> hitsGiven = new();
@@ -2132,6 +2136,13 @@ public class DamageReport : ModuleBase {
             EnsureKillSet(attackerId).Add(victimId);
         }
 
+        if (e.Userid != null && victimId >= 0 && e.Userid.SteamID != 0) {
+            steamIdByUserId[victimId] = e.Userid.SteamID;
+        }
+        if (e.Attacker != null && attackerId >= 0 && e.Attacker.SteamID != 0) {
+            steamIdByUserId[attackerId] = e.Attacker.SteamID;
+        }
+
         if (victimId >= 0) {
             ScheduleDamageReport(victimId);
         }
@@ -2784,45 +2795,132 @@ public class DamageReport : ModuleBase {
             return;
         }
 
-        player.PrintToChat("===[ Damage Report (hits:damage) ]===");
+        // Order section 8 (owner's draft, 2026-09-29): today's report with the points added,
+        // "3 hits, 174 damage" shortened to "3:174" (the header already says hits:damage),
+        // four colour levels so the eye knows where to start -- what happened (nick), how
+        // much (hits:damage), the details (zones), the frame (Silver). "(Killed)"/"(Killed
+        // by)" stay as text: Green and Olive are nearly the same colour to red-green colour
+        // blindness. Head in the zone list is Gold on every line, the one exception. The
+        // numbers are the ledger's own (EloRating's per-round mirror), never recomputed here.
+        ulong selfSteamId = player.SteamID;
+        if (selfSteamId != 0) {
+            steamIdByUserId[playerId] = selfSteamId;
+        }
+
+        char frame = ChatColors.Silver;
+        char grey = ChatColors.Grey;
+        char plain = ChatColors.Default;
+
+        var lines = new List<string>();
+        decimal net = 0m;
 
         if (hasVictimData) {
-            player.PrintToChat("Victims:");
+            lines.Add($"{frame}Victims:");
             foreach (var v in damageGiven[playerId]) {
                 int victimId = v.Key;
                 int dmg = v.Value;
                 int hits = hitsGiven[playerId].GetValueOrDefault(victimId, 0);
-
                 string victimName = playerNames.GetValueOrDefault(victimId, "Unknown");
-                string killedText = (killedPlayer.ContainsKey(playerId) && killedPlayer[playerId].Contains(victimId)) ? " (Killed)" : "";
+                bool killed = killedPlayer.ContainsKey(playerId) && killedPlayer[playerId].Contains(victimId);
+                string zones = BuildHitInfoColored(hitboxGiven, hitboxGivenDamage, playerId, victimId, dmg, grey);
 
-                string hitInfo = BuildHitInfo(hitboxGiven, hitboxGivenDamage, playerId, victimId, dmg);
-                player.PrintToChat($"- {victimName}{killedText}: {hits} hits, {dmg} damage{hitInfo}");
+                if (killed) {
+                    string points = "";
+                    if (eloRating != null && steamIdByUserId.TryGetValue(victimId, out ulong victimSteamId) &&
+                        eloRating.TryGetRoundKillPoints(selfSteamId, victimSteamId, out decimal earned, out _)) {
+                        net += earned;
+                        points = $" {ChatColors.Green}{FormatPoints(earned, "+")}";
+                    }
+                    lines.Add($"{frame}- {ChatColors.Green}{victimName} (Killed){plain}: {hits}:{dmg}{zones}{points}");
+                } else {
+                    lines.Add($"{frame}- {ChatColors.Olive}{victimName}{grey}: {hits}:{dmg}{zones}");
+                }
             }
         }
 
         if (hasAttackerData) {
-            player.PrintToChat("Attackers:");
+            lines.Add($"{frame}Attackers:");
             foreach (var a in damageTaken[playerId]) {
                 int attackerId = a.Key;
                 int dmg = a.Value;
                 int hits = hitsTaken[playerId].GetValueOrDefault(attackerId, 0);
-
                 string attackerName = playerNames.GetValueOrDefault(attackerId, "Unknown");
-                string killedByText = (killedPlayer.ContainsKey(attackerId) && killedPlayer[attackerId].Contains(playerId)) ? " (Killed by)" : "";
+                bool killedBy = killedPlayer.ContainsKey(attackerId) && killedPlayer[attackerId].Contains(playerId);
+                string zones = BuildHitInfoColored(hitboxTaken, hitboxTakenDamage, playerId, attackerId, dmg, grey);
 
-                string hitInfo = BuildHitInfo(hitboxTaken, hitboxTakenDamage, playerId, attackerId, dmg);
-                player.PrintToChat($"- {attackerName}{killedByText}: {hits} hits, {dmg} damage{hitInfo}");
+                if (killedBy) {
+                    // A 0 deduction (warmup period, or a balance already on the floor) prints
+                    // as -0,0p rather than nothing -- "vet inte" and "kostade inget" differ.
+                    string points = "";
+                    if (eloRating != null && steamIdByUserId.TryGetValue(attackerId, out ulong attackerSteamId) &&
+                        eloRating.TryGetRoundKillPoints(attackerSteamId, selfSteamId, out _, out decimal lost)) {
+                        net += lost;
+                        points = $" {ChatColors.Red}{FormatPoints(lost, "-")}";
+                    }
+                    lines.Add($"{frame}- {ChatColors.Red}{attackerName} (Killed by){plain}: {hits}:{dmg}{zones}{points}");
+                } else {
+                    lines.Add($"{frame}- {ChatColors.LightRed}{attackerName}{grey}: {hits}:{dmg}{zones}");
+                }
             }
+        }
+
+        // Bonus block: one line per kind with the round's sum, only kinds that moved points,
+        // omitted entirely when nothing did.
+        if (eloRating != null && selfSteamId != 0) {
+            var bonuses = eloRating.GetRoundBonusPoints(selfSteamId);
+            var bonusLines = new List<string>();
+            foreach (var kv in bonuses) {
+                if (kv.Value == 0m) {
+                    continue;
+                }
+                net += kv.Value;
+                char color = kv.Value > 0 ? ChatColors.Green : ChatColors.Red;
+                bonusLines.Add($"{frame}- {grey}{BonusLabel(kv.Key)} {color}{FormatPoints(kv.Value, kv.Value > 0 ? "+" : "-")}");
+            }
+
+            if (bonusLines.Count > 0) {
+                lines.Add($"{frame}Bonus:");
+                lines.AddRange(bonusLines);
+            }
+        }
+
+        char netColor = net > 0 ? ChatColors.Green : net < 0 ? ChatColors.Red : frame;
+        string netText = net == 0 ? "0,0p" : FormatPoints(net, net > 0 ? "+" : "-");
+        player.PrintToChat($"{frame}===[ Damage Report (hits:damage) ]=== {netColor}{netText}");
+        foreach (string line in lines) {
+            player.PrintToChat(line);
         }
     }
 
-    private string BuildHitInfo(
+    // Decimal comma, one decimal, explicit sign: "+2,0p", "-1,0p", "-0,0p".
+    private static string FormatPoints(decimal value, string sign) {
+        return sign + Math.Abs(value).ToString("0.0", CultureInfo.InvariantCulture).Replace('.', ',') + "p";
+    }
+
+    // English, like the rest of the report. Unknown kinds print as-is so a new bonus never
+    // vanishes from the report just because nobody named it here yet.
+    private static string BonusLabel(string kind) {
+        return kind switch {
+            "bomb_plant" => "Bomb planted",
+            "bomb_defuse" => "Bomb defused",
+            "bomb_pickup" => "Bomb picked up",
+            "bomb_drop" => "Bomb dropped",
+            "round_win" => "Round won",
+            "assist" => "Assist",
+            "teamkill_penalty" => "Teamkill",
+            "suicide_penalty" => "Suicide",
+            _ => kind
+        };
+    }
+
+    // Same content as BuildHitInfo, coloured: the list in `zoneColor` (Grey), "Head" in Gold.
+    private string BuildHitInfoColored(
         Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitCounts,
         Dictionary<int, Dictionary<int, Dictionary<int, int>>> hitDamages,
         int a,
         int b,
-        int totalDamage
+        int totalDamage,
+        char zoneColor
     ) {
         if (!hitCounts.ContainsKey(a) || !hitCounts[a].ContainsKey(b)) {
             return "";
@@ -2841,10 +2939,13 @@ public class DamageReport : ModuleBase {
             }
 
             calc += dmg;
-            parts.Add($"{GetHitgroupLabel(hg)} {count}:{dmg}");
+            string label = GetHitgroupLabel(hg);
+            parts.Add(label == "Head"
+                ? $"{ChatColors.Gold}{label} {count}:{dmg}{zoneColor}"
+                : $"{label} {count}:{dmg}");
         }
 
-        string s = " [" + string.Join(", ", parts) + "]";
+        string s = $" {zoneColor}[" + string.Join(", ", parts) + "]";
         if (calc != totalDamage) {
             s += $" [Inconsistent: {totalDamage} != {calc}]";
         }
@@ -2866,6 +2967,7 @@ public class DamageReport : ModuleBase {
         hitsGiven.Clear();
         hitsTaken.Clear();
         killedPlayer.Clear();
+        steamIdByUserId.Clear();
 
         hitboxGiven.Clear();
         hitboxTaken.Clear();

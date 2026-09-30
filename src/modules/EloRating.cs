@@ -25,18 +25,21 @@ namespace OSBase.Modules;
 // result, not a ranking. Ask 11's gates (no bots, no warmup, min_players) replace that
 // tournament window as the reason a kill counts, decided once per round in OnRoundStart.
 //
-// Part one -- RATING (elo_rating, no season, one row per player, never reset). A
-// continuously-updated skill estimate, Elo-style: kills/deaths move it via the existing
-// duel formula, headshots add a bonus proportional to the delta already earned, assists add
-// a small flat reward. "How good is this player" doesn't stop being true in January.
+// Part one -- RATING (elo_rating, keyed by steamid64+season since 2026Q4, see
+// osbase-order-2026Q4.md section 1). A pure zero-sum Elo duel: kills/deaths move it, nothing
+// else does (section 2 -- the old headshot multiplier and the flat assist reward both
+// created rating out of nothing and inflated the field from 1000 to ~3000 in one quarter).
+// Every season starts everyone at start_rating with matches=0; last quarter's rows stay.
 //
 // Part two -- POINTS (elo_points, keyed by steamid64+season, reset every quarter by simply
 // starting a new season string -- no archiving step, same reason every other table in this
 // system uses season-in-the-key instead of cs2rank's table-rename approach: a reset that
 // requires a step is a reset that one day skips the step, and this community's rule is
-// nothing gets deleted). Points for kills scale by the same Elo surprise factor rating
-// itself uses (osbase-elo-contract.md, 2026-08-20), plus flat points for assists and round
-// wins. Earned only by doing things, never by being connected.
+// nothing gets deleted). Since 2026Q4 the formula is the site's PointsFormula (helpers/
+// PointsFormula.cs, values from the site-owned points_formula table): a kill is worth more
+// the higher the victim stands on the season's points board relative to the attacker, rating
+// nudges it +-W, weapon weight multiplies, headshot adds a flat bonus, and a death costs
+// DEATH_SHARE of the attacker's placement base. Everyone starts at START_POINTS.
 //
 // Rating math runs live and synchronously on the game thread (Elo is order-dependent,
 // unlike EventWeekend's commutative point tally, so it can't be queued and applied out of
@@ -85,6 +88,16 @@ public class EloRating : ModuleBase {
     private int topLimit = 10;
     private string adminPermission = "@css/generic";
 
+    // Site-owned points_formula (osbase-order-2026Q4.md section 6), same schema-qualified
+    // config shape as weapon_weight_table below. Re-read at every round start so a change on
+    // /admin/poangformel applies from the next round without a restart. Until a read has
+    // landed (or if the table is unreachable) the formula runs on PointsFormula.Defaults and
+    // every failed read logs an ERROR -- the numbers are the reference values, not a guess,
+    // but the order is explicit that the table is the source of truth.
+    private string pointsFormulaTable = "";
+    private PointsFormula formula = new();
+    private bool formulaLoaded;
+
     // Ask 11: no bots (IsRealPlayer, unchanged), no warmup (hard rule, not configurable --
     // same as DamageReport/TeamBets), min_players (configurable -- nobody knows the right
     // number until real data exists). Decided once per round in OnRoundStart, held for the
@@ -93,39 +106,14 @@ public class EloRating : ModuleBase {
     private int minPlayers = 4;
     private bool statsGateOpen;
 
-    // Rating formula extensions -- calibration guesses, config values because nobody has
-    // real numbers yet (same reasoning as min_players).
-    private double headshotBonusPct = 0.20;
-    private int assistReward = 5;
-
-    // Found 2026-08-04, per direct user ask (old CS:Source gave -1 on the scoreboard for
-    // these): teamkill/suicide penalties. Corrected same day after agent-chat #18: NOT
-    // rating -- elo_rating feeds LAN team-balancing (TeamBalancer, balancer_skill_source
-    // "elo"), so docking it for a teamkill would make the balancer think the player is
-    // worse than they are and build lopsided teams from a punishment that has nothing to do
-    // with skill. Points instead: this is now a deliberate, documented exception to "points
-    // never go down" (see the Points section below), not a silent violation of it -- teamkill
-    // costs the team a player AND is someone else's fault; a suicide already punishes itself
-    // (dead, team a man short) and costs less. Negative by convention -- stored and applied
-    // as-is, never Math.Abs'd, so a config typo (a positive value here) fails loudly as a
-    // reward instead of silently doing nothing.
-    private int teamkillPointsPenalty = -10;
-    private int suicidePointsPenalty = -5;
-
-    // Points formula (osbase-elo-contract.md, "the clamped ratio is the wrong shape for
-    // points", ask received 2026-08-20): points = pointsBase * (1 - expectedAttacker)^
-    // pointsExponent * weaponWeight. expectedAttacker is rating's own Elo win-probability --
-    // reused rather than recomputed, since it's already sitting there when a kill is scored.
-    // Replaces the old clamp(victimRating/attackerRating, 0.5, 2.0) shape: measured live, that
-    // clamp only ever produced a 1.8x spread between best/worst matchup because a mostly-even
-    // server almost never reaches its 4x ceiling, while rating's own spread on the same data
-    // was 11x. This formula mirrors rating's spread instead of inventing a second one.
-    // weaponWeight still multiplies in last, unchanged reasoning from before: it bounds what
-    // the WEAPON is worth, which has nothing to do with how surprising the kill was.
-    private double pointsBase = 20.0;
-    private double pointsExponent = 1.0;
-    private double pointsAssistFraction = 0.3;
-    private int pointsPerRoundWin = 2;
+    // Teamkill/suicide POINTS penalties (never rating -- rating feeds the LAN balancer, and
+    // shooting a teammate says nothing about aim). Both default to 0 since 2026Q4
+    // (osbase-order-2026Q4.md 4c: suicide/fall/world = no points change; teamkill = owner's
+    // decision pending, default nothing). Kept as config so the owner can flip either on
+    // without a rebuild. Negative by convention -- applied as-is, never Math.Abs'd, so a
+    // positive value fails loudly as a reward instead of silently doing nothing.
+    private int teamkillPointsPenalty = 0;
+    private int suicidePointsPenalty = 0;
 
     // Site-owned (OSWeb's weapon_point_weight, migration 0243) -- OSWeb and OSBase are
     // separate database schemas, not one shared database, so this must be schema-qualified in
@@ -156,8 +144,43 @@ public class EloRating : ModuleBase {
     // decimal, not int -- see the DECIMAL(12,4) comment on ratingTable above. Every duel
     // delta accumulates here at full precision; rounding only happens where a value is
     // about to be displayed (TryGetRating, the leaderboard queries, ShowRankCommand).
-    private readonly Dictionary<ulong, decimal> liveRating = new();
-    private readonly Dictionary<ulong, int> liveMatches = new();
+    // Keyed by (steamid64, season) since 2026Q4 -- a new season is simply a new key that
+    // seeds at start_rating/0 matches. The previous season's final row is read separately
+    // (TryGetBalancingRating) and never written again.
+    private readonly Dictionary<(ulong SteamId64, string Season), decimal> liveRating = new();
+    private readonly Dictionary<(ulong SteamId64, string Season), int> liveMatches = new();
+
+    // Last season's final (rating, matches) per player, read once and cached; null entry =
+    // looked up, no row. Only the balancer read path uses it.
+    private readonly Dictionary<ulong, (decimal Rating, int Matches)?> previousSeasonRating = new();
+
+    // The attacker's kills this season BEFORE the current one -- the "värnplikt" counter
+    // (PointsFormula.WarmupKills). Seeded once per (player, season) from elo_kill_event rows
+    // stamped inside the season, then kept live. Counts scored duels only (teamkills and
+    // suicides never reach the duel path), which is exactly what acceptance check 1 in the
+    // order counts: elo_kill_event rows with this player as attacker.
+    private readonly Dictionary<(ulong SteamId64, string Season), int> liveKills = new();
+
+    // Points-board placement snapshot, taken once at map start (order section 3: "Placering
+    // vid mappstart, inte live"). Standard competition ranking (1, 2, 2, 4); a player without
+    // a row this season stands at boardSize + 1. Refreshed asynchronously; until the first
+    // snapshot has landed on a fresh load, boardSize is 0 and Base() degrades to EVEN.
+    private readonly Dictionary<ulong, int> placeAtMapStart = new();
+    private int boardSizeAtMapStart;
+    private string placementSeason = "";
+
+    // Round-scoped ledger mirror for DamageReport's per-round points (order section 8):
+    // what each (attacker, victim) pair earned/lost this round and each player's bonus rows
+    // by kind. Cleared on round start. Read-only from outside via the public accessors.
+    private readonly Dictionary<(ulong Attacker, ulong Victim), (decimal AttackerDelta, decimal VictimDelta)> roundKillPoints = new();
+    private readonly Dictionary<ulong, Dictionary<string, decimal>> roundBonusPoints = new();
+
+    // bomb_pickup also fires when the round hands a T the bomb at spawn ("Spawna med bomben:
+    // ingen bonus"). A pickup only pays after a bomb_dropped has happened this round.
+    private int roundBombDrops;
+
+    // Who has died this round (any cause) -- OnBombDropped's alive check, see there.
+    private readonly HashSet<ulong> diedThisRound = new();
 
     // Same idea as liveRating -- an authoritative in-memory running total, seeded once per
     // (player, season) straight from the DB, kept in sync on every award. Needed so
@@ -208,7 +231,7 @@ public class EloRating : ModuleBase {
 
     private readonly List<PendingKillEvent> pendingKillEvents = new();
     private readonly List<PendingBonusEvent> pendingBonusEvents = new();
-    private readonly Dictionary<ulong, PendingRating> pendingRatings = new();
+    private readonly Dictionary<(ulong SteamId64, string Season), PendingRating> pendingRatings = new();
     private readonly Dictionary<(ulong SteamId64, string Season), PendingPoints> pendingPoints = new();
 
     private sealed class PendingKillEvent {
@@ -225,6 +248,17 @@ public class EloRating : ModuleBase {
         public decimal VictimDelta { get; init; }
         public string Weapon { get; init; } = "";
         public bool Headshot { get; init; }
+        // 2026Q4 columns (osbase-order-2026Q4.md section 7). VictimPointsDelta is <= 0, the
+        // clipped value that was actually applied. Places/board size are the map-start
+        // snapshot the kill was priced against. InAir/InWater are nullable on purpose: NULL
+        // means "couldn't read it", false means "stood on the ground/dry".
+        public decimal VictimPointsDelta { get; init; }
+        public int AttackerPlace { get; init; }
+        public int VictimPlace { get; init; }
+        public int BoardSize { get; init; }
+        public int RoundNo { get; init; }
+        public bool? AttackerInAir { get; init; }
+        public bool? AttackerInWater { get; init; }
         // Found 2026-08-04 (agent-chat #13/#15): what the victim held, not just the murder
         // weapon -- Weapon above. Nullable: a victim who spawned and died before their first
         // EventItemEquip/Purchase/Pickup has no tracked value yet, which is a real "unknown",
@@ -241,6 +275,8 @@ public class EloRating : ModuleBase {
     // so RatingDelta is 0 for it. RelatedAttacker/VictimSteamId64 are null for round_win
     // (no duel to point back to); populated for assist so the row it grew out of is
     // traceable, same "save what it was built on" precedent as PendingKillEvent.
+    // RatingDelta is always 0 since 2026Q4 (bonuses never touch rating -- order section 2);
+    // the column stays so old assist rows remain readable.
     private sealed class PendingBonusEvent {
         public required string Kind;
         public required ulong SteamId64;
@@ -250,6 +286,7 @@ public class EloRating : ModuleBase {
         public required string Season;
         public required string MapName;
         public int? MatchId;
+        public int RoundNo;
         public ulong? RelatedAttackerSteamId64;
         public ulong? RelatedVictimSteamId64;
         public required DateTime Stamp;
@@ -284,6 +321,10 @@ public class EloRating : ModuleBase {
         CreateTables();
         StartMatchWindowTimer();
         StartWeaponWeightTimer();
+        RefreshPointsFormula("Load");
+        // A hot load mid-map still needs a placement snapshot -- "at map start" means "the
+        // board as it stood when this map's scoring began", and for a reload that's now.
+        RefreshPlacement("Load");
     }
 
     protected override void OnUnload() {
@@ -295,7 +336,18 @@ public class EloRating : ModuleBase {
 
         liveRating.Clear();
         liveMatches.Clear();
+        liveKills.Clear();
+        livePoints.Clear();
+        previousSeasonRating.Clear();
+        placeAtMapStart.Clear();
+        boardSizeAtMapStart = 0;
+        placementSeason = "";
+        roundKillPoints.Clear();
+        roundBonusPoints.Clear();
+        diedThisRound.Clear();
         weaponWeightRules.Clear();
+        formula = new PointsFormula();
+        formulaLoaded = false;
         currentMatchId = null;
         db?.Shutdown();
         db = null;
@@ -311,6 +363,7 @@ public class EloRating : ModuleBase {
         // window's fixed interval -- restart so a changed table name or TTL takes effect
         // without a full plugin reload.
         StartWeaponWeightTimer();
+        RefreshPointsFormula("ReloadConfig");
     }
 
     protected override void RegisterHandlers() {
@@ -321,6 +374,10 @@ public class EloRating : ModuleBase {
         osbase?.SubscribeToEvent<EventItemEquip>(OnItemEquip);
         osbase?.SubscribeToEvent<EventItemPurchase>(OnItemPurchase);
         osbase?.SubscribeToEvent<EventItemPickup>(OnItemPickup);
+        osbase?.SubscribeToEvent<EventBombPlanted>(OnBombPlanted);
+        osbase?.SubscribeToEvent<EventBombDefused>(OnBombDefused);
+        osbase?.SubscribeToEvent<EventBombPickup>(OnBombPickup);
+        osbase?.SubscribeToEvent<EventBombDropped>(OnBombDropped);
         osbase?.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         osbase?.AddCommand("css_elo_top", "Shows the Elo rating leaderboard", OnEloTopCommand);
         osbase?.AddCommand("css_elo_points_top", "Shows this season's Elo points leaderboard", OnEloPointsTopCommand);
@@ -336,6 +393,10 @@ public class EloRating : ModuleBase {
         osbase?.UnsubscribeFromEvent<EventItemEquip>(OnItemEquip);
         osbase?.UnsubscribeFromEvent<EventItemPurchase>(OnItemPurchase);
         osbase?.UnsubscribeFromEvent<EventItemPickup>(OnItemPickup);
+        osbase?.UnsubscribeFromEvent<EventBombPlanted>(OnBombPlanted);
+        osbase?.UnsubscribeFromEvent<EventBombDefused>(OnBombDefused);
+        osbase?.UnsubscribeFromEvent<EventBombPickup>(OnBombPickup);
+        osbase?.UnsubscribeFromEvent<EventBombDropped>(OnBombDropped);
         osbase?.RemoveListener<Listeners.OnMapStart>(OnMapStart);
         osbase?.RemoveCommand("css_elo_top", OnEloTopCommand);
         osbase?.RemoveCommand("css_elo_points_top", OnEloPointsTopCommand);
@@ -361,6 +422,16 @@ public class EloRating : ModuleBase {
         // holding the same thing, and clearing it would read as "unknown" for a kill that
         // happens before their first EventItemEquip of the new round.
         bestWeaponThisRound.Clear();
+
+        // Per-round ledger mirror for DamageReport, and the spawn-bomb pickup filter.
+        roundKillPoints.Clear();
+        roundBonusPoints.Clear();
+        roundBombDrops = 0;
+        diedThisRound.Clear();
+
+        // Order section 6: "Läs vid rondstart" -- an admin's change on /admin/poangformel
+        // applies from the next round, no restart.
+        RefreshPointsFormula("RoundStart");
 
         // osbase-stat-contracts.md section 5's flush-on-the-way-out requirement: guarantees
         // a fast round never lets more than one round's worth of writes queue up behind the
@@ -456,28 +527,21 @@ public class EloRating : ModuleBase {
             "provisional_matches 30\n" +
             "start_rating 1000\n" +
             "top_limit 10\n" +
-            "// Rating formula extensions -- calibration guesses, nobody has real numbers yet.\n" +
-            "headshot_bonus_pct 0.20\n" +
-            "assist_reward 5\n" +
-            "// Teamkill/suicide POINTS penalties (old CS:Source gave -1 on the scoreboard for\n" +
-            "// these; this is the Elo-side equivalent). Deliberately not rating -- see the\n" +
-            "// field comment. Negative values -- do not flip the sign here, that would turn a\n" +
-            "// penalty into a reward.\n" +
-            "teamkill_points_penalty -10\n" +
-            "suicide_points_penalty -5\n" +
-            "// Points formula (elo_points, resets every season) -- points = points_base *\n" +
-            "// (1 - expectedAttacker)^points_exponent, the same Elo surprise factor rating\n" +
-            "// itself uses. points_exponent 1.0 is the baseline curve; higher rewards\n" +
-            "// top-vs-top kills more steeply.\n" +
-            "points_base 20.0\n" +
-            "points_exponent 1.0\n" +
-            "points_assist_fraction 0.3\n" +
-            "points_per_round_win 2\n" +
-            "// Weapon weight multiplier on kill POINTS only (never rating), applied after the\n" +
-            "// ratio clamp above. Site-owned (OSWeb's weapon_point_weight) -- OSWeb and OSBase\n" +
-            "// are separate database schemas, so this must be schema-qualified (e.g.\n" +
+            "// Teamkill/suicide POINTS penalties. 0 = off (2026Q4 default: a suicide costs\n" +
+            "// nothing, teamkill awaits the owner's decision). Negative values only -- do not\n" +
+            "// flip the sign here, that would turn a penalty into a reward.\n" +
+            "teamkill_points_penalty 0\n" +
+            "suicide_points_penalty 0\n" +
+            "// Points formula values (START_POINTS, EVEN, TOP, ... see osbase-order-2026Q4.md\n" +
+            "// section 6). Site-owned points_formula, synced into our database by OSWeb --\n" +
+            "// schema-qualified like weapon_weight_table below. Re-read every round start.\n" +
+            "// Empty = run on the reference defaults and log an error every round.\n" +
+            "points_formula_table \"\"\n" +
+            "// Weapon weight multiplier on kill POINTS only (never rating). Site-owned\n" +
+            "// (OSWeb's weapon_point_weight) -- OSWeb and OSBase are separate database\n" +
+            "// schemas, so this must be schema-qualified (e.g.\n" +
             "// \"oldswedes.weapon_point_weight\"; dev/prod schema names differ). Empty disables\n" +
-            "// weighting -- every kill prices exactly as before this existed.\n" +
+            "// weighting -- every kill prices at weight 1.00.\n" +
             "weapon_weight_table \"\"\n" +
             "weapon_weight_refresh_seconds 60\n" +
             "admin_permission \"@css/generic\"\n"
@@ -496,14 +560,9 @@ public class EloRating : ModuleBase {
         provisionalMatches = 30;
         startRating = 1000;
         topLimit = 10;
-        headshotBonusPct = 0.20;
-        assistReward = 5;
-        teamkillPointsPenalty = -10;
-        suicidePointsPenalty = -5;
-        pointsBase = 20.0;
-        pointsExponent = 1.0;
-        pointsAssistFraction = 0.3;
-        pointsPerRoundWin = 2;
+        teamkillPointsPenalty = 0;
+        suicidePointsPenalty = 0;
+        pointsFormulaTable = "";
         weaponWeightTable = "";
         weaponWeightRefreshSeconds = 60;
         adminPermission = "@css/generic";
@@ -559,34 +618,19 @@ public class EloRating : ModuleBase {
                 case "min_players":
                     minPlayers = ParseInt(value, 4, 0, 64);
                     break;
-                case "headshot_bonus_pct":
-                    headshotBonusPct = ParseDouble(value, 0.20, 0.0, 5.0);
-                    break;
-                case "assist_reward":
-                    assistReward = ParseInt(value, 5, 0, 1000);
-                    break;
                 case "teamkill_points_penalty":
-                    teamkillPointsPenalty = ParseInt(value, -10, -1000, 0);
+                    teamkillPointsPenalty = ParseInt(value, 0, -1000, 0);
                     break;
                 case "suicide_points_penalty":
-                    suicidePointsPenalty = ParseInt(value, -5, -1000, 0);
+                    suicidePointsPenalty = ParseInt(value, 0, -1000, 0);
                     break;
-                case "points_base":
-                    pointsBase = ParseDouble(value, 20.0, 0.0, 10000.0);
+                case "points_formula_table":
+                    pointsFormulaTable = value;
                     break;
-                case "points_exponent":
-                    pointsExponent = ParseDouble(value, 1.0, 0.0, 10.0);
-                    break;
-                // Deprecated 2026-08-20 (replaced by points_base/points_exponent above) --
-                // deliberately not a case here so an already-deployed elorating.cfg with these
-                // lines falls into the "unknown config key" warning below and gets noticed,
-                // rather than being silently accepted and ignored.
-                case "points_assist_fraction":
-                    pointsAssistFraction = ParseDouble(value, 0.3, 0.0, 5.0);
-                    break;
-                case "points_per_round_win":
-                    pointsPerRoundWin = ParseInt(value, 2, 0, 10000);
-                    break;
+                // Retired 2026Q4 (headshot_bonus_pct, assist_reward, points_base,
+                // points_exponent, points_assist_fraction, points_per_round_win) --
+                // deliberately not cases here so an already-deployed elorating.cfg with these
+                // lines falls into the "unknown config key" warning below and gets noticed.
                 case "weapon_weight_table":
                     weaponWeightTable = value;
                     break;
@@ -605,6 +649,15 @@ public class EloRating : ModuleBase {
         if (string.IsNullOrWhiteSpace(host)) {
             Console.WriteLine($"[WARN] OSBase[{ModuleName}]: host is empty -- no tournament_match row can ever match this server, module will stay inert until it's set.");
         }
+
+        // Both of these being empty is the single most likely reason "the weights are not
+        // applied" (order section 5) -- say so at load, not only when a kill prices wrong.
+        if (string.IsNullOrWhiteSpace(weaponWeightTable)) {
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}]: weapon_weight_table is empty -- weapon weighting is OFF, every kill prices at 1.00.");
+        }
+        if (string.IsNullOrWhiteSpace(pointsFormulaTable)) {
+            Console.WriteLine($"[WARN] OSBase[{ModuleName}]: points_formula_table is empty -- running on PointsFormula.Defaults, the site's admin page has no effect here.");
+        }
     }
 
     // ----- tables (OSBase-owned; tournament_match is not created here, it belongs to the site) -----
@@ -614,10 +667,10 @@ public class EloRating : ModuleBase {
             return;
         }
 
-        // Part one: rating. No season -- a continuously-updated skill estimate that never
-        // resets, unlike points below. Season would belong here only if rating itself reset
-        // quarterly, and it deliberately doesn't ("how good is this player" doesn't stop
-        // being true in January).
+        // Part one: rating. season joined the key in 2026Q4 (osbase-order-2026Q4.md section
+        // 1): the rating resets to start_rating every quarter and last quarter's final row
+        // stays put -- same lifecycle as points now. EnsureRatingSeason() migrates a live
+        // pre-2026Q4 table in place.
         //
         // DECIMAL(12,4), not INT (found 2026-08-04, user's own review of ELO-MODULE.md):
         // rounding each duel's delta to a whole number before accumulating silently floors
@@ -631,11 +684,12 @@ public class EloRating : ModuleBase {
         string ratingTable = $"""
         TABLE IF NOT EXISTS {RatingTable} (
             steamid64  VARCHAR(32) NOT NULL,
+            season     VARCHAR(8) NOT NULL,
             name       VARCHAR(64) NOT NULL,
             rating     DECIMAL(12,4) NOT NULL,
             matches    INT NOT NULL DEFAULT 0,
             updated_at DATETIME NOT NULL,
-            PRIMARY KEY (steamid64)
+            PRIMARY KEY (steamid64, season)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
@@ -707,8 +761,16 @@ public class EloRating : ModuleBase {
             headshot               TINYINT(1) NOT NULL DEFAULT 0,
             victim_active_weapon   VARCHAR(32) NULL,
             victim_best_weapon     VARCHAR(32) NULL,
+            victim_points_delta    DECIMAL(12,2) NOT NULL DEFAULT 0,
+            attacker_place         INT NULL,
+            victim_place           INT NULL,
+            board_size             INT NULL,
+            round_no               INT NULL,
+            attacker_in_air        TINYINT(1) NULL,
+            attacker_in_water      TINYINT(1) NULL,
             PRIMARY KEY (id),
-            INDEX idx_elo_kill_event (match_id, stamp)
+            INDEX idx_elo_kill_event (match_id, stamp),
+            INDEX idx_elo_kill_event_attacker (attackerid64, stamp)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         """;
 
@@ -733,6 +795,7 @@ public class EloRating : ModuleBase {
             points_delta             DECIMAL(12,2) NOT NULL DEFAULT 0,
             related_attacker_id64    VARCHAR(32) NULL,
             related_victim_id64      VARCHAR(32) NULL,
+            round_no                 INT NULL,
             PRIMARY KEY (id),
             INDEX idx_elo_bonus_event (match_id, stamp)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -743,9 +806,104 @@ public class EloRating : ModuleBase {
             db.create(pointsTable);
             db.create(killEventTable);
             db.create(bonusEventTable);
+
+            // 2026Q4 migrations against already-deployed tables (CREATE IF NOT EXISTS is a
+            // no-op there). Same EnsureColumn pattern as DamageReport/ServerInfo/TeamBets.
+            EnsureRatingSeason();
+            EnsureColumn(KillEventTable, "victim_points_delta", "DECIMAL(12,2) NOT NULL DEFAULT 0");
+            EnsureColumn(KillEventTable, "attacker_place", "INT NULL");
+            EnsureColumn(KillEventTable, "victim_place", "INT NULL");
+            EnsureColumn(KillEventTable, "board_size", "INT NULL");
+            EnsureColumn(KillEventTable, "round_no", "INT NULL");
+            EnsureColumn(KillEventTable, "attacker_in_air", "TINYINT(1) NULL");
+            EnsureColumn(KillEventTable, "attacker_in_water", "TINYINT(1) NULL");
+            EnsureIndex(KillEventTable, "idx_elo_kill_event_attacker", "(attackerid64, stamp)");
+            EnsureColumn(BonusEventTable, "round_no", "INT NULL");
+
             Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] tables ensured.");
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed creating tables: {e.Message}");
+        }
+    }
+
+    // Every row that exists before this migration belongs to 2026Q3: Elo went live on
+    // 2026-08-07 and this code ships for the 2026Q4 season start. A constant rather than
+    // "the quarter of updated_at" on purpose -- a player whose last duel landed after
+    // midnight Oct 1 under the old plugin still carries a Q3 rating, and labelling that row
+    // Q4 would both lose their Q3 final and start their Q4 at ~3000 instead of 1000.
+    private const string PreSeasonSplitSeason = "2026Q3";
+
+    // Safe against the table's writer by construction, not timing: CreateTables() runs from
+    // OnLoad before RegisterHandlers, and a hot reload has already unloaded/flushed the old
+    // handlers (same argument as DamageReport.EnsureEndReasonInPrimaryKey). One ALTER so the
+    // column and the key change land together.
+    private void EnsureRatingSeason() {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            DataTable existing = db.select(
+                "column_name FROM information_schema.columns " +
+                "WHERE table_schema = DATABASE() AND table_name = @table AND column_name = 'season'",
+                new MySqlParameter("@table", RatingTable)
+            );
+
+            if (existing.Rows.Count == 0) {
+                db.alter(
+                    $"TABLE {RatingTable} " +
+                    $"ADD COLUMN season VARCHAR(8) NOT NULL DEFAULT '{PreSeasonSplitSeason}' AFTER steamid64, " +
+                    "DROP PRIMARY KEY, " +
+                    "ADD PRIMARY KEY (steamid64, season)"
+                );
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Migrated {RatingTable}: season added to the primary key, existing rows tagged {PreSeasonSplitSeason}.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error migrating {RatingTable} to (steamid64, season): {e.Message}");
+        }
+    }
+
+    private void EnsureColumn(string table, string column, string definition) {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            DataTable existing = db.select(
+                "column_name FROM information_schema.columns " +
+                "WHERE table_schema = DATABASE() AND table_name = @table AND column_name = @column",
+                new MySqlParameter("@table", table),
+                new MySqlParameter("@column", column)
+            );
+
+            if (existing.Rows.Count == 0) {
+                db.alter($"TABLE {table} ADD COLUMN {column} {definition}");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Added missing column {table}.{column}.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error ensuring column {table}.{column}: {e.Message}");
+        }
+    }
+
+    private void EnsureIndex(string table, string index, string columns) {
+        if (db == null) {
+            return;
+        }
+
+        try {
+            DataTable existing = db.select(
+                "index_name FROM information_schema.statistics " +
+                "WHERE table_schema = DATABASE() AND table_name = @table AND index_name = @index",
+                new MySqlParameter("@table", table),
+                new MySqlParameter("@index", index)
+            );
+
+            if (existing.Rows.Count == 0) {
+                db.alter($"TABLE {table} ADD INDEX {index} {columns}");
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] - Added missing index {table}.{index}.");
+            }
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] - Error ensuring index {table}.{index}: {e.Message}");
         }
     }
 
@@ -958,31 +1116,202 @@ public class EloRating : ModuleBase {
         return 1.0;
     }
 
-    // ----- rating seed: synchronous, once per player, only on the kill path that needs it -----
+    // ----- points formula: site-owned points_formula -> PointsFormula, re-read every round -----
 
-    private void SeedRating(ulong steamId64) {
-        if (db == null || liveRating.ContainsKey(steamId64)) {
+    private void RefreshPointsFormula(string source) {
+        var database = db;
+        if (!isActive || database == null) {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(pointsFormulaTable)) {
+            // Already warned at load. Not every round -- that would be 16 identical lines an
+            // evening for a config that isn't going to change until someone edits it.
+            return;
+        }
+
+        Task.Run(() => {
+            bool ok = database.trySelect($"name, value FROM {pointsFormulaTable}", out DataTable table);
+
+            Dictionary<string, double>? values = null;
+            if (ok) {
+                values = new Dictionary<string, double>(table.Rows.Count);
+                foreach (DataRow row in table.Rows) {
+                    string name = row["name"]?.ToString()?.Trim() ?? "";
+                    if (name.Length > 0 && row["value"] != DBNull.Value) {
+                        values[name] = Convert.ToDouble(row["value"]);
+                    }
+                }
+            }
+
+            Server.NextFrame(() => {
+                if (!ok || values == null) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] points_formula read failed ({source}) against '{pointsFormulaTable}'; keeping {(formulaLoaded ? "the last loaded values" : "PointsFormula.Defaults")}.");
+                    return;
+                }
+
+                foreach (var name in PointsFormula.Defaults.Keys) {
+                    if (!values.ContainsKey(name)) {
+                        Console.WriteLine($"[WARN] OSBase[{ModuleName}] points_formula ({source}) has no row for {name} -- using the default {PointsFormula.Defaults[name]}.");
+                    }
+                }
+
+                var next = new PointsFormula(values);
+                bool changed = !formulaLoaded || next.Values.Any(kv => formula.Value(kv.Key) != kv.Value);
+                formula = next;
+                formulaLoaded = true;
+
+                if (changed) {
+                    Console.WriteLine($"[INFO] OSBase[{ModuleName}] points_formula ({source}): " +
+                        string.Join(" ", formula.Values.Select(kv => $"{kv.Key}={kv.Value.ToString(CultureInfo.InvariantCulture)}")));
+                }
+            });
+        });
+    }
+
+    // ----- placement: the season's points board as it stood at map start -----
+
+    // Order section 3: place = position on the season's points list at MAP START, standard
+    // competition ranking on ties (1, 2, 2, 4), N = players with an elo_points row this
+    // season, no row = N + 1. Read once per map (and on load), held for the whole map. Async,
+    // like every other read here; a kill before the snapshot lands on a fresh map prices at
+    // board size 0 (Base() -> EVEN), which is also what an empty first-map-of-the-season
+    // board gives -- correct, not a fallback.
+    private void RefreshPlacement(string source) {
+        var database = db;
+        if (!isActive || database == null) {
+            return;
+        }
+
+        string season = CurrentSeason();
+
+        Task.Run(() => {
+            bool ok = database.trySelect(
+                $"steamid64, points FROM {PointsTable} WHERE season=@season ORDER BY points DESC",
+                out DataTable table,
+                new MySqlParameter("@season", season)
+            );
+
+            var places = new Dictionary<ulong, int>();
+            if (ok) {
+                int place = 0;
+                int rank = 0;
+                decimal? previous = null;
+                foreach (DataRow row in table.Rows) {
+                    rank++;
+                    decimal points = Convert.ToDecimal(row["points"]);
+                    if (previous == null || points != previous.Value) {
+                        place = rank;
+                        previous = points;
+                    }
+
+                    if (TryGetUInt64(row["steamid64"], out ulong steamId64)) {
+                        places[steamId64] = place;
+                    }
+                }
+            }
+
+            Server.NextFrame(() => {
+                if (!ok) {
+                    Console.WriteLine($"[ERROR] OSBase[{ModuleName}] placement snapshot failed ({source}); keeping the previous snapshot ({placeAtMapStart.Count} players, N={boardSizeAtMapStart}).");
+                    return;
+                }
+
+                placeAtMapStart.Clear();
+                foreach (var kv in places) {
+                    placeAtMapStart[kv.Key] = kv.Value;
+                }
+                boardSizeAtMapStart = places.Count;
+                placementSeason = season;
+                Console.WriteLine($"[INFO] OSBase[{ModuleName}] placement snapshot ({source}): season={season} N={boardSizeAtMapStart}");
+            });
+        });
+    }
+
+    private int PlaceOf(ulong steamId64) {
+        return placeAtMapStart.TryGetValue(steamId64, out int place) ? place : boardSizeAtMapStart + 1;
+    }
+
+    // ----- rating seed: synchronous, once per (player, season), only on the kill path that needs it -----
+
+    private void SeedRating(ulong steamId64, string season) {
+        var key = (steamId64, season);
+        if (db == null || liveRating.ContainsKey(key)) {
             return;
         }
 
         try {
             DataTable table = db.select(
-                $"rating, matches FROM {RatingTable} WHERE steamid64=@id",
-                new MySqlParameter("@id", steamId64.ToString())
+                $"rating, matches FROM {RatingTable} WHERE steamid64=@id AND season=@season",
+                new MySqlParameter("@id", steamId64.ToString()),
+                new MySqlParameter("@season", season)
             );
 
             if (table.Rows.Count > 0) {
-                liveRating[steamId64] = Convert.ToDecimal(table.Rows[0]["rating"]);
-                liveMatches[steamId64] = Convert.ToInt32(table.Rows[0]["matches"]);
+                liveRating[key] = Convert.ToDecimal(table.Rows[0]["rating"]);
+                liveMatches[key] = Convert.ToInt32(table.Rows[0]["matches"]);
             } else {
-                liveRating[steamId64] = startRating;
-                liveMatches[steamId64] = 0;
+                liveRating[key] = startRating;
+                liveMatches[key] = 0;
             }
         } catch (Exception e) {
-            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed seeding rating for {steamId64}: {e.Message}");
-            liveRating[steamId64] = startRating;
-            liveMatches[steamId64] = 0;
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed seeding rating for {steamId64}/{season}: {e.Message}");
+            liveRating[key] = startRating;
+            liveMatches[key] = 0;
         }
+    }
+
+    // The attacker's scored kills this season so far -- elo_kill_event rows as attacker,
+    // stamped inside the season. stamp is the DB server's NOW(), the season range is UTC;
+    // the mismatch is at most the server's UTC offset around the quarter boundary, which
+    // only matters for a player sitting exactly at WARMUP_KILLS at midnight on day one.
+    private void SeedKills(ulong steamId64, string season) {
+        var key = (steamId64, season);
+        if (db == null || liveKills.ContainsKey(key)) {
+            return;
+        }
+
+        try {
+            var (start, end) = SeasonHelper.Range(season);
+            DataTable table = db.select(
+                $"COUNT(*) AS cnt FROM {KillEventTable} WHERE attackerid64=@id AND stamp >= @start AND stamp < @end",
+                new MySqlParameter("@id", steamId64.ToString()),
+                new MySqlParameter("@start", start),
+                new MySqlParameter("@end", end)
+            );
+
+            liveKills[key] = table.Rows.Count > 0 ? Convert.ToInt32(table.Rows[0]["cnt"]) : 0;
+        } catch (Exception e) {
+            Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed seeding kill count for {steamId64}/{season}: {e.Message}");
+            liveKills[key] = 0;
+        }
+    }
+
+    private (decimal Rating, int Matches)? PreviousSeasonFinal(ulong steamId64, string season) {
+        if (previousSeasonRating.TryGetValue(steamId64, out var cached)) {
+            return cached;
+        }
+
+        (decimal, int)? result = null;
+        string? previous = SeasonHelper.PreviousSeason(season);
+        if (db != null && previous != null) {
+            try {
+                DataTable table = db.select(
+                    $"rating, matches FROM {RatingTable} WHERE steamid64=@id AND season=@season",
+                    new MySqlParameter("@id", steamId64.ToString()),
+                    new MySqlParameter("@season", previous)
+                );
+
+                if (table.Rows.Count > 0) {
+                    result = (Convert.ToDecimal(table.Rows[0]["rating"]), Convert.ToInt32(table.Rows[0]["matches"]));
+                }
+            } catch (Exception e) {
+                Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed reading {previous} rating for {steamId64}: {e.Message}");
+            }
+        }
+
+        previousSeasonRating[steamId64] = result;
+        return result;
     }
 
     // Public read for other modules (TeamBets, for its bet log's match_id column) -- tag
@@ -1006,16 +1335,73 @@ public class EloRating : ModuleBase {
             return false;
         }
 
-        SeedRating(steamId64);
+        string season = CurrentSeason();
+        SeedRating(steamId64, season);
 
-        if (!liveRating.TryGetValue(steamId64, out decimal exact)) {
+        if (!liveRating.TryGetValue((steamId64, season), out decimal exact)) {
             return false;
         }
 
         rating = (int)Math.Round(exact, MidpointRounding.AwayFromZero);
-        matches = liveMatches.GetValueOrDefault(steamId64, 0);
+        matches = liveMatches.GetValueOrDefault((steamId64, season), 0);
         return true;
     }
+
+    // The balancer's read (order sections 1 and 13): this season's rating once the player has
+    // cleared the provisional gate, otherwise last season's final if there is one, otherwise
+    // this season's (start_rating, 0) -- which the caller treats as "unknown, use the
+    // median". matches is the matches of whichever row was used, so a caller comparing
+    // against min_rated_matches sees last season's count when last season is what it got.
+    public bool TryGetBalancingRating(ulong steamId64, out int rating, out int matches, out string sourceSeason) {
+        sourceSeason = CurrentSeason();
+        if (!TryGetRating(steamId64, out rating, out matches)) {
+            return false;
+        }
+
+        if (matches >= provisionalMatches) {
+            return true;
+        }
+
+        var previous = PreviousSeasonFinal(steamId64, sourceSeason);
+        if (previous.HasValue && previous.Value.Matches > matches) {
+            rating = (int)Math.Round(previous.Value.Rating, MidpointRounding.AwayFromZero);
+            matches = previous.Value.Matches;
+            sourceSeason = SeasonHelper.PreviousSeason(sourceSeason) ?? sourceSeason;
+        }
+
+        return true;
+    }
+
+    // ----- per-round ledger mirror, read by DamageReport (order section 8) -----
+
+    public bool TryGetRoundKillPoints(ulong attackerSteamId64, ulong victimSteamId64, out decimal attackerDelta, out decimal victimDelta) {
+        attackerDelta = 0m;
+        victimDelta = 0m;
+        if (!roundKillPoints.TryGetValue((attackerSteamId64, victimSteamId64), out var deltas)) {
+            return false;
+        }
+
+        attackerDelta = deltas.AttackerDelta;
+        victimDelta = deltas.VictimDelta;
+        return true;
+    }
+
+    public IReadOnlyDictionary<string, decimal> GetRoundBonusPoints(ulong steamId64) {
+        return roundBonusPoints.TryGetValue(steamId64, out var bonuses)
+            ? bonuses
+            : new Dictionary<string, decimal>();
+    }
+
+    private void RecordRoundBonus(ulong steamId64, string kind, decimal points) {
+        if (!roundBonusPoints.TryGetValue(steamId64, out var bonuses)) {
+            bonuses = new Dictionary<string, decimal>();
+            roundBonusPoints[steamId64] = bonuses;
+        }
+
+        bonuses[kind] = bonuses.GetValueOrDefault(kind, 0m) + points;
+    }
+
+    private int RoundNo => gameStats?.roundNumber ?? 0;
 
     // ----- scoring -----
 
@@ -1029,6 +1415,10 @@ public class EloRating : ModuleBase {
 
         var attacker = eventInfo.Attacker;
         var victim = eventInfo.Userid;
+
+        if (victim != null && victim.IsValid && victim.SteamID != 0) {
+            diedThisRound.Add(victim.SteamID);
+        }
 
         // Found 2026-08-04, per direct user ask: world-damage suicide (fall, drowning, ...)
         // reports no attacker at all, so it has to be caught here -- the real-player check
@@ -1065,111 +1455,41 @@ public class EloRating : ModuleBase {
             return HookResult.Continue;
         }
 
-        SeedRating(attackerSteamId64);
-        SeedRating(victimSteamId64);
-
-        decimal attackerRating = liveRating[attackerSteamId64];
-        decimal victimRating = liveRating[victimSteamId64];
-        int attackerMatches = liveMatches[attackerSteamId64];
-        int victimMatches = liveMatches[victimSteamId64];
-
-        // Chess-style: each side has its own K, so the two deltas are not forced to be
-        // equal and opposite -- a provisional attacker gaining fast off an established
-        // victim who barely moves is correct, not a bug. See ELO-MODULE.md. The expected-
-        // score curve itself stays double (Math.Pow has no decimal overload, and this value
-        // is transient -- never stored, never accumulated -- so binary float precision here
-        // is irrelevant; only the delta that gets added to liveRating below needs to be exact).
-        double expectedAttacker = 1.0 / (1.0 + Math.Pow(10.0, (double)(victimRating - attackerRating) / 400.0));
-        double expectedVictim = 1.0 - expectedAttacker;
-
-        int kAttacker = attackerMatches < provisionalMatches ? kFactorProvisional : kFactor;
-        int kVictim = victimMatches < provisionalMatches ? kFactorProvisional : kFactor;
-
-        // Found 2026-08-04, user's own review: rounding this to an int before accumulating
-        // silently floors small deltas (a dominant kill against a much weaker opponent) to
-        // 0, discarding real skill signal every time it happens. Rounded to 4 decimal places
-        // instead of 0 -- keeps the value exact enough that no genuine (nonzero) delta can
-        // ever floor away, while still discarding the binary-float noise a raw double-to-
-        // decimal cast would otherwise bake in past the digits that matter.
-        decimal attackerDelta = Math.Round((decimal)(kAttacker * (1.0 - expectedAttacker)), 4, MidpointRounding.AwayFromZero);
-        decimal victimDelta = Math.Round((decimal)(kVictim * (0.0 - expectedVictim)), 4, MidpointRounding.AwayFromZero);
-
-        // Headshot bonus: proportional to the delta already earned, not a flat add-on --
-        // beating a strong opponent with a headshot is still worth more than headshotting a
-        // weak one, which preserves the Elo self-calibration property instead of adding an
-        // opponent-blind bonus on top of it.
-        if (eventInfo.Headshot && attackerDelta > 0) {
-            attackerDelta += Math.Round(attackerDelta * (decimal)headshotBonusPct, 4, MidpointRounding.AwayFromZero);
-        }
-
-        liveRating[attackerSteamId64] = attackerRating + attackerDelta;
-        liveRating[victimSteamId64] = victimRating + victimDelta;
-        liveMatches[attackerSteamId64] = attackerMatches + 1;
-        liveMatches[victimSteamId64] = victimMatches + 1;
-
+        string season = CurrentSeason();
         string attackerName = CleanName(attacker.PlayerName);
         string victimName = CleanName(victim.PlayerName);
-        string season = CurrentSeason();
-
-        // Points (osbase-elo-contract.md, "the clamped ratio is the wrong shape for points",
-        // ask 2026-08-20): the same surprise factor already driving the rating delta above --
-        // expectedAttacker is the Elo win probability, computed once, reused here rather than
-        // a second opponent-ratio calculation. An upset (beating a much stronger opponent)
-        // pays close to pointsBase; a foregone conclusion pays close to 0 -- matching rating's
-        // own ~10x spread between best/worst matchup instead of the old clamp's ~4x ceiling,
-        // which a mostly-even server measurably almost never reached (1.8x in practice).
-        // Unlike rating, points from normal play never go down -- earned only by doing
-        // things, never lost by dying, matching "poängen ackumuleras genom att man gör
-        // saker". ApplyPenalty (below) is the one deliberate, documented exception -- scoped
-        // to teamkill/suicide specifically, not a general reopening of this rule.
-        double surpriseFactor = Math.Pow(1.0 - expectedAttacker, pointsExponent);
-        // Found 2026-08-04, agent-chat #63: same rounding-to-zero risk as the rating deltas,
-        // and easier to hit -- a lopsided kill's surprise factor, further shrunk by a low
-        // weapon weight below, can land under 1 point well before rating's much larger
-        // skill-gap requirement does. Rounded to 2 decimals, not 0.
-        string normalizedWeapon = NormalizeWeapon(eventInfo.Weapon);
-        // Weapon weight multiplies in last -- it bounds what the WEAPON is worth, which has
-        // nothing to do with how surprising the kill was. 1.00 for every weapon until
-        // weaponWeightTable is configured and a refresh has landed -- see ResolveWeaponWeight.
-        double weaponWeight = ResolveWeaponWeight(normalizedWeapon);
-        decimal killPoints = Math.Round((decimal)(pointsBase * surpriseFactor * weaponWeight), 2, MidpointRounding.AwayFromZero);
-        AddPoints(attackerSteamId64, attackerName, season, killPoints);
-
         string mapName = osbase?.currentMap ?? Server.MapName ?? "";
 
-        // Assist: a small, flat, opponent-blind reward for both rating and points -- an
-        // assist contributed to the duel, it didn't win it, and shouldn't be able to move a
-        // rating or a points total the way a kill does.
+        // Read what the engine knows about the attacker's pawn NOW -- gone the instant this
+        // handler returns. In-air comes on the event itself; in-water doesn't (order section
+        // 7), so it's read off the pawn: CBaseEntity.m_fFlags FL_INWATER or
+        // m_flWaterLevel > 0. NULL when there's no pawn to ask.
+        bool? attackerInWater = null;
+        var attackerPawn = attacker.PlayerPawn?.Value;
+        if (attackerPawn != null && attackerPawn.IsValid) {
+            bool flagInWater = (attackerPawn.Flags & (uint)PlayerFlags.FL_INWATER) != 0;
+            float waterLevel = attackerPawn.WaterLevel;
+            attackerInWater = flagInWater || waterLevel > 0f;
+            if (attackerInWater == true) {
+                Console.WriteLine($"[DEBUG] OSBase[{ModuleName}] in-water kill: attacker={attackerName} FL_INWATER={flagInWater} m_flWaterLevel={waterLevel.ToString(CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        var result = ScoreKill(new KillInput {
+            Season = season,
+            AttackerSteamId64 = attackerSteamId64,
+            VictimSteamId64 = victimSteamId64,
+            Headshot = eventInfo.Headshot,
+            Weapon = NormalizeWeapon(eventInfo.Weapon)
+        });
+
         var assister = eventInfo.Assister;
         if (IsRealPlayer(assister) && assister!.SteamID != attackerSteamId64 && assister.SteamID != victimSteamId64) {
+            // Flat BONUS_ASSIST (order 4b). Never rating any more (section 2).
             ulong assisterSteamId64 = assister.SteamID;
             string assisterName = CleanName(assister.PlayerName);
-
-            SeedRating(assisterSteamId64);
-            liveRating[assisterSteamId64] += assistReward;
-            SetPendingRating(assisterSteamId64, assisterName, liveRating[assisterSteamId64]);
-
-            decimal assistPoints = Math.Round(killPoints * (decimal)pointsAssistFraction, 2, MidpointRounding.AwayFromZero);
-            AddPoints(assisterSteamId64, assisterName, season, assistPoints);
-
-            // Found 2026-08-04 (agent-chat #10): this award used to touch only the current-
-            // state tables, with no replayable row -- elo_kill_event's "rebuild the whole
-            // ladder" claim didn't hold for assists. RelatedAttacker/Victim tie this row back
-            // to the duel it grew out of, same "save what it was built on" reasoning as
-            // PendingKillEvent itself.
-            pendingBonusEvents.Add(new PendingBonusEvent {
-                Kind = "assist",
-                SteamId64 = assisterSteamId64,
-                Name = assisterName,
-                RatingDelta = assistReward,
-                PointsDelta = assistPoints,
-                Season = season,
-                MapName = mapName,
-                MatchId = currentMatchId,
-                RelatedAttackerSteamId64 = attackerSteamId64,
-                RelatedVictimSteamId64 = victimSteamId64,
-                Stamp = DateTime.UtcNow
-            });
+            decimal assistPoints = Math.Round((decimal)formula.Value("BONUS_ASSIST"), 2, MidpointRounding.AwayFromZero);
+            AddBonus("assist", assisterSteamId64, assisterName, assistPoints, season, mapName, attackerSteamId64, victimSteamId64);
         }
 
         pendingKillEvents.Add(new PendingKillEvent {
@@ -1177,35 +1497,154 @@ public class EloRating : ModuleBase {
             MapName = mapName,
             AttackerName = attackerName,
             AttackerSteamId64 = attackerSteamId64,
-            AttackerRatingBefore = attackerRating,
-            AttackerDelta = attackerDelta,
-            AttackerPointsDelta = killPoints,
+            AttackerRatingBefore = result.AttackerRatingBefore,
+            AttackerDelta = result.AttackerDelta,
+            AttackerPointsDelta = result.AttackerPointsDelta,
             VictimName = victimName,
             VictimSteamId64 = victimSteamId64,
-            VictimRatingBefore = victimRating,
-            VictimDelta = victimDelta,
-            Weapon = normalizedWeapon,
+            VictimRatingBefore = result.VictimRatingBefore,
+            VictimDelta = result.VictimDelta,
+            Weapon = result.Weapon,
             Headshot = eventInfo.Headshot,
             VictimActiveWeapon = lastEquippedWeapon.GetValueOrDefault(victimSteamId64),
-            VictimBestWeapon = bestWeaponThisRound.TryGetValue(victimSteamId64, out var best) ? best.Weapon : null
+            VictimBestWeapon = bestWeaponThisRound.TryGetValue(victimSteamId64, out var best) ? best.Weapon : null,
+            VictimPointsDelta = result.VictimPointsDelta,
+            AttackerPlace = result.AttackerPlace,
+            VictimPlace = result.VictimPlace,
+            BoardSize = result.BoardSize,
+            RoundNo = RoundNo,
+            AttackerInAir = eventInfo.Attackerinair,
+            AttackerInWater = attackerInWater
         });
 
-        SetPendingRating(attackerSteamId64, attackerName, liveRating[attackerSteamId64]);
-        SetPendingRating(victimSteamId64, victimName, liveRating[victimSteamId64]);
+        AddPoints(attackerSteamId64, attackerName, season, result.AttackerPointsDelta);
+        AddPoints(victimSteamId64, victimName, season, result.VictimPointsDelta);
+        SetPendingRating(attackerSteamId64, season, attackerName, liveRating[(attackerSteamId64, season)]);
+        SetPendingRating(victimSteamId64, season, victimName, liveRating[(victimSteamId64, season)]);
+
+        var pairKey = (attackerSteamId64, victimSteamId64);
+        var pair = roundKillPoints.GetValueOrDefault(pairKey);
+        roundKillPoints[pairKey] = (pair.AttackerDelta + result.AttackerPointsDelta, pair.VictimDelta + result.VictimPointsDelta);
 
         return HookResult.Continue;
     }
 
+    // Everything ScoreKill needs, as plain data -- the demo backfill (order section 11) will
+    // call this from a replay driver with no game event in sight. Names, map, stamp and pawn
+    // state stay with the caller; this is the rating + points arithmetic only.
+    public sealed class KillInput {
+        public required string Season { get; init; }
+        public required ulong AttackerSteamId64 { get; init; }
+        public required ulong VictimSteamId64 { get; init; }
+        public required bool Headshot { get; init; }
+        public required string Weapon { get; init; } // NormalizeWeapon'd: "ak47", "usp_silencer"
+    }
+
+    public sealed class KillResult {
+        public decimal AttackerRatingBefore { get; init; }
+        public decimal VictimRatingBefore { get; init; }
+        public decimal AttackerDelta { get; init; }
+        public decimal VictimDelta { get; init; }
+        public decimal AttackerPointsDelta { get; init; }
+        public decimal VictimPointsDelta { get; init; } // <= 0, clipped
+        public int AttackerPlace { get; init; }
+        public int VictimPlace { get; init; }
+        public int BoardSize { get; init; }
+        public double WeaponWeight { get; init; }
+        public string Weapon { get; init; } = "";
+    }
+
+    // Applies the duel to the live rating/matches/kills caches and returns what was applied.
+    // Pure in the sense that matters for a replay: no event, no pawn, no DB write -- the
+    // caller decides what to log and when to flush.
+    private KillResult ScoreKill(KillInput kill) {
+        string season = kill.Season;
+        var attackerKey = (kill.AttackerSteamId64, season);
+        var victimKey = (kill.VictimSteamId64, season);
+
+        SeedRating(kill.AttackerSteamId64, season);
+        SeedRating(kill.VictimSteamId64, season);
+        SeedKills(kill.AttackerSteamId64, season);
+        SeedKills(kill.VictimSteamId64, season);
+        SeedPoints(kill.VictimSteamId64, season);
+
+        decimal attackerRating = liveRating[attackerKey];
+        decimal victimRating = liveRating[victimKey];
+        int attackerMatches = liveMatches[attackerKey];
+        int victimMatches = liveMatches[victimKey];
+
+        // Chess-style: each side has its own K, so the two deltas are not forced to be
+        // equal and opposite -- a provisional attacker gaining fast off an established
+        // victim who barely moves is correct, not a bug (order section 2 leaves the K
+        // asymmetry in place and measures it afterwards). Nothing else moves rating: the
+        // headshot multiplier is gone -- the victim never paid it, so every headshot minted
+        // ~3 rating out of nothing. The expected-score curve stays double (Math.Pow has no
+        // decimal overload, and this value is transient -- only the delta added to
+        // liveRating needs to be exact).
+        double expectedAttacker = 1.0 / (1.0 + Math.Pow(10.0, (double)(victimRating - attackerRating) / 400.0));
+        double expectedVictim = 1.0 - expectedAttacker;
+
+        int kAttacker = attackerMatches < provisionalMatches ? kFactorProvisional : kFactor;
+        int kVictim = victimMatches < provisionalMatches ? kFactorProvisional : kFactor;
+
+        // Rounded to 4 decimals, not 0 (found 2026-08-04): rounding to an int before
+        // accumulating floors small deltas to 0 and discards real skill signal.
+        decimal attackerDelta = Math.Round((decimal)(kAttacker * (1.0 - expectedAttacker)), 4, MidpointRounding.AwayFromZero);
+        decimal victimDelta = Math.Round((decimal)(kVictim * (0.0 - expectedVictim)), 4, MidpointRounding.AwayFromZero);
+
+        liveRating[attackerKey] = attackerRating + attackerDelta;
+        liveRating[victimKey] = victimRating + victimDelta;
+        liveMatches[attackerKey] = attackerMatches + 1;
+        liveMatches[victimKey] = victimMatches + 1;
+
+        // Points (order sections 3-5, PointsFormula = appendix A verbatim). Placement is the
+        // map-start snapshot; surprise is rating's own 1 - expected; weapon weight is the
+        // site's weapon_point_weight (exact -> prefix -> suffix, default 1.00); the first
+        // WARMUP_KILLS of the season pay flat EVEN regardless. The death costs the victim
+        // DEATH_SHARE of the attacker's placement base, clipped to their balance, and the
+        // clipped value is what gets written.
+        int attackerPlace = PlaceOf(kill.AttackerSteamId64);
+        int victimPlace = PlaceOf(kill.VictimSteamId64);
+        int boardSize = boardSizeAtMapStart;
+        int attackerKillsBefore = liveKills[attackerKey];
+        int victimKillsBefore = liveKills[victimKey];
+        double surprise = 1.0 - expectedAttacker;
+        double weaponWeight = ResolveWeaponWeight(kill.Weapon);
+
+        decimal killPoints = formula.KillPoints(attackerPlace, victimPlace, boardSize, surprise, weaponWeight, kill.Headshot, attackerKillsBefore);
+        decimal victimBalance = livePoints.GetValueOrDefault(victimKey, (decimal)formula.StartPoints);
+        decimal deathLoss = formula.DeathLoss(attackerPlace, victimPlace, boardSize, attackerKillsBefore, victimKillsBefore, victimBalance);
+
+        liveKills[attackerKey] = attackerKillsBefore + 1;
+
+        return new KillResult {
+            AttackerRatingBefore = attackerRating,
+            VictimRatingBefore = victimRating,
+            AttackerDelta = attackerDelta,
+            VictimDelta = victimDelta,
+            AttackerPointsDelta = killPoints,
+            VictimPointsDelta = -deathLoss,
+            AttackerPlace = attackerPlace,
+            VictimPlace = victimPlace,
+            BoardSize = boardSize,
+            WeaponWeight = weaponWeight,
+            Weapon = kill.Weapon
+        };
+    }
+
+    // A 0 delta still goes through: the order (4c) wants the elo_points row created at the
+    // player's first event of the season with START_POINTS, and a warmup-period death is a
+    // 0-delta event. The flush's INSERT ... ON DUPLICATE KEY handles both cases in one
+    // statement (see FlushPendingWrites).
     private void AddPoints(ulong steamId64, string name, string season, decimal points) {
-        if (steamId64 == 0 || points == 0) {
+        if (steamId64 == 0) {
             return;
         }
 
         SeedPoints(steamId64, season);
-        var liveKey = (steamId64, season);
-        livePoints[liveKey] = livePoints.GetValueOrDefault(liveKey, 0) + points;
-
         var key = (steamId64, season);
+        livePoints[key] = livePoints.GetValueOrDefault(key, (decimal)formula.StartPoints) + points;
+
         if (!pendingPoints.TryGetValue(key, out var pending)) {
             pending = new PendingPoints();
             pendingPoints[key] = pending;
@@ -1215,30 +1654,40 @@ public class EloRating : ModuleBase {
         pending.Points += points;
     }
 
-    // Found 2026-08-04, per direct user ask, corrected same day after agent-chat #18:
-    // teamkill/suicide penalty, applied to POINTS (via the same AddPoints path a round-win
-    // uses, just negative) and logged as a replayable elo_bonus_event row -- never rating,
-    // see the field comment on teamkillPointsPenalty/suicidePointsPenalty for why.
-    private void ApplyPenalty(ulong steamId64, string name, string kind, int pointsPenalty,
-                               string season, string mapName, ulong? relatedVictimSteamId64) {
-        if (steamId64 == 0 || pointsPenalty == 0) {
+    // One bonus row (order 4b/4c): assist, round_win, bomb_plant, bomb_defuse, bomb_pickup,
+    // bomb_drop (negative), teamkill_penalty/suicide_penalty when configured. Never rating.
+    private void AddBonus(string kind, ulong steamId64, string name, decimal points, string season, string mapName,
+                          ulong? relatedAttacker = null, ulong? relatedVictim = null) {
+        if (steamId64 == 0 || points == 0) {
             return;
         }
 
-        AddPoints(steamId64, name, season, pointsPenalty);
+        AddPoints(steamId64, name, season, points);
+        RecordRoundBonus(steamId64, kind, points);
 
         pendingBonusEvents.Add(new PendingBonusEvent {
             Kind = kind,
             SteamId64 = steamId64,
             Name = name,
             RatingDelta = 0,
-            PointsDelta = pointsPenalty,
+            PointsDelta = points,
             Season = season,
             MapName = mapName,
             MatchId = currentMatchId,
-            RelatedVictimSteamId64 = relatedVictimSteamId64,
+            RoundNo = RoundNo,
+            RelatedAttackerSteamId64 = relatedAttacker,
+            RelatedVictimSteamId64 = relatedVictim,
             Stamp = DateTime.UtcNow
         });
+    }
+
+    // Found 2026-08-04, per direct user ask, corrected same day after agent-chat #18:
+    // teamkill/suicide penalty, applied to POINTS (via the same AddPoints path a round-win
+    // uses, just negative) and logged as a replayable elo_bonus_event row -- never rating,
+    // see the field comment on teamkillPointsPenalty/suicidePointsPenalty for why.
+    private void ApplyPenalty(ulong steamId64, string name, string kind, int pointsPenalty,
+                               string season, string mapName, ulong? relatedVictimSteamId64) {
+        AddBonus(kind, steamId64, name, pointsPenalty, season, mapName, null, relatedVictimSteamId64);
     }
 
     private void SeedPoints(ulong steamId64, string season) {
@@ -1254,10 +1703,12 @@ public class EloRating : ModuleBase {
                 new MySqlParameter("@season", season)
             );
 
-            livePoints[key] = table.Rows.Count > 0 ? Convert.ToDecimal(table.Rows[0]["points"]) : 0m;
+            // No row yet = START_POINTS (order section 1); the row itself is created by the
+            // first flush that touches this player this season.
+            livePoints[key] = table.Rows.Count > 0 ? Convert.ToDecimal(table.Rows[0]["points"]) : (decimal)formula.StartPoints;
         } catch (Exception e) {
             Console.WriteLine($"[ERROR] OSBase[{ModuleName}] failed seeding points for {steamId64}/{season}: {e.Message}");
-            livePoints[key] = 0m;
+            livePoints[key] = (decimal)formula.StartPoints;
         }
     }
 
@@ -1283,10 +1734,11 @@ public class EloRating : ModuleBase {
         return true;
     }
 
-    private void SetPendingRating(ulong steamId64, string name, decimal rating) {
-        if (!pendingRatings.TryGetValue(steamId64, out var pending)) {
+    private void SetPendingRating(ulong steamId64, string season, string name, decimal rating) {
+        var key = (steamId64, season);
+        if (!pendingRatings.TryGetValue(key, out var pending)) {
             pending = new PendingRating();
-            pendingRatings[steamId64] = pending;
+            pendingRatings[key] = pending;
         }
 
         pending.Name = name;
@@ -1333,10 +1785,12 @@ public class EloRating : ModuleBase {
             foreach (var kill in killBatch) {
                 writes.Add(($"INTO {KillEventTable} (match_id, stamp, mapname, attacker, attackerid64, attacker_rating_before, attacker_delta, " +
                     "attacker_points_delta, victim, victimid64, victim_rating_before, victim_delta, weapon, headshot, " +
-                    "victim_active_weapon, victim_best_weapon) " +
+                    "victim_active_weapon, victim_best_weapon, victim_points_delta, attacker_place, victim_place, board_size, " +
+                    "round_no, attacker_in_air, attacker_in_water) " +
                     "VALUES (@match_id, NOW(), @mapname, @attacker, @attackerid64, @attacker_rb, @attacker_delta, " +
                     "@attacker_points_delta, @victim, @victimid64, @victim_rb, @victim_delta, @weapon, @headshot, " +
-                    "@victim_active_weapon, @victim_best_weapon)",
+                    "@victim_active_weapon, @victim_best_weapon, @victim_points_delta, @attacker_place, @victim_place, @board_size, " +
+                    "@round_no, @attacker_in_air, @attacker_in_water)",
                     new MySqlParameter[] {
                         new("@match_id", (object?)kill.MatchId ?? DBNull.Value),
                         new("@mapname", kill.MapName),
@@ -1352,45 +1806,58 @@ public class EloRating : ModuleBase {
                         new("@weapon", kill.Weapon),
                         new("@headshot", kill.Headshot ? 1 : 0),
                         new("@victim_active_weapon", (object?)kill.VictimActiveWeapon ?? DBNull.Value),
-                        new("@victim_best_weapon", (object?)kill.VictimBestWeapon ?? DBNull.Value)
+                        new("@victim_best_weapon", (object?)kill.VictimBestWeapon ?? DBNull.Value),
+                        new("@victim_points_delta", kill.VictimPointsDelta),
+                        new("@attacker_place", kill.AttackerPlace),
+                        new("@victim_place", kill.VictimPlace),
+                        new("@board_size", kill.BoardSize),
+                        new("@round_no", kill.RoundNo),
+                        new("@attacker_in_air", kill.AttackerInAir.HasValue ? (kill.AttackerInAir.Value ? 1 : 0) : DBNull.Value),
+                        new("@attacker_in_water", kill.AttackerInWater.HasValue ? (kill.AttackerInWater.Value ? 1 : 0) : DBNull.Value)
                     }));
             }
 
             foreach (var kv in ratingBatch) {
-                ulong steamId64 = kv.Key;
+                var (steamId64, season) = kv.Key;
                 var pending = kv.Value;
 
-                writes.Add(($"INTO {RatingTable} (steamid64, name, rating, matches, updated_at) " +
-                    "VALUES (@steamid64, @name, @rating, @matches, NOW()) " +
+                writes.Add(($"INTO {RatingTable} (steamid64, season, name, rating, matches, updated_at) " +
+                    "VALUES (@steamid64, @season, @name, @rating, @matches, NOW()) " +
                     "ON DUPLICATE KEY UPDATE name=@name, rating=@rating, matches=matches+@matches, updated_at=NOW()",
                     new MySqlParameter[] {
                         new("@steamid64", steamId64.ToString()),
+                        new("@season", season),
                         new("@name", pending.Name),
                         new("@rating", pending.Rating),
                         new("@matches", pending.MatchesDelta)
                     }));
             }
 
+            // Insert = START_POINTS + delta, duplicate = += delta. Race-safe between two
+            // servers sharing the table: whichever inserts first seeds the start balance, the
+            // other lands on the duplicate branch and only adds its delta.
+            decimal startPoints = (decimal)formula.StartPoints;
             foreach (var kv in pointsBatch) {
                 var (steamId64, season) = kv.Key;
                 var pending = kv.Value;
 
                 writes.Add(($"INTO {PointsTable} (steamid64, season, name, points, updated_at) " +
-                    "VALUES (@steamid64, @season, @name, @points, NOW()) " +
+                    "VALUES (@steamid64, @season, @name, @start + @points, NOW()) " +
                     "ON DUPLICATE KEY UPDATE name=@name, points=points+@points, updated_at=NOW()",
                     new MySqlParameter[] {
                         new("@steamid64", steamId64.ToString()),
                         new("@season", season),
                         new("@name", pending.Name),
+                        new("@start", startPoints),
                         new("@points", pending.Points)
                     }));
             }
 
             foreach (var bonus in bonusBatch) {
                 writes.Add(($"INTO {BonusEventTable} (kind, match_id, stamp, mapname, season, name, steamid64, " +
-                    "rating_delta, points_delta, related_attacker_id64, related_victim_id64) " +
+                    "rating_delta, points_delta, related_attacker_id64, related_victim_id64, round_no) " +
                     "VALUES (@kind, @match_id, @stamp, @mapname, @season, @name, @steamid64, " +
-                    "@rating_delta, @points_delta, @related_attacker, @related_victim)",
+                    "@rating_delta, @points_delta, @related_attacker, @related_victim, @round_no)",
                     new MySqlParameter[] {
                         new("@kind", bonus.Kind),
                         new("@match_id", (object?)bonus.MatchId ?? DBNull.Value),
@@ -1402,7 +1869,8 @@ public class EloRating : ModuleBase {
                         new("@rating_delta", bonus.RatingDelta),
                         new("@points_delta", bonus.PointsDelta),
                         new("@related_attacker", (object?)bonus.RelatedAttackerSteamId64?.ToString() ?? DBNull.Value),
-                        new("@related_victim", (object?)bonus.RelatedVictimSteamId64?.ToString() ?? DBNull.Value)
+                        new("@related_victim", (object?)bonus.RelatedVictimSteamId64?.ToString() ?? DBNull.Value),
+                        new("@round_no", bonus.RoundNo)
                     }));
             }
 
@@ -1446,11 +1914,11 @@ public class EloRating : ModuleBase {
     // A newer pending entry for the same player (from kills that happened after this
     // flush started) already carries the freshest rating -- only the retried match count
     // needs folding back in, never the rating itself.
-    private void MergePendingRating(ulong steamId64, PendingRating rating) {
-        if (pendingRatings.TryGetValue(steamId64, out var existing)) {
+    private void MergePendingRating((ulong SteamId64, string Season) key, PendingRating rating) {
+        if (pendingRatings.TryGetValue(key, out var existing)) {
             existing.MatchesDelta += rating.MatchesDelta;
         } else {
-            pendingRatings[steamId64] = rating;
+            pendingRatings[key] = rating;
         }
     }
 
@@ -1465,6 +1933,12 @@ public class EloRating : ModuleBase {
         pendingFlushTimer = null;
         FlushPendingWrites("MapStart");
         RefreshMatchWindow("MapStart");
+        RefreshPointsFormula("MapStart");
+        // Order section 3: the board is read once here and held for the whole map. Runs after
+        // the flush above is handed off, but that flush is async -- the snapshot query may
+        // land before last map's final rows do. Accepted: "at map start" is a snapshot, and a
+        // couple of seconds of skew on a placement that's held for 30+ minutes is noise.
+        RefreshPlacement("MapStart");
     }
 
     private HookResult OnRoundEnd(EventRoundEnd eventInfo) {
@@ -1472,34 +1946,17 @@ public class EloRating : ModuleBase {
             return HookResult.Continue;
         }
 
-        if (statsGateOpen && pointsPerRoundWin != 0) {
+        decimal roundWin = Math.Round((decimal)formula.Value("BONUS_ROUND_WIN"), 2, MidpointRounding.AwayFromZero);
+        if (statsGateOpen && roundWin != 0) {
             string season = CurrentSeason();
             string mapName = osbase?.currentMap ?? Server.MapName ?? "";
-            DateTime stamp = DateTime.UtcNow;
 
             foreach (var p in Utilities.GetPlayers()) {
                 if (!IsRealPlayer(p) || p!.TeamNum != eventInfo.Winner) {
                     continue;
                 }
 
-                string name = CleanName(p.PlayerName);
-                AddPoints(p.SteamID, name, season, pointsPerRoundWin);
-
-                // Found 2026-08-04 (agent-chat #10): same gap as the assist award above --
-                // round-win points touched elo_points directly with no replayable row. No
-                // rating change and no duel to point back to, unlike assist, so RatingDelta
-                // is 0 and both Related*SteamId64 stay null.
-                pendingBonusEvents.Add(new PendingBonusEvent {
-                    Kind = "round_win",
-                    SteamId64 = p.SteamID,
-                    Name = name,
-                    RatingDelta = 0,
-                    PointsDelta = pointsPerRoundWin,
-                    Season = season,
-                    MapName = mapName,
-                    MatchId = currentMatchId,
-                    Stamp = stamp
-                });
+                AddBonus("round_win", p.SteamID, CleanName(p.PlayerName), roundWin, season, mapName);
             }
         }
 
@@ -1514,6 +1971,80 @@ public class EloRating : ModuleBase {
         return HookResult.Continue;
     }
 
+    // ----- bomb bonuses (order 4b): plant, defuse, pick up, and a deduction for dropping it -----
+
+    private HookResult OnBombPlanted(EventBombPlanted e) {
+        if (isActive && statsGateOpen && IsRealPlayer(e.Userid)) {
+            AddBonus("bomb_plant", e.Userid!.SteamID, CleanName(e.Userid.PlayerName),
+                Math.Round((decimal)formula.Value("BONUS_PLANT"), 2, MidpointRounding.AwayFromZero),
+                CurrentSeason(), osbase?.currentMap ?? Server.MapName ?? "");
+        }
+        return HookResult.Continue;
+    }
+
+    private HookResult OnBombDefused(EventBombDefused e) {
+        if (isActive && statsGateOpen && IsRealPlayer(e.Userid)) {
+            AddBonus("bomb_defuse", e.Userid!.SteamID, CleanName(e.Userid.PlayerName),
+                Math.Round((decimal)formula.Value("BONUS_DEFUSE"), 2, MidpointRounding.AwayFromZero),
+                CurrentSeason(), osbase?.currentMap ?? Server.MapName ?? "");
+        }
+        return HookResult.Continue;
+    }
+
+    // "Plocka upp: den som tar på sig uppdraget." Only after someone has let go of it this
+    // round -- the engine also fires bomb_pickup when a T spawns with the bomb, and that
+    // pays nothing.
+    private HookResult OnBombPickup(EventBombPickup e) {
+        if (isActive && statsGateOpen && roundBombDrops > 0 && IsRealPlayer(e.Userid)) {
+            AddBonus("bomb_pickup", e.Userid!.SteamID, CleanName(e.Userid.PlayerName),
+                Math.Round((decimal)formula.Value("BONUS_BOMB_PICKUP"), 2, MidpointRounding.AwayFromZero),
+                CurrentSeason(), osbase?.currentMap ?? Server.MapName ?? "");
+        }
+        return HookResult.Continue;
+    }
+
+    // bomb_dropped fires both when the carrier throws it and when they die with it. Only the
+    // deliberate drop costs (owner: "att slänga bomben så ger du upp ditt uppdrag") -- told
+    // apart by whether the carrier is still alive. Decided one frame later, not inside the
+    // event: the engine's death-drop may raise bomb_dropped before the pawn's life state
+    // has flipped, and player_death may arrive after it, so "alive right now" inside the
+    // callback isn't trustworthy. By the next frame both have settled; diedThisRound covers
+    // the case where the controller is already gone. Written as its own negative bonus row
+    // so the ledger still sums to elo_points.
+    private HookResult OnBombDropped(EventBombDropped e) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        roundBombDrops++;
+
+        if (!statsGateOpen || !IsRealPlayer(e.Userid)) {
+            return HookResult.Continue;
+        }
+
+        ulong steamId64 = e.Userid!.SteamID;
+        string name = CleanName(e.Userid.PlayerName);
+        string season = CurrentSeason();
+        string mapName = osbase?.currentMap ?? Server.MapName ?? "";
+        int round = RoundNo;
+
+        Server.NextFrame(() => {
+            if (!isActive || !statsGateOpen || RoundNo != round || diedThisRound.Contains(steamId64)) {
+                return;
+            }
+
+            var carrier = Utilities.GetPlayers().FirstOrDefault(p => IsRealPlayer(p) && p.SteamID == steamId64);
+            if (carrier == null || !carrier.PawnIsAlive) {
+                return;
+            }
+
+            decimal drop = Math.Round((decimal)formula.Value("BONUS_BOMB_DROP"), 2, MidpointRounding.AwayFromZero);
+            AddBonus("bomb_drop", steamId64, name, -drop, season, mapName);
+        });
+
+        return HookResult.Continue;
+    }
+
     // ----- leaderboard -----
 
     private void OnEloTopCommand(CCSPlayerController? player, CommandInfo commandInfo) {
@@ -1522,12 +2053,14 @@ public class EloRating : ModuleBase {
         }
 
         try {
+            string season = CurrentSeason();
             DataTable table = db.select(
-                $"name, steamid64, rating FROM {RatingTable} ORDER BY rating DESC LIMIT @limit",
+                $"name, steamid64, rating FROM {RatingTable} WHERE season=@season ORDER BY rating DESC LIMIT @limit",
+                new MySqlParameter("@season", season),
                 new MySqlParameter("@limit", topLimit)
             );
 
-            player.PrintToChat($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: Elo leaderboard:");
+            player.PrintToChat($" {ChatColors.Green}{chatPrefix}{ChatColors.Default}: Elo leaderboard ({season}):");
 
             int rank = 1;
             ulong self = player.SteamID;
@@ -1757,17 +2290,10 @@ public class EloRating : ModuleBase {
         }
     }
 
+    // Inclusive day range for the BETWEEN on player_daily_stat.day.
     private static (DateTime Start, DateTime End) SeasonDateRange(string season) {
-        int qIdx = season.IndexOf('Q');
-        if (qIdx <= 0 || !int.TryParse(season.AsSpan(0, qIdx), out int year) || !int.TryParse(season.AsSpan(qIdx + 1), out int quarter)) {
-            DateTime now = DateTime.UtcNow.Date;
-            return (now, now);
-        }
-
-        int startMonth = ((quarter - 1) * 3) + 1;
-        DateTime start = new DateTime(year, startMonth, 1, 0, 0, 0, DateTimeKind.Utc);
-        DateTime end = start.AddMonths(3).AddDays(-1);
-        return (start, end);
+        var (start, end) = SeasonHelper.Range(season);
+        return (start, end.AddDays(-1));
     }
 
     private static string FormatThousands(int n) {

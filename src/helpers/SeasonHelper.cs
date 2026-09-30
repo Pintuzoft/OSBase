@@ -15,4 +15,37 @@ public static class SeasonHelper {
         int quarter = ((now.Month - 1) / 3) + 1;
         return $"{now.Year}Q{quarter}";
     }
+
+    // "2026Q4" -> "2026Q3", "2026Q1" -> "2025Q4". Null for anything that isn't a season key.
+    // Used by EloRating's balancing read (osbase-order-2026Q4.md section 1: the LAN balancer
+    // reads last quarter's final rating until the player clears the provisional gate).
+    public static string? PreviousSeason(string season) {
+        if (!TryParse(season, out int year, out int quarter)) {
+            return null;
+        }
+
+        return quarter == 1 ? $"{year - 1}Q4" : $"{year}Q{quarter - 1}";
+    }
+
+    public static bool TryParse(string season, out int year, out int quarter) {
+        year = 0;
+        quarter = 0;
+        int qIdx = season?.IndexOf('Q') ?? -1;
+        if (qIdx <= 0 || !int.TryParse(season!.AsSpan(0, qIdx), out year) || !int.TryParse(season.AsSpan(qIdx + 1), out quarter)) {
+            return false;
+        }
+
+        return quarter >= 1 && quarter <= 4;
+    }
+
+    // UTC calendar range of a season, inclusive start, exclusive end.
+    public static (System.DateTime Start, System.DateTime End) Range(string season) {
+        if (!TryParse(season, out int year, out int quarter)) {
+            System.DateTime now = System.DateTime.UtcNow.Date;
+            return (now, now);
+        }
+
+        var start = new System.DateTime(year, ((quarter - 1) * 3) + 1, 1, 0, 0, 0, System.DateTimeKind.Utc);
+        return (start, start.AddMonths(3));
+    }
 }
