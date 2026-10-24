@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
@@ -417,6 +418,8 @@ public class DamageReport : ModuleBase {
         // Use new EventBus system (Subscribe instead of RegisterEventHandler)
         osbase?.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
         osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.SubscribeToEvent<EventPlayerTeam>(OnPlayerTeamSwitch);
+        osbase?.AddCommandListener("jointeam", OnCommandJoinTeam, HookMode.Pre);
         osbase?.SubscribeToEvent<EventWeaponFire>(OnWeaponFire);
         osbase?.SubscribeToEvent<EventBombPlanted>(OnBombPlanted);
         osbase?.SubscribeToEvent<EventBombDefused>(OnBombDefused);
@@ -436,6 +439,8 @@ public class DamageReport : ModuleBase {
         // Use new EventBus system (Unsubscribe instead of DeregisterEventHandler)
         osbase?.UnsubscribeFromEvent<EventPlayerHurt>(OnPlayerHurt);
         osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.UnsubscribeFromEvent<EventPlayerTeam>(OnPlayerTeamSwitch);
+        osbase?.RemoveCommandListener("jointeam", OnCommandJoinTeam, HookMode.Pre);
         osbase?.UnsubscribeFromEvent<EventWeaponFire>(OnWeaponFire);
         osbase?.UnsubscribeFromEvent<EventBombPlanted>(OnBombPlanted);
         osbase?.UnsubscribeFromEvent<EventBombDefused>(OnBombDefused);
@@ -1140,6 +1145,70 @@ public class DamageReport : ModuleBase {
         if (points.HasValue) {
             counter.Points = points;
         }
+    }
+
+    // A team change is never a suicide (owner rule 2026-10-24, see TeamSwitchGuard). This
+    // module feeds the guard like TeamDamage does, and checks it at both suicide sites in
+    // OnPlayerDeath. The self-switch stamp (jointeam) is already there when the death lands;
+    // the admin-switch stamp (player_team) arrives AFTER it, so a suicide that was just
+    // counted is remembered here by userid and netted back out (-1 into the same in-memory
+    // pending counter, long before any flush) when that late stamp shows up. The season is
+    // captured at count time so the undo lands on the row the +1 went to.
+    private readonly Dictionary<int, (int Tick, ulong SteamId64, string Season)> recentSuicide = new();
+
+    private HookResult OnCommandJoinTeam(CCSPlayerController? player, CommandInfo command) {
+        if (!isActive || player == null || !player.IsValid || !player.UserId.HasValue) {
+            return HookResult.Continue;
+        }
+
+        if (player.PawnIsAlive) {
+            TeamSwitchGuard.Stamp(player.UserId.Value);
+        }
+
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerTeamSwitch(EventPlayerTeam e) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        var player = e.Userid;
+        if (player == null || !player.IsValid || !player.UserId.HasValue) {
+            return HookResult.Continue;
+        }
+
+        if (e.Disconnect || e.Team == e.Oldteam) {
+            return HookResult.Continue;
+        }
+
+        int userId = player.UserId.Value;
+        TeamSwitchGuard.Stamp(userId);
+
+        if (recentSuicide.Remove(userId, out var counted) &&
+            Server.TickCount - counted.Tick <= TeamSwitchGuard.GraceTicks) {
+            AddDuelTotal(counted.SteamId64, counted.Season, kills: 0, deaths: 0, suicides: -1);
+        }
+
+        return HookResult.Continue;
+    }
+
+    // Both suicide sites in OnPlayerDeath go through here: skipped outright if a team-switch
+    // stamp already exists, otherwise counted and remembered so a late stamp can undo it.
+    private void CountSuicide(CCSPlayerController victim, string season) {
+        if (!victim.UserId.HasValue) {
+            AddDuelTotal(victim.SteamID, season, kills: 0, deaths: 0, suicides: 1);
+            return;
+        }
+
+        int userId = victim.UserId.Value;
+        int now = Server.TickCount;
+        if (TeamSwitchGuard.IsTeamSwitch(userId, now)) {
+            return;
+        }
+
+        AddDuelTotal(victim.SteamID, season, kills: 0, deaths: 0, suicides: 1);
+        recentSuicide[userId] = (now, victim.SteamID, season);
     }
 
     private void AddDuelTotal(ulong steamId64, string season, int kills, int deaths, int headshots = 0, int assists = 0, int teamKills = 0, int suicides = 0) {
@@ -2155,7 +2224,7 @@ public class DamageReport : ModuleBase {
         // toward the suicides column either.
         if (statsGateOpen && e.Attacker == null && IsRealHuman(e.Userid) &&
             !string.Equals(e.Weapon, "planted_c4", StringComparison.OrdinalIgnoreCase)) {
-            AddDuelTotal(e.Userid!.SteamID, CurrentSeason(), kills: 0, deaths: 0, suicides: 1);
+            CountSuicide(e.Userid!, CurrentSeason());
         }
 
         // Nemesis counters -- every kill on every server, not gated to a tournament match
@@ -2223,7 +2292,7 @@ public class DamageReport : ModuleBase {
                     // true for it (same TeamNum as itself) -- checked explicitly rather than
                     // reusing that flag for the wrong thing.
                     if (e.Attacker.SteamID == e.Userid.SteamID) {
-                        AddDuelTotal(e.Userid.SteamID, season, kills: 0, deaths: 0, suicides: 1);
+                        CountSuicide(e.Userid, season);
                     } else if (isTeamKill) {
                         AddDuelTotal(e.Attacker.SteamID, season, kills: 0, deaths: 0, teamKills: 1);
                     }

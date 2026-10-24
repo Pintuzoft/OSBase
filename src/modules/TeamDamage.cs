@@ -1,10 +1,10 @@
 using System;
-using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
+using OSBase.Helpers;
 
 namespace OSBase.Modules;
 
@@ -14,23 +14,11 @@ public class TeamDamage : ModuleBase {
     private const int TEAM_T = (int)CsTeam.Terrorist;
     private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
-    // Switching team while alive makes the engine kill you, and that death arrives as
-    // player_death with no attacker -- indistinguishable from a fall or a drowning. Added
-    // 2026-10-24 after a player got the suicide penalty for swapping sides mid-round; owner's
-    // rule is that only a real suicide or a teamkill costs -1, never a team change, whoever
-    // caused it. Two sources stamp the player's userid (the key player_death gives us):
-    //   - the jointeam command, seen Pre so it lands BEFORE the death it causes (self-switch)
-    //   - player_team with a real old->new team change (admin swap, ChangeTeam from another
-    //     plugin, anything that never went through jointeam) -- which the engine fires AFTER
-    //     the death, so the penalty itself is deferred by a few ticks to give that stamp a
-    //     chance to arrive first.
-    // A stamp within the window on either side of the death means no penalty and no chat
-    // line. The window is generous relative to the real gap (same tick) but far too short
-    // for a genuine suicide to follow a team switch -- you're dead by then. A refused switch
-    // (same team, team full) leaves a stale stamp that the window ages out on its own.
-    private const int TeamChangeGraceTicks = 64;
+    // A team change is never a suicide -- see TeamSwitchGuard for the whole story. This
+    // module feeds the guard (jointeam Pre + player_team) and defers its own penalty by a few
+    // ticks so the player_team stamp, which the engine fires AFTER the death, can still cancel
+    // it. A stamp within the window on either side of the death means no -1 and no chat line.
     private const float SuicidePenaltyDelay = 0.2f;
-    private readonly Dictionary<int, int> teamChangeTick = new();
 
     protected override void RegisterHandlers() {
         osbase?.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
@@ -54,7 +42,7 @@ public class TeamDamage : ModuleBase {
         // Only an alive player can be killed by the switch; a dead one swapping sides has no
         // death coming that needs sparing.
         if (player.PawnIsAlive) {
-            teamChangeTick[player.UserId.Value] = Server.TickCount;
+            TeamSwitchGuard.Stamp(player.UserId.Value);
         }
 
         return HookResult.Continue;
@@ -77,22 +65,8 @@ public class TeamDamage : ModuleBase {
             return HookResult.Continue;
         }
 
-        teamChangeTick[player.UserId.Value] = Server.TickCount;
+        TeamSwitchGuard.Stamp(player.UserId.Value);
         return HookResult.Continue;
-    }
-
-    private bool WasTeamChange(int userId, int deathTick) {
-        if (!teamChangeTick.TryGetValue(userId, out int tick)) {
-            return false;
-        }
-
-        if (Math.Abs(deathTick - tick) > TeamChangeGraceTicks) {
-            teamChangeTick.Remove(userId);
-            return false;
-        }
-
-        teamChangeTick.Remove(userId);
-        return true;
     }
 
     // Deferred so a player_team fired after the death can still cancel it. Re-resolves the
@@ -101,7 +75,7 @@ public class TeamDamage : ModuleBase {
     // disconnect-death too.
     private void ScheduleSuicidePenalty(int userId, int deathTick) {
         osbase?.AddTimer(SuicidePenaltyDelay, () => {
-            if (!isActive || WasTeamChange(userId, deathTick)) {
+            if (!isActive || TeamSwitchGuard.IsTeamSwitch(userId, deathTick)) {
                 return;
             }
 
