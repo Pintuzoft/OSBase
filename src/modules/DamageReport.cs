@@ -2504,9 +2504,13 @@ public class DamageReport : ModuleBase {
 
             // Ask 32: 007/dubbelagent/... off the board's own Kills/Deaths -- deliberately
             // not elo_kill_event, which only holds deaths with an attacker (falls, the bomb,
-            // your own grenade all count on the scoreboard but not there). Kills <= 0, never
-            // == 0: TeamDamage.cs decrements this same field for a teamkill or suicide, so a
-            // genuinely awful evening reads negative, not zero.
+            // your own grenade all count on the scoreboard but not there). Kills == 0 exactly,
+            // per owner decision 2026-10-24: the handover doc asked for <= 0 so that a
+            // teamkill/suicide penalty (TeamDamage.cs takes this field negative) wouldn't hide
+            // an agent, but 007 is 0-7 on the board and -1-7 is not -- a player who reported
+            // "becoming agent at -1 7" is what flipped it. Someone sitting at -1 who later
+            // climbs back to 0 only gets credited at the NEXT multiple of seven they pass
+            // (trap 3 below), never retroactively.
             //
             // Tracked every round end regardless of statsGateOpen (unlike the block below),
             // while the WRITE stays gated -- otherwise deaths accrued during a closed-gate
@@ -2523,10 +2527,10 @@ public class DamageReport : ModuleBase {
             // (previousLevel, currentLevel] span (not just the top one) covers a round with
             // more than one death without under-counting; ordinary play only ever has one
             // death a round, so the span is 0 or 1 level almost always. Only levels reached
-            // while Kills <= 0 AND the gate is open get written -- a level passed earlier
-            // while Kills was still positive (or the gate was shut) is never backfilled once
-            // Kills later drops to <=0 or the gate reopens (trap 3): agentLastLevel already
-            // moved past it without a row, on purpose.
+            // while Kills == 0 AND the gate is open get written -- a level passed earlier
+            // while Kills was nonzero (or the gate was shut) is never backfilled once Kills
+            // later returns to 0 or the gate reopens (trap 3): agentLastLevel already moved
+            // past it without a row, on purpose.
             //
             // hadBaseline (TryGetValue, not GetValueOrDefault) gates the write on top of all
             // of that: the FIRST time a steamid64 shows up in this dict, only the baseline is
@@ -2543,7 +2547,7 @@ public class DamageReport : ModuleBase {
                     int currentAgentLevel = deaths / 7;
                     bool hadBaseline = agentLastLevel.TryGetValue(p.SteamID, out int previousAgentLevel);
 
-                    if (hadBaseline && statsGateOpen && kills <= 0 && currentAgentLevel > previousAgentLevel) {
+                    if (hadBaseline && statsGateOpen && kills == 0 && currentAgentLevel > previousAgentLevel) {
                         for (int lvl = previousAgentLevel + 1; lvl <= currentAgentLevel; lvl++) {
                             AddAgentLevel(p.SteamID, lvl, season);
                         }
