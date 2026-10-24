@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Utils;
 
@@ -12,14 +14,105 @@ public class TeamDamage : ModuleBase {
     private const int TEAM_T = (int)CsTeam.Terrorist;
     private const int TEAM_CT = (int)CsTeam.CounterTerrorist;
 
+    // Switching team while alive makes the engine kill you, and that death arrives as
+    // player_death with no attacker -- indistinguishable from a fall or a drowning. Added
+    // 2026-10-24 after a player got the suicide penalty for swapping sides mid-round; owner's
+    // rule is that only a real suicide or a teamkill costs -1, never a team change, whoever
+    // caused it. Two sources stamp the player's userid (the key player_death gives us):
+    //   - the jointeam command, seen Pre so it lands BEFORE the death it causes (self-switch)
+    //   - player_team with a real old->new team change (admin swap, ChangeTeam from another
+    //     plugin, anything that never went through jointeam) -- which the engine fires AFTER
+    //     the death, so the penalty itself is deferred by a few ticks to give that stamp a
+    //     chance to arrive first.
+    // A stamp within the window on either side of the death means no penalty and no chat
+    // line. The window is generous relative to the real gap (same tick) but far too short
+    // for a genuine suicide to follow a team switch -- you're dead by then. A refused switch
+    // (same team, team full) leaves a stale stamp that the window ages out on its own.
+    private const int TeamChangeGraceTicks = 64;
+    private const float SuicidePenaltyDelay = 0.2f;
+    private readonly Dictionary<int, int> teamChangeTick = new();
+
     protected override void RegisterHandlers() {
         osbase?.SubscribeToEvent<EventPlayerHurt>(OnPlayerHurt);
         osbase?.SubscribeToEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.SubscribeToEvent<EventPlayerTeam>(OnPlayerTeam);
+        osbase?.AddCommandListener("jointeam", OnCommandJoinTeam, HookMode.Pre);
     }
 
     protected override void UnregisterHandlers() {
         osbase?.UnsubscribeFromEvent<EventPlayerHurt>(OnPlayerHurt);
         osbase?.UnsubscribeFromEvent<EventPlayerDeath>(OnPlayerDeath);
+        osbase?.UnsubscribeFromEvent<EventPlayerTeam>(OnPlayerTeam);
+        osbase?.RemoveCommandListener("jointeam", OnCommandJoinTeam, HookMode.Pre);
+    }
+
+    private HookResult OnCommandJoinTeam(CCSPlayerController? player, CommandInfo command) {
+        if (!isActive || player == null || !player.IsValid || !player.UserId.HasValue) {
+            return HookResult.Continue;
+        }
+
+        // Only an alive player can be killed by the switch; a dead one swapping sides has no
+        // death coming that needs sparing.
+        if (player.PawnIsAlive) {
+            teamChangeTick[player.UserId.Value] = Server.TickCount;
+        }
+
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerTeam(EventPlayerTeam eventInfo) {
+        if (!isActive) {
+            return HookResult.Continue;
+        }
+
+        var player = eventInfo.Userid;
+        if (player == null || !player.IsValid || !player.UserId.HasValue) {
+            return HookResult.Continue;
+        }
+
+        // A disconnect also arrives as player_team; a disconnecting player's death (if any)
+        // is nobody's team switch, and the stamp would just be noise on a userid about to be
+        // recycled.
+        if (eventInfo.Disconnect || eventInfo.Team == eventInfo.Oldteam) {
+            return HookResult.Continue;
+        }
+
+        teamChangeTick[player.UserId.Value] = Server.TickCount;
+        return HookResult.Continue;
+    }
+
+    private bool WasTeamChange(int userId, int deathTick) {
+        if (!teamChangeTick.TryGetValue(userId, out int tick)) {
+            return false;
+        }
+
+        if (Math.Abs(deathTick - tick) > TeamChangeGraceTicks) {
+            teamChangeTick.Remove(userId);
+            return false;
+        }
+
+        teamChangeTick.Remove(userId);
+        return true;
+    }
+
+    // Deferred so a player_team fired after the death can still cancel it. Re-resolves the
+    // controller by userid when the timer fires rather than holding the reference across
+    // ticks; a player gone by then simply gets no penalty, which is the right outcome for a
+    // disconnect-death too.
+    private void ScheduleSuicidePenalty(int userId, int deathTick) {
+        osbase?.AddTimer(SuicidePenaltyDelay, () => {
+            if (!isActive || WasTeamChange(userId, deathTick)) {
+                return;
+            }
+
+            var victim = Utilities.GetPlayerFromUserid(userId);
+            if (victim == null || !victim.IsValid) {
+                return;
+            }
+
+            AdjustScoreboardKills(victim, -1);
+            Server.PrintToChatAll($"[Suicide] {victim.PlayerName ?? "Unknown"} took themselves out.");
+        });
     }
 
     private HookResult OnPlayerHurt(EventPlayerHurt eventInfo) {
@@ -61,8 +154,7 @@ public class TeamDamage : ModuleBase {
         // is never also "friendly fire" (IsValidFriendlyFire already excludes attacker==
         // victim), so there's no double-handling risk here.
         if (IsSuicide(attacker, victim, eventInfo.Weapon)) {
-            AdjustScoreboardKills(victim!, -1);
-            Server.PrintToChatAll($"[Suicide] {victim!.PlayerName ?? "Unknown"} took themselves out.");
+            ScheduleSuicidePenalty(victim!.UserId!.Value, Server.TickCount);
             return HookResult.Continue;
         }
 
